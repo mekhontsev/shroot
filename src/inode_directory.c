@@ -1,0 +1,91 @@
+#define _GNU_SOURCE
+#include "inode_internal.h"
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#include <unistd.h>
+
+_Static_assert(offsetof(struct md_inode_dirent, name) == 19, "Linux getdents64 ABI");
+static int directory(struct md_inode_store *s, int fd, struct mdi_node *node, int require_attached) {
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0) return -errno;
+    if (flags & O_PATH) return -EBADF;
+    int attached = 1;
+    int r = require_attached ? mdi_fd_membership(s, fd, node, &attached) : mdi_fd(s, fd, node);
+    return r ? r : node->kind != S_IFDIR ? -ENOTDIR : attached ? 0 : -ENOENT;
+}
+static size_t record(void *out, size_t space, const char *name, size_t length,
+        uint64_t inode, int64_t next, uint8_t type) {
+    size_t size = (offsetof(struct md_inode_dirent, name) + length + 1 + 7) & ~(size_t)7;
+    if (space < size) return 0;
+    struct md_inode_dirent header = {.inode = inode, .next = next, .size = (uint16_t)size, .type = type};
+    memset(out, 0, size);
+    memcpy(out, &header, offsetof(struct md_inode_dirent, name));
+    memcpy((char *)out + offsetof(struct md_inode_dirent, name), name, length);
+    return size;
+}
+int64_t md_inode_seekdir(struct md_inode_store *s, int fd, int64_t offset, int whence) {
+    if (whence != SEEK_SET && whence != SEEK_CUR) return -EINVAL;
+    int r = mdi_begin(s, 0); if (r) return r;
+    struct mdi_node node; r = directory(s, fd, &node, 0);
+    r = mdi_finish(s, r);
+    if (r) return r;
+    off_t result = lseek(fd, offset, whence);
+    return result < 0 ? -errno : result;
+}
+static ssize_t getdents(struct md_inode_store *s, int fd, void *out, size_t capacity,
+        int (*deliver)(void *, const void *, size_t), void *context, int64_t *next) {
+    if (!out) return -EFAULT;
+    if (capacity > INT_MAX) return -EINVAL;
+    int r = mdi_begin(s, 0); if (r) return r;
+    struct mdi_node node;
+    r = directory(s, fd, &node, 1);
+    int64_t offset = 0;
+    if (!r && (offset = lseek(fd, 0, SEEK_CUR)) < 0) r = -errno;
+    size_t used = 0;
+    while (!r && offset < 2) {
+        struct mdi_node entry = node;
+        if (offset == 1) r = mdi_node(s, !strcmp(node.id, mdi_root(s)) ? node.id : node.parent, &entry);
+        if (r) break;
+        size_t n = record((char *)out + used, capacity-used, offset ? ".." : ".",
+            offset ? 2 : 1, entry.logical_inode, offset+1, DT_DIR);
+        if (!n) { if (!used) r = -EINVAL; break; }
+        used += n; ++offset;
+    }
+    sqlite3_stmt *q = NULL;
+    if (!r && offset >= 2) r = mdi_query_acquire(s, MDI_READDIR, &q);
+    if (!r && q) r = mdi_bind_id(q, 1, node.id);
+    if (!r && q) r = mdi_sql_error(sqlite3_bind_int64(q, 2, offset-2));
+    while (!r && q) {
+        int rc = mdi_step(s, q);
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) { r = mdi_sql_failure(rc); break; }
+        int length = sqlite3_column_bytes(q, 1);
+        const char *name = sqlite3_column_blob(q, 1);
+        if (!name || length < 1 || length > NAME_MAX || memchr(name, 0, (size_t)length)
+                || memchr(name, '/', (size_t)length)) { r = -EIO; break; }
+        int64_t next = sqlite3_column_int64(q, 0) + 2;
+        if (next <= offset) { r = -EIO; break; }
+        size_t n = record((char *)out + used, capacity-used, name, (size_t)length,
+            (uint64_t)sqlite3_column_int64(q, 2), next, (uint8_t)(sqlite3_column_int(q, 3) >> 12));
+        if (!n) { if (!used) r = -EINVAL; break; }
+        used += n; offset = next;
+    }
+    r = mdi_query_release(q, r); r = mdi_finish(s, r);
+    if (!r && deliver) r = deliver(context, out, used);
+    if (!r && next) *next=offset;
+    else if (!r && used && lseek(fd, offset, SEEK_SET) != offset) r = -EIO;
+    return r ? r : (ssize_t)used;
+}
+ssize_t md_inode_getdents_prepare(struct md_inode_store *s, int fd, void *out, size_t capacity, int64_t *next) {
+    if (!next) return -EINVAL;
+    return getdents(s,fd,out,capacity,NULL,NULL,next);
+}
+ssize_t md_inode_getdents_deliver(struct md_inode_store *s, int fd, void *out, size_t capacity,
+        int (*deliver)(void *, const void *, size_t), void *context) {
+    return getdents(s,fd,out,capacity,deliver,context,NULL);
+}
+ssize_t md_inode_getdents(struct md_inode_store *s, int fd, void *out, size_t capacity) {
+    return md_inode_getdents_deliver(s, fd, out, capacity, NULL, NULL);
+}

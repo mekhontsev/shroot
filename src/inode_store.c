@@ -1,0 +1,340 @@
+#define _GNU_SOURCE
+#include "inode_internal.h"
+#include "inode_overlay.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/inotify.h>
+#include <string.h>
+#include <unistd.h>
+
+int md_inode_temporary(struct md_inode_store *s) {
+    int fd = openat(s->objects, ".", O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+    return fd < 0 ? -errno : fd;
+}
+
+int md_inode_object_id(struct md_inode_store *s, int fd, char out[33]) {
+    if (!out) return -EFAULT;
+    int r = mdi_begin(s, 0);
+    if (r) return r;
+    struct mdi_node node;
+    r = mdi_fd(s, fd, &node);
+    if (!r) memcpy(out, node.id, sizeof(node.id));
+    return mdi_finish(s, r);
+}
+int md_inode_open_object(struct md_inode_store *s, const char *id, int flags) {
+    if (!id) return -EFAULT;
+    if (strnlen(id, 33) != 32) return -EINVAL;
+    for (unsigned i = 0; i < 32; ++i)
+        if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) return -EINVAL;
+    if (flags & O_PATH) flags &= O_PATH | O_CLOEXEC | O_DIRECTORY;
+    if (flags & ~(O_PATH | O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NONBLOCK | O_LARGEFILE)) return -EINVAL;
+    int r = mdi_begin(s, 0);
+    if (r) return r;
+    struct mdi_node node;
+    r = mdi_node(s, id, &node);
+    if (!r && strcmp(node.scope,s->lifetime->scope)) r=-EXDEV;
+    struct stat st;
+    if (!r) r = mdi_backing_stat(s, &node, &st);
+    if (!r && node.kind != S_IFREG) r = -EINVAL;
+    if (!r && !(flags & O_PATH)) r = mdi_permission(s, &node, R_OK, 0);
+    if (!r) r=mdi_landlock_object(s,&node,s->landlock_execute ? MD_LL_EXECUTE : md_landlock_open_access(flags,node.kind));
+    int fd = -1;
+    int directory = r ? -1 : mdi_backing_directory(s, &node);
+    if (!r && directory < 0) r = directory;
+    if (!r && (fd = openat(directory, node.backing, flags | O_NOFOLLOW | O_CLOEXEC)) < 0) r = -errno;
+    r = mdi_finish(s, r);
+    if (r && fd >= 0) close(fd);
+    return r ? r : fd;
+}
+
+static int create_node(struct md_inode_store *s, int dirfd, const char *path,
+        mode_t kind, mode_t mode, const char *target) {
+    if (mode & ~(s->identity ? 07777 : 01777)) return -ENOTSUP;
+    int r = mdi_begin(s, !s->readonly);
+    if (r) return r;
+    struct mdi_location loc;
+    r = mdi_walk(s, dirfd, path, MDI_ENTRY, 1, &loc);
+    if (!r && loc.trailing && kind == S_IFREG) r = -EISDIR;
+    if (!r && loc.exists) r = -EEXIST;
+    if (!r && loc.trailing && kind != S_IFDIR) r = -ENOENT;
+    if (!r && s->readonly) r=-EROFS;
+    if (!r) r = mdi_parent_writable(s, &loc.parent);
+    if (!r) r=mdi_landlock(s,&loc.parent,NULL,md_landlock_make_access(kind));
+    struct mdi_node node;
+    int fd = -1;
+    if (!r) r = mdi_allocate(s, kind, mode, O_RDWR, target,
+        loc.parent.id, &node, &fd);
+    if (!r) r = mdi_add_name(s, loc.parent.id, loc.name, node.id);
+    if (!r) r = mdi_event(s, loc.parent.id, &node, loc.name, IN_CREATE, NULL);
+    r = mdi_commit(s, r);
+    /* Retain unpublished objects on failure: commit IO errors can have an
+     * unknown outcome. Reclamation requires a separate lifetime contract. */
+    if (r) { if (fd >= 0) close(fd); return r; }
+    return fd >= 0 ? fd : 0;
+}
+int md_inode_create(struct md_inode_store *s, int dirfd, const char *path, mode_t mode) {
+    return md_inode_open(s, dirfd, path, O_CREAT | O_EXCL | O_RDWR, mode);
+}
+int md_inode_mkdir(struct md_inode_store *s, int dirfd, const char *path, mode_t mode) {
+    return create_node(s, dirfd, path, S_IFDIR, mode, NULL);
+}
+int md_inode_mkfifo(struct md_inode_store *s, int dirfd, const char *path, mode_t mode) {
+    int r = create_node(s, dirfd, path, S_IFIFO, mode, NULL);
+    if (r >= 0) { close(r); return 0; }
+    return r;
+}
+int md_inode_symlink(struct md_inode_store *s, const char *target, int dirfd, const char *path) {
+    if (!target) return -EFAULT;
+    if (!*target) return -ENOENT;
+    if (strnlen(target, PATH_MAX) == PATH_MAX) return -ENAMETOOLONG;
+    return create_node(s, dirfd, path, S_IFLNK, 0777, target);
+}
+ssize_t md_inode_readlink(struct md_inode_store *s, int dirfd, const char *path, char *out, size_t size) {
+    if (!out) return -EFAULT;
+    if (!size) return -EINVAL;
+    int r = mdi_begin(s, 0);
+    if (r) return r;
+    struct mdi_location loc;
+    int empty = path && !*path;
+    r = empty ? (dirfd == MD_INODE_ROOT ? -ENOENT : mdi_fd(s, dirfd, &loc.node))
+        : mdi_walk(s, dirfd, path, MDI_NOFOLLOW, 0, &loc);
+    if (!r && loc.node.kind != S_IFLNK) r = empty ? -ENOENT : -EINVAL;
+    ssize_t n = -1;
+    if (!r && (n = readlinkat(s->objects, loc.node.backing, out, size)) < 0) r = -errno;
+    r = mdi_finish(s, r);
+    return r ? r : n;
+}
+static int open_resolved(struct md_inode_store *, int, const char *, int, mode_t, uint64_t,
+        struct md_image_identity *, struct md_open_completion *);
+int md_inode_open_image(struct md_inode_store *s, int dirfd, const char *path, int flags,
+        struct md_image_identity *image) {
+    if (!image) return -EFAULT;
+    if (flags & ~O_NOFOLLOW) return -EINVAL;
+    struct md_open_completion completion;
+    return open_resolved(s, dirfd, path, flags | O_RDONLY | O_CLOEXEC, 0, 0, image, &completion);
+}
+int md_inode_open(struct md_inode_store *s, int dirfd, const char *path, int flags, mode_t mode) {
+    return md_inode_open_resolved(s, dirfd, path, flags, mode, 0);
+}
+int md_inode_open_resolved(struct md_inode_store *s, int dirfd, const char *path, int flags, mode_t mode,
+        uint64_t resolve) {
+    struct md_open_completion completion;
+    int fd = md_inode_prepare_open(s, dirfd, path, flags, mode, resolve, &completion);
+    return md_complete_open(fd, flags | O_CLOEXEC, completion);
+}
+int md_inode_prepare_open(struct md_inode_store *s, int dirfd, const char *path, int flags, mode_t mode,
+        uint64_t resolve, struct md_open_completion *completion) {
+    return open_resolved(s, dirfd, path, flags, mode, resolve, NULL, completion);
+}
+static int open_resolved(struct md_inode_store *s, int dirfd, const char *path, int flags, mode_t mode,
+        uint64_t resolve, struct md_image_identity *image, struct md_open_completion *completion) {
+    *completion = (struct md_open_completion){0};
+    if (flags & ~(O_ACCMODE | O_CLOEXEC | O_APPEND | O_TRUNC | O_NOFOLLOW | O_DIRECTORY | O_PATH
+            | O_CREAT | O_EXCL | O_NONBLOCK | O_NOCTTY | O_NOATIME | O_LARGEFILE | O_SYNC | O_DSYNC | O_DIRECT)) return -ENOTSUP;
+    if ((flags & O_ACCMODE) == O_ACCMODE) return -EINVAL;
+    if (flags & O_PATH) flags &= O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+    if ((flags & O_TRUNC) && !(flags & (O_WRONLY | O_RDWR))) return -EINVAL;
+    int create = flags & O_CREAT;
+    if (create && (flags & O_DIRECTORY)) return -EINVAL;
+    if (create && (mode & ~(s->identity ? 07777 : 01777))) return -ENOTSUP;
+    int write = create || (flags & (O_WRONLY | O_RDWR | O_TRUNC));
+    int r = mdi_begin(s, write && !s->readonly);
+    if (r) return r;
+    struct mdi_location loc;
+    r = mdi_walk_resolved(s, dirfd, path, create && (flags & O_EXCL) ? MDI_ENTRY
+        : flags & O_NOFOLLOW ? MDI_NOFOLLOW : MDI_FOLLOW, !!create, resolve, &loc);
+    int fd = -1;
+    if (!r && create && loc.trailing) r = -EISDIR;
+    if (!r && create && (flags & O_EXCL) && loc.exists) r = -EEXIST;
+    if (!r && !loc.exists) {
+        if (loc.trailing) r = -EISDIR;
+        if (!r && s->readonly) r=-EROFS;
+        if (!r) r = mdi_parent_writable(s, &loc.parent);
+        if (!r) r=mdi_landlock(s,&loc.parent,NULL,MD_LL_MAKE_REG|md_landlock_open_access(flags,S_IFREG));
+        if (!r) r = mdi_allocate(s, S_IFREG, mode, flags, NULL, loc.parent.id, &loc.node, &fd);
+        if (!r) r = mdi_add_name(s, loc.parent.id, loc.name, loc.node.id);
+        if (!r) r = mdi_event(s, loc.parent.id, &loc.node, loc.name, IN_CREATE, NULL);
+        r = mdi_commit(s, r);
+        if (r && fd >= 0) close(fd);
+        return r ? r : fd;
+    }
+    if (!r && (flags & O_DIRECTORY) && loc.node.kind != S_IFDIR) r = -ENOTDIR;
+    if (!r && loc.node.kind == S_IFLNK && !(flags & O_PATH)) r = -ELOOP;
+    if (!r && loc.node.kind == S_IFSOCK && !(flags & O_PATH)) r = -ENXIO;
+    if (!r && loc.node.kind == S_IFDIR && (flags & (O_WRONLY | O_RDWR | O_TRUNC | O_CREAT))) r = -EISDIR;
+    if (!r && s->readonly && (flags&(O_WRONLY|O_RDWR|O_TRUNC))) r=-EROFS;
+    if (!r && image && loc.node.kind != S_IFREG) r = -EACCES;
+    if (!r) r = mdi_open_permission(s, &loc.node, flags);
+    if (!r && image) r = mdi_permission(s, &loc.node, X_OK, 0);
+    if (!r) r=mdi_landlock(s,&loc.node,&loc.parent,image ? MD_LL_EXECUTE : md_landlock_open_access(flags,loc.node.kind));
+    if (!r && (flags&(O_WRONLY|O_RDWR|O_TRUNC))) r = mdi_copy_up(s, &loc.node);
+    struct stat st;
+    if (!r) r = mdi_backing_stat(s, &loc.node, &st);
+    int directory = r ? -1 : mdi_backing_directory(s, &loc.node);
+    if (!r && directory < 0) r = directory;
+    int deferred = !r && loc.node.kind == S_IFIFO && !(flags & O_PATH);
+    int native_flags = deferred ? O_PATH : flags & ~(O_CREAT | O_EXCL);
+    if (!r && (fd = openat(directory, loc.node.backing, native_flags | O_CLOEXEC | O_NOFOLLOW)) < 0) r = -errno;
+    if (!r && image) {
+        struct stat opened;
+        if (fstat(fd, &opened)) r = -errno;
+        else if (opened.st_dev != st.st_dev || opened.st_ino != st.st_ino) r = -EIO;
+        if (!r) r = mdi_location_path(s, &loc, image->path, sizeof(image->path));
+        if (!r) memcpy(image->object, loc.node.id, sizeof(image->object));
+    }
+    r = mdi_finish(s, r);
+    if (r) { if (fd >= 0) close(fd); return r; }
+    if (deferred) return mdi_fifo_prepare(s, fd, completion);
+    return fd;
+}
+int md_inode_link(struct md_inode_store *s, int sourcefd, const char *source,
+        int targetfd, const char *target, int flags) {
+    if (flags & ~AT_SYMLINK_FOLLOW) return -EINVAL;
+    int r = mdi_begin(s, 1);
+    if (r) return r;
+    struct mdi_location a, b;
+    r = mdi_walk(s, sourcefd, source, flags & AT_SYMLINK_FOLLOW ? MDI_FOLLOW : MDI_NOFOLLOW, 0, &a);
+    if (!r) r = mdi_walk(s, targetfd, target, MDI_ENTRY, 1, &b);
+    if (!r && a.node.kind == S_IFDIR) r = -EPERM;
+    if (!r && b.exists) r = -EEXIST;
+    if (!r && b.trailing) r = -ENOENT;
+    if (!r) r = mdi_parent_writable(s, &b.parent);
+    if (!r && s->landlock && strcmp(a.parent.id,b.parent.id)) r=-EXDEV;
+    if (!r) r=mdi_landlock(s,&b.parent,NULL,md_landlock_make_access(a.node.kind));
+    if (!r) r = mdi_add_name(s, b.parent.id, b.name, a.node.id);
+    if (!r) r = mdi_event(s, b.parent.id, &a.node, b.name, IN_CREATE, NULL);
+    if (!r) r = mdi_event(s, NULL, &a.node, NULL, IN_ATTRIB, NULL);
+    return mdi_commit(s, r);
+}
+int md_inode_unlink(struct md_inode_store *s, int dirfd, const char *path, int flags) {
+    if (flags & ~AT_REMOVEDIR) return -EINVAL;
+    int r = mdi_begin(s, 1);
+    if (r) return r;
+    struct mdi_location loc;
+    r = mdi_walk(s, dirfd, path, MDI_ENTRY, 0, &loc);
+    if (!r && loc.special) {
+        if (!(flags & AT_REMOVEDIR)) r = -EISDIR;
+        else if (!strcmp(loc.name, ".")) r = -EINVAL;
+        else r = *loc.name ? -ENOTEMPTY : -EBUSY;
+    }
+    if (!r && loc.trailing && loc.node.kind != S_IFDIR) r = -ENOTDIR;
+    if (!r && (flags & AT_REMOVEDIR) && loc.node.kind != S_IFDIR) r = -ENOTDIR;
+    if (!r && !(flags & AT_REMOVEDIR) && loc.node.kind == S_IFDIR) r = -EISDIR;
+    if (!r && (flags & AT_REMOVEDIR)) {
+        int empty = mdi_empty(s, &loc.node);
+        if (empty != 1) r = empty < 0 ? empty : -ENOTEMPTY;
+    }
+    if (!r) r = mdi_parent_writable(s, &loc.parent);
+    if (!r) r = mdi_sticky(s, &loc);
+    if (!r) r=mdi_landlock(s,&loc.parent,NULL,loc.node.kind==S_IFDIR ? MD_LL_REMOVE_DIR : MD_LL_REMOVE_FILE);
+    if (!r) r = mdi_delete_name(s, loc.parent.id, loc.name);
+    if (!r) r = mdi_removed_event(s, &loc, 1);
+    return mdi_commit(s, r);
+}
+int md_inode_rename(struct md_inode_store *s, int sourcefd, const char *source,
+        int targetfd, const char *target, unsigned flags) {
+    if (flags != 0 && flags != RENAME_NOREPLACE && flags != RENAME_EXCHANGE) return -EINVAL;
+    int r = mdi_begin(s, 1);
+    if (r) return r;
+    struct mdi_location a, b;
+    r = mdi_walk(s, sourcefd, source, MDI_ENTRY, 0, &a);
+    if (!r) r = mdi_walk(s, targetfd, target, MDI_ENTRY, 1, &b);
+    if (!r && (a.special || b.special)) r = -EBUSY;
+    if (!r && a.trailing && a.node.kind != S_IFDIR) r = -ENOTDIR;
+    if (!r && b.trailing && a.node.kind != S_IFDIR) r = -ENOTDIR;
+    if (!r && b.trailing && b.exists && b.node.kind != S_IFDIR) r = -ENOTDIR;
+    if (!r && flags == RENAME_NOREPLACE && b.exists) r = -EEXIST;
+    if (!r && flags == RENAME_EXCHANGE && !b.exists) r = -ENOENT;
+    if (!r && s->landlock && strcmp(a.parent.id,b.parent.id)) r=-EXDEV;
+    if (!r) r=mdi_landlock(s,&a.parent,NULL,(a.node.kind==S_IFDIR ? MD_LL_REMOVE_DIR : MD_LL_REMOVE_FILE)
+        | md_landlock_make_access(a.node.kind)
+        | (b.exists ? (b.node.kind==S_IFDIR ? MD_LL_REMOVE_DIR : MD_LL_REMOVE_FILE) : 0)
+        | (flags==RENAME_EXCHANGE ? md_landlock_make_access(b.node.kind) : 0));
+    /* Kernel rename between two names of the same inode preserves both names. */
+    if (!r && b.exists && !strcmp(a.node.id, b.node.id)) return mdi_finish(s, 0);
+    if (!r && s->overlay) r=mdi_overlay_rename_directory(s,&a.node);
+    if (!r && s->overlay && flags==RENAME_EXCHANGE) r=mdi_overlay_rename_directory(s,&b.node);
+    if (!r && b.exists && flags != RENAME_EXCHANGE) {
+        if (a.node.kind == S_IFDIR && b.node.kind != S_IFDIR) r = -ENOTDIR;
+        if (a.node.kind != S_IFDIR && b.node.kind == S_IFDIR) r = -EISDIR;
+        if (!r && b.node.kind == S_IFDIR) {
+            int empty = mdi_empty(s, &b.node);
+            if (empty != 1) r = empty < 0 ? empty : -ENOTEMPTY;
+        }
+    }
+    if (!r && a.node.kind == S_IFDIR) {
+        int cycle = mdi_ancestor(s, a.node.id, b.parent.id);
+        if (cycle) r = cycle < 0 ? cycle : -EINVAL;
+    }
+    if (!r && flags == RENAME_EXCHANGE && b.node.kind == S_IFDIR) {
+        int cycle = mdi_ancestor(s, b.node.id, a.parent.id);
+        if (cycle) r = cycle < 0 ? cycle : -EINVAL;
+    }
+    if (!r) r = mdi_parent_writable(s, &a.parent);
+    if (!r) r = mdi_parent_writable(s, &b.parent);
+    if (!r) r = mdi_sticky(s, &a);
+    if (!r && b.exists) r = mdi_sticky(s, &b);
+    if (!r) r = mdi_delete_name(s, a.parent.id, a.name);
+    if (!r && b.exists) r = mdi_delete_name(s, b.parent.id, b.name);
+    if (!r) r = mdi_add_name(s, b.parent.id, b.name, a.node.id);
+    if (!r) r = mdi_reparent(s, &a.node, b.parent.id);
+    if (!r && flags == RENAME_EXCHANGE) r = mdi_add_name(s, a.parent.id, a.name, b.node.id);
+    if (!r && flags == RENAME_EXCHANGE) r = mdi_reparent(s, &b.node, a.parent.id);
+    if (!r && b.exists && flags != RENAME_EXCHANGE) r = mdi_removed_event(s, &b, 0);
+    unsigned cookie = 0;
+    if (!r) r = mdi_event(s, a.parent.id, &a.node, a.name, IN_MOVED_FROM, &cookie);
+    if (!r) r = mdi_event(s, b.parent.id, &a.node, b.name, IN_MOVED_TO, &cookie);
+    if (!r) r = mdi_event(s, NULL, &a.node, NULL, IN_MOVE_SELF, NULL);
+    cookie = 0;
+    if (!r && flags == RENAME_EXCHANGE) r = mdi_event(s, b.parent.id, &b.node, b.name, IN_MOVED_FROM, &cookie);
+    if (!r && flags == RENAME_EXCHANGE) r = mdi_event(s, a.parent.id, &b.node, a.name, IN_MOVED_TO, &cookie);
+    if (!r && flags == RENAME_EXCHANGE) r = mdi_event(s, NULL, &b.node, NULL, IN_MOVE_SELF, NULL);
+    return mdi_commit(s, r);
+}
+int md_inode_stat(struct md_inode_store *s, int dirfd, const char *path, int flags, struct stat *st) {
+    if (!st) return -EFAULT;
+    if (flags & ~AT_SYMLINK_NOFOLLOW) return -EINVAL;
+    int r = mdi_begin(s, 0);
+    if (r) return r;
+    struct mdi_location loc;
+    r = mdi_walk(s, dirfd, path, flags & AT_SYMLINK_NOFOLLOW ? MDI_NOFOLLOW : MDI_FOLLOW, 0, &loc);
+    if (!r) r = mdi_stat(s, &loc.node, st);
+    if (!r && s->stat_path && mdi_location_path(s, &loc, s->stat_path, PATH_MAX))
+        s->stat_path[0] = 0;
+    return mdi_finish(s, r);
+}
+int md_inode_fstat(struct md_inode_store *s, int fd, struct stat *st) {
+    if (!st) return -EFAULT;
+    int r = mdi_begin(s, 0);
+    if (r) return r;
+    struct mdi_node node;
+    r = mdi_fstat(s, fd, &node, st);
+    if (!r && s->stat_path && mdi_node_path(s, &node, s->stat_path, PATH_MAX))
+        s->stat_path[0] = 0;
+    return mdi_finish(s, r);
+}
+int md_inode_list(struct md_inode_store *s, int dirfd, const char *path,
+        int (*visit)(const char *, void *), void *context) {
+    if (!visit) return -EINVAL;
+    int r = mdi_begin(s, 0);
+    if (r) return r;
+    struct mdi_location loc;
+    r = mdi_walk(s, dirfd, path, MDI_FOLLOW, 0, &loc);
+    if (!r) r = mdi_access(s, &loc.node, R_OK);
+    sqlite3_stmt *q = NULL;
+    if (!r) r = mdi_prepare(s, "SELECT name FROM names WHERE parent=?1 ORDER BY name", &q);
+    if (!r) r = mdi_bind_id(q, 1, loc.node.id);
+    while (!r) {
+        int rc = mdi_step(s, q);
+        if (rc != SQLITE_ROW) { r = mdi_sql_error(rc); break; }
+        int size = sqlite3_column_bytes(q, 0);
+        if (size <= 0 || size > NAME_MAX) { r = -EIO; break; }
+        char name[NAME_MAX+1];
+        memcpy(name, sqlite3_column_blob(q, 0), (size_t)size); name[size] = 0;
+        if (memchr(name, 0, (size_t)size) || mdi_name_valid(name)) { r = -EIO; break; }
+        r = visit(name, context);
+    }
+    sqlite3_finalize(q);
+    return mdi_finish(s, r);
+}

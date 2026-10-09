@@ -1,0 +1,48 @@
+#ifndef MD_CONTROL_FILE_H
+#define MD_CONTROL_FILE_H
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/stat.h>
+struct md_identity;
+struct md_task_resources;
+struct md_namespace_reference;
+struct md_fs_anchor;
+struct md_control_actor {
+    int pid;
+    const struct md_identity *identity;
+    const struct md_task_resources *resources;
+};
+struct md_control_file {
+    const struct md_control_file_ops *ops;
+    void *context;
+};
+/* A virtual inode supplies typed semantics, not a second IO/cursor manager.
+ * The descriptor host serializes each open description and owns copy/commit. */
+struct md_control_file_ops {
+    void *(*retain)(void *);
+    void (*release)(void *);
+    int (*stat)(void *,struct stat *);
+    long (*read)(void *,const struct md_control_actor *,void *,size_t,int64_t);
+    long (*write)(void *,const struct md_control_actor *,const void *,size_t,int64_t);
+    unsigned long filesystem;
+    int (*access)(void *,const struct md_identity *,unsigned);
+    int nonseekable;
+    /* Optional real backing for a controlled view. IO/cursors remain owned by
+     * the descriptor host; the returned CLOEXEC descriptor is transferred. */
+    int (*descriptor)(void *,int flags);
+    int (*seals)(void *);
+    int mappable;
+    /* Typed single-file mounts retain their authority, not the carrier inode.
+     * at() returns an owned context at the supplied placement; NULL detaches
+     * any previous placement before the mount itself retains the provider. */
+    const struct md_namespace_reference *(*namespace_reference)(void *);
+    void *(*at)(void *,struct md_fs_anchor *);
+};
+static inline struct md_control_file md_control_file_retain(struct md_control_file f) {
+    if (f.ops) f.context=f.ops->retain(f.context);
+    return f;
+}
+static inline void md_control_file_release(struct md_control_file f) {
+    if (f.ops) f.ops->release(f.context);
+}
+#endif
