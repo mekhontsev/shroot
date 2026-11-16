@@ -1,12 +1,14 @@
 #define _GNU_SOURCE
 #include <assert.h>
 #include <errno.h>
+#include <elf.h>
 #include <fcntl.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/auxv.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -14,14 +16,36 @@
 #include <unistd.h>
 
 extern char **environ;
-static void snapshot(const char *path,int argc,char **argv) {
+struct image_values { unsigned long entry,headers; };
+static void image_auxv(const char *path,struct image_values expected) {
     int fd=open(path,O_RDONLY|O_CLOEXEC); assert(fd>=0);
+    Elf64_auxv_t value;
+    unsigned found=0;
+    while (read(fd,&value,sizeof(value))==sizeof(value) && value.a_type) {
+        if (value.a_type==AT_ENTRY) { assert(value.a_un.a_val==expected.entry); found|=1; }
+        if (value.a_type==AT_PHDR) { assert(value.a_un.a_val==expected.headers); found|=2; }
+    }
+    assert(found==3 && value.a_type==AT_NULL);
+    assert(write(fd,"x",1)==-1 && errno==EBADF); close(fd);
+    assert(open(path,O_WRONLY)==-1 && errno==EACCES);
+    assert(open(path,O_RDONLY|O_TRUNC)==-1 && errno==EACCES);
+    assert(open(path,O_RDONLY|O_DIRECTORY)==-1 && errno==ENOTDIR);
+    fd=open(path,O_PATH|O_CLOEXEC); assert(fd>=0);
+    assert(read(fd,&value,sizeof(value))==-1 && errno==EBADF); close(fd);
+}
+static void snapshot(const char *path,int argc,char **argv) {
+    int fd=open(path,O_RDONLY|O_CLOEXEC);
+    if (fd<0) { fprintf(stderr,"proc snapshot open %s: %s\n",path,strerror(errno)); }
+    assert(fd>=0);
     char buffer[4096];
     for (int i=0;i<argc;++i) {
         size_t left=strlen(argv[i])+1, offset=0;
         while (left) {
             size_t size=left<sizeof(buffer) ? left : sizeof(buffer);
             ssize_t n=read(fd,buffer,size);
+            if (n<=0 || memcmp(buffer,argv[i]+offset,(size_t)n))
+                fprintf(stderr,"proc snapshot path=%s argument=%d offset=%zu read=%zd expected=%.64s actual=%.*s\n",
+                    path,i,offset,n,argv[i]+offset,(int)(n>0 && n<64 ? n : n>0 ? 64 : 0),buffer);
             assert(n>0 && !memcmp(buffer,argv[i]+offset,(size_t)n));
             left-=(size_t)n; offset+=(size_t)n;
         }
@@ -70,7 +94,8 @@ int main(int argc,char **argv) {
         memcpy(original,argv,(size_t)argc*sizeof(char *)); original[0]=saved;
         snapshot("/proc/self/cmdline",argc,original);
         argv[0]=saved; free(original);
-        assert(write(ready,"x",1)==1);
+        struct image_values values={getauxval(AT_ENTRY),getauxval(AT_PHDR)};
+        assert(write(ready,&values,sizeof(values))==sizeof(values));
         char byte;
         // EVENT_WAIT: parent finishes the foreign /proc snapshot before release.
         assert(read(release,&byte,1)==1);
@@ -84,11 +109,9 @@ int main(int argc,char **argv) {
     int image=open(self,O_PATH|O_CLOEXEC); assert(image>=0);
     const int counts[]={1018,1024,8192,32768};
     for (unsigned test=0;test<sizeof(counts)/sizeof(*counts);++test) {
-        int count=counts[test], ready[2], release[2];
-        assert(!pipe(ready) && !pipe(release));
+        int count=counts[test];
         char number[32], output[32], input[32];
         snprintf(number,sizeof(number),"%d",count);
-        snprintf(output,sizeof(output),"%d",ready[1]); snprintf(input,sizeof(input),"%d",release[0]);
         char **args=calloc((size_t)count+6,sizeof(char *)); assert(args);
         args[0]=self; args[1]="child"; args[2]=number; args[3]=output; args[4]=input;
         for (int i=0;i<count;++i) {
@@ -97,6 +120,10 @@ int main(int argc,char **argv) {
             else payload(args[5+i],i);
         }
         for (int mode=0;mode<3;++mode) {
+            int ready[2], release[2];
+            assert(!pipe(ready) && !pipe(release));
+            assert(!fcntl(ready[0],F_SETFD,FD_CLOEXEC) && !fcntl(release[1],F_SETFD,FD_CLOEXEC));
+            snprintf(output,sizeof(output),"%d",ready[1]); snprintf(input,sizeof(input),"%d",release[0]);
             pid_t pid;
             if (mode==2) assert(!posix_spawn(&pid,self,NULL,NULL,args,environ));
             else {
@@ -107,9 +134,12 @@ int main(int argc,char **argv) {
                     perror("large exec"); _exit(90);
                 }
             }
-            char byte;
+            close(ready[1]); close(release[0]);
+            struct image_values values;
             // EVENT_WAIT: child validates its image before publishing readiness.
-            assert(read(ready[0],&byte,1)==1);
+            ssize_t available=read(ready[0],&values,sizeof(values));
+            if (!available) wait_child(pid);
+            assert(available==sizeof(values));
             char path[128]; snprintf(path,sizeof(path),"/proc/%d/cmdline",pid);
             if (mode==1) {
                 char **expanded=calloc((size_t)count+8,sizeof(char *)); assert(expanded);
@@ -117,13 +147,15 @@ int main(int argc,char **argv) {
                 memcpy(expanded+3,args+1,((size_t)count+5)*sizeof(char *));
                 snapshot(path,count+7,expanded); free(expanded);
             } else snapshot(path,count+5,args);
+            snprintf(path,sizeof(path),"/proc/%d/auxv",pid);
+            image_auxv(path,values);
             assert(write(release[1],"x",1)==1); wait_child(pid);
+            close(ready[0]); close(release[1]);
         }
         int maps=mappings(), fds=descriptors();
         for (int i=0;i<8;++i) assert(execve("/missing-argv-program",args,environ)==-1 && errno==ENOENT);
         assert(mappings()==maps && descriptors()==fds);
         for (int i=0;i<count;++i) free(args[5+i]); free(args);
-        close(ready[0]); close(ready[1]); close(release[0]); close(release[1]);
         printf("PASS %d arguments: execveat, shebang, spawn, self/foreign proc and failed-exec cleanup\n",count);
     }
     close(image); assert(!unlink(script));

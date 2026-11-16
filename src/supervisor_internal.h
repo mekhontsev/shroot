@@ -75,6 +75,7 @@ extern unsigned calls;
 extern struct denial denials[64];
 extern int result, signal_fd;
 extern int listener;
+extern const char *direct_root;
 extern int fd_ready;
 extern struct md_resource_wakeup *fd_wakeup;
 extern struct md_fd_exchanges *fd_exchanges;

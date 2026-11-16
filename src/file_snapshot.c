@@ -25,6 +25,17 @@ int md_file_snapshot_begin(struct md_file_snapshot *s, struct md_inode_store *st
     s->fd=fd; s->flags=flags;
     return 0;
 }
+int md_file_snapshot_begin_direct(struct md_file_snapshot *s,const char *directory,unsigned flags) {
+    if (s->fd>=0) return -EBUSY;
+    if (!directory) return -EINVAL;
+    int error=md_file_snapshot_flags(flags);
+    if (error) return error;
+    /* Android may deny reopening memfds; use the same backing as self proc. */
+    int fd=open(directory,O_TMPFILE|O_RDWR|O_CLOEXEC,0600);
+    if (fd<0) return -errno;
+    s->fd=fd; s->flags=flags;
+    return 0;
+}
 int md_file_snapshot_append(struct md_file_snapshot *s, const void *data, size_t size) {
     if (s->fd<0) return -EBADF;
     while (size) {

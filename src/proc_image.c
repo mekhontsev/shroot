@@ -91,6 +91,9 @@ static long snapshot_bytes(void *context, void *out, size_t capacity) {
     s->offset+=n;
     return (long)n;
 }
+long md_proc_image_capture(int process,enum md_proc_kind kind,int flags) {
+    return RAW5(prctl,MD_GUEST_PROC_IMAGE,process,kind,(unsigned)flags,0);
+}
 long md_proc_image_open(const struct md_fs *fs, enum md_proc_kind kind, int flags) {
     const struct md_process_image *image = fs->image;
     if (!image || !image->auxv_bytes) return -ENOTSUP;

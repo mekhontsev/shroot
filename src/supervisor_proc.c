@@ -9,6 +9,7 @@
 #include "fd_origins.h"
 #include "file_metadata.h"
 #include "file_permissions.h"
+#include "file_snapshot.h"
 #include "filesystem_ioctl.h"
 #include "fs_anchor.h"
 #include "fs_buffer.h"
@@ -60,6 +61,7 @@
 #include "user_sysctl.h"
 #include "watch_calls.h"
 #include <linux/nsfs.h>
+#include <stdlib.h>
 #include <sys/ioctl.h>
 static int proc_node_stat(struct proc_owner target, enum md_proc_file_kind kind,
         struct md_proc_file_node *node, struct stat *value);
@@ -107,21 +109,66 @@ void proc_deliver(struct thread *t) {
     }
 }
 
+/* Consumes the snapshot FD, retaining it through destination publication. */
+static int proc_snapshot_install(struct thread *t,const struct seccomp_notif *q,int fd) {
+    struct md_fd_object *pin=md_fd_native_pin_new(fd,NULL);
+    int error=pin ? md_fd_install_begin(&t->proc.delivery,t->resources.files,listener,q->id,
+        fd,pin,(unsigned)q->data.args[3]&O_CLOEXEC,fd_wakeup) : -errno;
+    md_fd_object_release(pin);
+    if (!error) {
+        t->proc.image_fd=fd;
+        proc_deliver(t);
+    } else close(fd);
+    return error;
+}
+
+void proc_image_request(struct thread *t,const struct seccomp_notif *q) {
+    struct thread *target=find_thread((pid_t)q->data.args[1]);
+    struct proc_owner owner=proc_owner((pid_t)q->data.args[1]);
+    const struct md_private_memory_access *access=target ? md_memory_private_access(target->memory) : NULL;
+    /* Cmdline is public; auxv still requires the guest's ptrace authority. */
+    int allowed=!md_domain_restricted(t->resources.fs)
+        && (q->data.args[2]==MD_PROC_CMDLINE || (target && proc_allowed(t->pid,target->pid)));
+    int error=!owner.identity ? -ENOENT : !allowed ? -EACCES
+        : q->data.instruction_pointer!=RAW_GATE || t->phase!=DISPATCHING
+            || t->proc.image_fd>=0 || q->data.args[4] || q->data.args[5] ? -EPERM
+        : md_file_snapshot_flags((unsigned)q->data.args[3]);
+    void *bytes=NULL;
+    ssize_t size=error ? error : md_process_image_snapshot((pid_t)q->data.args[1],target ? target->image.process_image : 0,
+        access ? access->memory : -1,(unsigned)q->data.args[2],&bytes);
+    if (size<0) error=(int)size;
+    else if (buffer_service) {
+        error=md_fs_buffer_snapshot_copy(buffer_service,t->pid,t->resources.fs,
+            (unsigned)q->data.args[3],bytes,(size_t)size,&t->proc.snapshot);
+        if (!error) t->proc.snapshot_notification=*q;
+    } else {
+        struct md_file_snapshot snapshot={.fd=-1};
+        error=md_file_snapshot_begin_direct(&snapshot,direct_root,(unsigned)q->data.args[3]);
+        if (!error) error=md_file_snapshot_append(&snapshot,bytes,(size_t)size);
+        if (!error) {
+            int fd=md_file_snapshot_finish(&snapshot);
+            error=fd<0 ? fd : proc_snapshot_install(t,q,fd);
+        }
+        md_file_snapshot_close(&snapshot);
+    }
+    free(bytes);
+    SUPERVISOR_TRACE("PROBE proc-image caller=%d target=%d kind=%llu image=%#lx memory=%d size=%zd error=%d\n",
+        t->pid,(pid_t)q->data.args[1],(unsigned long long)q->data.args[2],
+        (unsigned long)(target ? target->image.process_image : 0),access ? access->memory : -1,size,error);
+    if (error) {
+        struct seccomp_notif_resp reply={.id=q->id,.error=error};
+        CHECK(!ioctl(listener,SECCOMP_IOCTL_NOTIF_SEND,&reply) || errno==ENOENT);
+    }
+    /* EVENT_WAIT: snapshot creation or destination FD publication completes
+     * through its owner. Task cancellation retires the exact request. */
+}
+
 void proc_snapshot_complete(struct thread *t,struct md_fs_buffer_request *request,int error) {
     struct seccomp_notif *q=&t->proc.snapshot_notification;
     struct md_fs_buffer_open opened={.fd=-1};
     t->proc.snapshot=NULL;
     if (!error && md_fs_buffer_open_take(request,&opened)!=1) error=-EIO;
-    if (!error) {
-        struct md_fd_object *pin=md_fd_native_pin_new(opened.fd,NULL);
-        error=pin ? md_fd_install_begin(&t->proc.delivery,t->resources.files,listener,q->id,
-            opened.fd,pin,(unsigned)q->data.args[3]&O_CLOEXEC,fd_wakeup) : -errno;
-        md_fd_object_release(pin);
-        if (!error) {
-            t->proc.image_fd=opened.fd; opened.fd=-1;
-            proc_deliver(t);
-        }
-    }
+    if (!error) { error=proc_snapshot_install(t,q,opened.fd); opened.fd=-1; }
     md_fs_buffer_open_release(&opened);
     if (error) {
         struct seccomp_notif_resp reply={.id=q->id,.error=error};

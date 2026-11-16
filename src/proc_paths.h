@@ -110,5 +110,6 @@ void md_proc_image_init(struct md_process_image *, const void *arguments, size_t
 struct md_fs;
 long md_proc_executable_open(const struct md_fs *, const char *path, int flags);
 long md_proc_image_open(const struct md_fs *, enum md_proc_kind, int flags);
+long md_proc_image_capture(int, enum md_proc_kind, int flags);
 long md_proc_executable_capture(const struct md_fs *,int process,int flags);
 #endif

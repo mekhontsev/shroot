@@ -172,6 +172,9 @@ long md_file_call(const struct md_fs *fs, const char *exe, long nr, const unsign
         }
         if (image.kind == MD_PROC_CMDLINE || image.kind == MD_PROC_AUXV)
             return *image.tail ? -ENOTDIR : md_proc_image_open(fs, image.kind, flags);
+        if (image.kind==MD_PROC_FOREIGN && (control==MD_PROC_CMDLINE || control==MD_PROC_AUXV)
+                && !(flags&O_PATH))
+            return *image.tail ? -ENOTDIR : md_proc_image_capture(image.process,control,flags);
         return RAW4(openat, AT_FDCWD, first, flags, a[3]);
     case SYS_newfstatat:
     case SYS_statx:

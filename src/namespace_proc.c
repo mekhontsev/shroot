@@ -482,7 +482,7 @@ static long host_call(const struct md_fs *fs, const char *exe, long nr, const un
         /* The guest walk admitted this process entry. The supervisor owns
          * its image and guest access rules; Android hidepid must not replace
          * those rules for a supervised, non-dumpable process. */
-        return RAW5(prctl,MD_GUEST_PROC_IMAGE,ref.process,ref.foreign_kind,a[2],0);
+        return md_proc_image_capture(ref.process,ref.foreign_kind,(int)a[2]);
     }
     if (ref.kind == MD_PROC_CMDLINE || ref.kind == MD_PROC_AUXV) {
         if (*ref.tail) return -ENOTDIR;

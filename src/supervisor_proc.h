@@ -16,6 +16,7 @@ void proc_query_begin(struct thread *t, const struct seccomp_notif *q, int targe
 void proc_query_start(struct thread *t);
 void proc_deliver(struct thread *t);
 void proc_snapshot_complete(struct thread *t,struct md_fs_buffer_request *request,int error);
+void proc_image_request(struct thread *t,const struct seccomp_notif *q);
 struct md_proc_file *proc_file_capture(struct thread *t, int fd);
 struct proc_owner proc_owner(pid_t pid);
 int control_file_query(struct md_fd_object *object,unsigned operation,struct md_control_file *out);

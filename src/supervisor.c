@@ -117,6 +117,7 @@ struct md_resource_wakeup *fd_wakeup;
 struct md_fd_exchanges *fd_exchanges;
 int cancelling;
 struct md_launch_registration registration = {.directory=-1, .record=-1};
+const char *direct_root;
 static int cancellation_timer = -1;
 unsigned external_stats, external_errors;
 unsigned protected_stats;
@@ -913,7 +914,10 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[i], "--namespace") && i+2 < argc) { program = argv[i+2]; break; }
         }
         CHECK(!md_launch_register(&registration, store, program, cwd, launch_identity.uid.effective));
-    } else CHECK(!md_resources_init(&thread(leader)->resources,NULL));
+    } else {
+        direct_root=argument+1<argc ? argv[argument+1] : NULL;
+        CHECK(!md_resources_init(&thread(leader)->resources,NULL));
+    }
     /* The launcher's standard streams are already shared with the stopped
      * child. Pin only their identity, so later dumpability/filter changes do
      * not require exporting them merely to inspect metadata. */

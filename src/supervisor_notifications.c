@@ -343,34 +343,7 @@ void handle_notification(const struct seccomp_notif *request) {
     }
     if (q.data.nr == SYS_prctl) {
         if (q.data.args[0] == MD_GUEST_PROC_IMAGE) {
-            struct seccomp_notif_resp reply={.id=q.id};
-            struct thread *target=find_thread((pid_t)q.data.args[1]);
-            struct proc_owner owner=proc_owner((pid_t)q.data.args[1]);
-            const struct md_private_memory_access *access=target ? md_memory_private_access(target->memory) : NULL;
-            /* Cmdline is public, unlike auxv/exe: differing guest IDs or
-             * permitted capabilities do not require ptrace authority. Only
-             * the admitted guest process can supply this retained image. */
-            int allowed=!md_domain_restricted(t->resources.fs)
-                && (q.data.args[2]==MD_PROC_CMDLINE || (target && proc_allowed(t->pid,target->pid)));
-            int error=!owner.identity ? -ENOENT : !allowed ? -EACCES
-                : q.data.instruction_pointer!=RAW_GATE || t->phase!=DISPATCHING
-                    || t->proc.image_fd>=0 || q.data.args[4] || q.data.args[5] ? -EPERM
-                : md_file_snapshot_flags((unsigned)q.data.args[3]);
-            void *bytes=NULL;
-            ssize_t size=error ? error : md_process_image_snapshot((pid_t)q.data.args[1],target ? target->image.process_image : 0,
-                access ? access->memory : -1,(unsigned)q.data.args[2],&bytes);
-            if (size<0) error=(int)size;
-            else error=md_fs_buffer_snapshot_copy(buffer_service,t->pid,t->resources.fs,
-                (unsigned)q.data.args[3],bytes,(size_t)size,&t->proc.snapshot);
-            free(bytes);
-            if (!error) {
-                t->proc.snapshot_notification=q;
-                /* EVENT_WAIT: owned snapshot completion, then destination FD
-                 * publication. Task cancellation retires the exact request. */
-                return;
-            }
-            reply.error=error;
-            CHECK(!ioctl(listener,SECCOMP_IOCTL_NOTIF_SEND,&reply) || errno==ENOENT);
+            proc_image_request(t,&q);
         } else if (q.data.args[0] == MD_GUEST_FD_CHANNEL) {
             struct metadata_operation *op=&t->metadata;
             int value=-EPERM;
