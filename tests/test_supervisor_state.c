@@ -448,6 +448,34 @@ static long borrowed_trace(int request,pid_t pid,void *address,void *data) {
     else assert(request==PTRACE_SETREGSET || request==PTRACE_SETSIGMASK);
     return 0;
 }
+struct cancellation_candidate { int ready[2], release[2]; };
+static void *cancellation_thread_candidate(void *opaque) {
+    struct cancellation_candidate *candidate=opaque;
+    pid_t tid=(pid_t)syscall(SYS_gettid);
+    assert(write(candidate->ready[1],&tid,sizeof(tid))==sizeof(tid));
+    char release;
+    /* EVENT_WAIT: the fixture owns this thread until candidate admission ends. */
+    assert(read(candidate->release[0],&release,1)==1);
+    return NULL;
+}
+static void cancellation_nonprocess_candidate(void) {
+    assert(md_process_signal_child(0,SIGKILL)==-EINVAL);
+    assert(md_process_signal_child(-1,SIGKILL)==-EINVAL);
+    struct cancellation_candidate candidate;
+    assert(!pipe2(candidate.ready,O_CLOEXEC) && !pipe2(candidate.release,O_CLOEXEC));
+    pthread_t thread;
+    assert(!pthread_create(&thread,NULL,cancellation_thread_candidate,&candidate));
+    pid_t tid;
+    /* EVENT_WAIT: use a live nonleader, without relying on PID reuse timing. */
+    assert(read(candidate.ready[0],&tid,sizeof(tid))==sizeof(tid));
+    assert(tid!=getpid());
+    assert(!md_process_signal_child(tid,SIGKILL));
+    assert(!md_process_signal_child(getpid(),SIGKILL));
+    assert(write(candidate.release[1],"x",1)==1);
+    assert(!pthread_join(thread,NULL));
+    for (unsigned i=0;i<2;++i) { close(candidate.ready[i]); close(candidate.release[i]); }
+    puts("PASS cancellation discovery: nonleader and unrelated process are not child authority");
+}
 static void cancel_stopped_child(void) {
     int channel[2]; assert(!pipe2(channel,O_CLOEXEC));
     pid_t child=fork(); assert(child>=0);
@@ -476,6 +504,7 @@ static void cancel_stopped_child(void) {
     puts("PASS child cancellation: retained ptrace stop does not hide a live owned process");
 }
 static void cancellation_owner_boundary(void) {
+    cancellation_nonprocess_candidate();
     assert(!threads);
     const int signals[]={SIGTERM,SIGKILL};
     for (unsigned i=0;i<sizeof(signals)/sizeof(*signals);++i) {

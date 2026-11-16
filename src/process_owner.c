@@ -82,8 +82,11 @@ long md_process_close_fds(const int *keep, unsigned count) {
 }
 
 long md_process_signal_child(int pid, int signal) {
+    if (pid<=0) return -EINVAL;
     long fd=RAW2(pidfd_open,pid,0);
-    if (fd<0) return fd==-ESRCH ? 0 : fd;
+    /* A discovered PID may disappear or cease to name a process leader.
+     * With a positive PID and flags zero, neither error proves child ownership. */
+    if (fd<0) return fd==-ESRCH || fd==-EINVAL ? 0 : fd;
     siginfo_t info={0};
     long r=RAW5(waitid,P_PIDFD,fd,&info,WEXITED|WNOHANG|WNOWAIT|__WALL,0);
     /* __WALL can expose a ptrace stop even with WEXITED. WNOWAIT proves
@@ -173,9 +176,14 @@ long md_process_guard(long owner, const char *bootstrap,
                 }
             }
         if (pid == -ECHILD) return result ? result : root_seen ? root_status : 125;
-        if (pid < 0 && pid != -EINTR) return 125;
-        if (phase && md_process_signal_children(phase == 1 ? SIGTERM : SIGKILL) < 0)
-            return 125; /* No ownership proof means no broad kill fallback. */
+        if (pid < 0 && pid != -EINTR) { md_error("guardian reap", pid); return 125; }
+        if (phase) {
+            long signalled=md_process_signal_children(phase == 1 ? SIGTERM : SIGKILL);
+            if (signalled < 0) {
+                md_error("guardian cancellation", signalled);
+                return 125; /* No ownership proof means no broad kill fallback. */
+            }
+        }
         struct pollfd fds[] = {{signals.fd, POLLIN, 0}};
         /* EVENT_WAIT: child exits or owner cancellation/death.
          * Grace expiration escalates TERM to KILL; final expiry reports incomplete cleanup. */
@@ -183,6 +191,6 @@ long md_process_guard(long owner, const char *bootstrap,
         if (r == -ETIMEDOUT && phase == 1) {
             phase = 2;
             deadline = md_event_now() + MD_REAP_NS;
-        } else if (r < 0) return 125;
+        } else if (r < 0) { md_error("guardian wait", r); return 125; }
     }
 }

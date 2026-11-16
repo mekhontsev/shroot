@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,23 @@ static int visit(const char *id, const struct md_launch_info *info, void *contex
     assert(strlen(id) == 32 && info->executor_uid == getuid());
     assert(!strcmp(info->program, "/bin/fixture"));
     ++*(int *)context; return 0;
+}
+static void *stale_process_candidate(void *opaque) {
+    const char *store=opaque;
+    struct md_launch_registration owner;
+    assert(!md_launch_register(&owner,store,"/bin/fixture","/work",1234));
+    struct md_launch_info info;
+    assert(pread(owner.record,&info,sizeof(info),0)==sizeof(info));
+    info.pid=(pid_t)syscall(SYS_gettid);
+    assert(info.pid!=getpid());
+    assert(pwrite(owner.record,&info,sizeof(info),0)==sizeof(info));
+    /* A retained discovery record need not still name a process leader. */
+    int count=0;
+    assert(!md_launch_list(store,visit,&count) && !count);
+    assert(md_launch_acquire(&owner,owner.id,&info)==-ESRCH);
+    assert(md_launch_stop(store,owner.id)==-ESRCH);
+    md_launch_unregister(&owner);
+    return NULL;
 }
 static pid_t launch(const char *store, char id[33]) {
     int ready[2]; assert(!pipe(ready));
@@ -67,6 +85,9 @@ int main(int argc, char **argv) {
     assert(md_launch_stop(store, "../wrong") == -EINVAL);
     assert(crash_launch(store, b) == -ENOENT);
     assert(crash_launch(store, "../wrong") == -EINVAL);
+    pthread_t candidate;
+    assert(!pthread_create(&candidate,NULL,stale_process_candidate,store));
+    assert(!pthread_join(candidate,NULL));
     char records[4096]; snprintf(records, sizeof(records), "%s/launches", store);
     assert(!rmdir(records)); assert(!rmdir(store));
     puts("PASS launch ownership, exact cancellation, independent owner and stale recovery");

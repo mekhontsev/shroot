@@ -85,6 +85,9 @@ Only guardian cancellation enumerates `/proc`, discovering descendants adopted
 after supervisor failure. `waitid(P_PIDFD)` proves direct-child ownership before
 signalling each candidate; a matching UID or name is never sufficient. Pidfds
 exclude PID reuse. The optional `/proc/.../children` interface is not used.
+A positive candidate rejected by flags-zero `pidfd_open` as missing or not a
+process leader is ignored; discovery does not retain PID identity. Descriptor
+resource errors and failed ownership operations still fail cleanup explicitly.
 A scan never proves quiescence; only the final wait result does.
 
 The frontend returns the root application's status after normal completion,
@@ -170,7 +173,7 @@ the native Shell path retains this limitation, while managed cleanup passes.
 The `robust-futex` component suite additionally covers private-child birth,
 reaping, blocked wait/signalfd readers, coalesced/directed notifications,
 SA_NOCLDWAIT and cleanup faults. Current receipts are in
-[host execution](../guest-exec-lab/host-execution.md#robust-mutex-qualification).
+[host execution](tests/host-execution.md#robust-mutex-qualification).
 `supervisor-state` covers pre-commit barrier release for pending broker work,
 resumption of stopped providers, exact event replay and exclusion of an already
 committed retirement. `fs-dispatch` checks broker admission and stop custody

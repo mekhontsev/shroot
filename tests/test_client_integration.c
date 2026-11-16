@@ -50,6 +50,8 @@ static void cancellation(shroot_store *store) {
     char data[6]; assert(read(ready[0], data, sizeof(data)) == sizeof(data));
     assert(!shroot_job_cancel(job));
     struct shroot_result result = wait_job(job);
+    if (result.error || (result.exit_code != 128 + SIGTERM && result.signal != SIGTERM))
+        fprintf(stderr, "cancellation: error=%d exit=%d signal=%d\n", result.error, result.exit_code, result.signal);
     assert(!result.error && (result.exit_code == 128 + SIGTERM || result.signal == SIGTERM));
     fd.revents = 0;
     /* EVENT_WAIT: no descendant retains the output pipe after tree cleanup. */

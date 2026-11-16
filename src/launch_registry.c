@@ -85,7 +85,8 @@ static int acquire(int dir, const char *id, struct md_launch_info *info) {
             || !memchr(info->program, 0, sizeof(info->program)) || !memchr(info->cwd, 0, sizeof(info->cwd))
             || !memchr(info->label, 0, sizeof(info->label)))) r = -EIO;
     int process = -1;
-    if (!r && (process = syscall(SYS_pidfd_open, info->pid, 0)) < 0) r = -errno;
+    if (!r && (process = syscall(SYS_pidfd_open, info->pid, 0)) < 0)
+        r = errno == EINVAL ? -ESRCH : -errno; /* Positive discovery PID no longer names a process. */
     char path[96];
     if (!r) {
         snprintf(path, sizeof(path), "/proc/%d/fd/%d", info->pid, info->descriptor);
