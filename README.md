@@ -409,6 +409,12 @@ An available header or kernel version does not establish firmware permission.
 Guest probe failure leaves independent MagicDesk services available.
 
 The selected identity must be allowed to execute helpers and map guest code.
+On ordinary Linux, equal real/effective user and group IDs with no retained
+capabilities admit an unprivileged user; Android's application-UID range does not
+apply. Root retains the same logical engine, not a separate native-mount backend.
+Only an Android application identity enables inherited Android-seccomp handling.
+Android Shell and ordinary Linux keep the native host-syscall path. Set-ID
+helpers and capability-bearing unprivileged launches are not an elevation API.
 ELF segments use private RW mappings followed by final protections, never RWX.
 Fixed images use `MAP_FIXED_NOREPLACE` and returned-address validation; conflicts
 fail before replacement. Hardened policies may still deny RW-to-RX transitions.

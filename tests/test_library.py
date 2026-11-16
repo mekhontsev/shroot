@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native named stores: durable identity, dependencies and process ownership."""
 import argparse
+from contextlib import closing
 import fcntl
 import json
 import os
@@ -48,7 +49,7 @@ class LibraryTest(unittest.TestCase):
             key = identity
         store = self.library / "instances" / key
         store.mkdir()
-        with sqlite3.connect(store / "namespace.db") as db:
+        with closing(sqlite3.connect(store / "namespace.db")) as db, db:
             db.execute("CREATE TABLE sources(path TEXT)")
             db.executemany("INSERT INTO sources VALUES(?)", [(str(source),) for source in sources])
         record = dict(format=version, name=name, id=identity, store=key, image="", source="fixture")
@@ -166,7 +167,7 @@ class LibraryTest(unittest.TestCase):
         stores = []
         for index in range(200):
             store, record = self.synthetic("node" + str(index), [previous / "objects"] if previous else [])
-            with sqlite3.connect(store / "namespace.db") as db:
+            with closing(sqlite3.connect(store / "namespace.db")) as db, db:
                 db.execute("INSERT INTO sources VALUES(?)", (str(store / "objects"),))
             stores.append(store)
             record.unlink()
@@ -216,7 +217,7 @@ class LibraryTest(unittest.TestCase):
         b, br = self.synthetic("b", [a / "objects"])
         ar.unlink()
         br.unlink()
-        with sqlite3.connect(a / "namespace.db") as db:
+        with closing(sqlite3.connect(a / "namespace.db")) as db, db:
             db.execute("INSERT INTO sources VALUES(?)", (str(b / "objects"),))
         self.call("prune", code=1)
         self.assertTrue(a.exists() and b.exists())

@@ -12,14 +12,16 @@ extern int md_app_uid_active;
 
 #ifndef MD_WRAP_LIBC
 int md_app_uid_active;
-int md_app_uid_admit(long uid, long euid, long gid, long egid) {
-    if (uid < 10000 || uid % 100000 < 10000 || uid % 100000 > 19999 || uid != euid || gid != egid) return 0;
+int md_host_identity_admit(enum md_host_platform platform,long uid,long euid,long gid,long egid) {
+    if ((platform!=MD_HOST_LINUX && platform!=MD_HOST_ANDROID) || uid<0 || gid<0 || uid!=euid || gid!=egid) return 0;
+    if (uid==0 || (platform==MD_HOST_ANDROID && uid==2000)) { md_app_uid_active=0; return 1; }
+    if (platform==MD_HOST_ANDROID && (uid<10000 || uid%100000<10000 || uid%100000>19999)) return 0;
     struct __user_cap_header_struct header = {_LINUX_CAPABILITY_VERSION_3, 0};
     struct __user_cap_data_struct caps[2] = {{0}};
     if (__real_md_raw(SYS_capget, (long)&header, (long)caps, 0, 0, 0, 0)) return 0;
     for (unsigned i = 0; i < 2; ++i)
         if (caps[i].effective || caps[i].permitted || caps[i].inheritable) return 0;
-    md_app_uid_active = 1;
+    md_app_uid_active = platform==MD_HOST_ANDROID;
     return 1;
 }
 #endif

@@ -61,7 +61,10 @@ static void native_access(const char *root) {
             long result = access_raw(dir, names[i], mode, AT_SYMLINK_NOFOLLOW);
             if (!mode) assert(result == (i == 5 ? -ENOENT : i == 6 ? -ENOTDIR : 0));
             assert(result == access_raw(dir, names[i], mode, AT_SYMLINK_NOFOLLOW | AT_EACCESS));
-            if (getuid() == 2000 || getuid() == 0) {
+#ifdef __ANDROID__
+            if (getuid() == 2000 || getuid() == 0)
+#endif
+            {
                 long expected = __real_md_raw(SYS_faccessat2, dir, (long)names[i], mode, AT_SYMLINK_NOFOLLOW, 0, 0);
                 assert(result == expected);
             }
@@ -86,10 +89,27 @@ static void native_access(const char *root) {
     close(dir); assert(!rmdir(directory));
 }
 int main(int argc, char **argv) {
+    assert(md_host_identity_admit(MD_HOST_LINUX,1000,1000,1000,1000));
+    assert(!md_app_uid_active);
+    assert(md_host_identity_admit(MD_HOST_LINUX,10123,10123,10123,10123));
+    assert(!md_app_uid_active);
+    assert(!md_host_identity_admit(MD_HOST_LINUX,1000,0,1000,1000));
+    assert(!md_host_identity_admit(MD_HOST_LINUX,1000,1000,1000,0));
+    assert(!md_host_identity_admit(MD_HOST_LINUX,-1,-1,1000,1000));
+    assert(!md_host_identity_admit(MD_HOST_LINUX,1000,1000,-1,-1));
+    capabilities=1;
+    assert(!md_host_identity_admit(MD_HOST_LINUX,1000,1000,1000,1000));
+    assert(!md_host_identity_admit(MD_HOST_LINUX,2000,2000,2000,2000));
+    assert(md_host_identity_admit(MD_HOST_ANDROID,2000,2000,2000,2000));
+    capabilities=0;
     assert(md_launch_identity(0, 0, 0, 0));
     assert(md_launch_identity(2000, 2000, 2000, 2000));
     assert(!md_app_uid_active);
+#ifdef __ANDROID__
     assert(!md_launch_identity(1000, 1000, 1000, 1000));
+#else
+    assert(md_launch_identity(1000, 1000, 1000, 1000));
+#endif
     assert(!md_launch_identity(10123, 0, 10123, 10123));
     assert(!md_launch_identity(10123, 10123, 10123, 0));
     capabilities = 1;
@@ -99,6 +119,10 @@ int main(int argc, char **argv) {
     assert(__wrap_md_raw(SYS_faccessat2, -100, (long)"test", 1, 512, 0, 0) == -EACCES);
     assert(observed[0] == SYS_faccessat2);
     assert(md_launch_identity(10123, 10123, 10123, 10123));
+#ifndef __ANDROID__
+    assert(!md_app_uid_active);
+#endif
+    assert(md_host_identity_admit(MD_HOST_ANDROID,10123,10123,10123,10123));
     assert(md_app_uid_active);
     observed[0] = -1;
     assert(__wrap_md_raw(SYS_openat2, -100, (long)"test", 0, 0, 0, 0) == -ENOSYS);
@@ -127,5 +151,5 @@ int main(int argc, char **argv) {
     md_app_uid_active=0; returned=123;
     assert(__wrap_syscall(SYS_openat2,1,2,3,4,5,6)==123 && observed[0]==SYS_openat2);
     assert(__wrap_md_raw(SYS_openat2,1,2,3,4,5,6)==123 && observed[0]==SYS_openat2);
-    puts("PASS app-UID admission and scoped host access");
+    puts("PASS native/Android identity admission and scoped host access");
 }
