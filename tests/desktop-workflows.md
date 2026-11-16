@@ -262,7 +262,7 @@ preparation. Its explicit reload operation models logical `MADV_DONTNEED`;
 it does not transparently intercept arbitrary application syscalls. Native
 private-COW execution denial is reported independently of those assertions.
 
-The file-backed preparation checks use `native/shroot/src/private_memory.c`
+The file-backed preparation checks use `src/private_memory.c`
 directly, without interposition. They copy only private COW pages into a clean
 executable view, retaining native DONTNEED and clean-page file coherence. The
 fixture also covers repeated compilation, nonzero offsets, partial and PROT_NONE
@@ -458,7 +458,7 @@ kernel E2BIG/EFAULT and stack limits. It includes a 650000-empty-argument launch
 with an enlarged soft stack limit (requiring a sufficient host hard limit).
 
 ```sh
-python native/guest-exec-lab/test_arguments.py --store DISPOSABLE_HOST_STORE \
+python tests/test_arguments.py --store DISPOSABLE_HOST_STORE \
   --fixtures LIBC_FIXTURE_DIRECTORY [--build NATIVE_BUILD_DIRECTORY]
 ```
 
@@ -492,7 +492,7 @@ matching development archive and compiler builtins. `build.sh` also builds a
 freestanding raw-SVC ELF without libc or mapped program headers.
 
 ```sh
-python native/guest-exec-lab/test_abi.py BUILD \
+python tests/test_abi.py BUILD \
   --libc glibc --libc-build BUILD --static-build STATIC_BUILD \
   --store DISPOSABLE_HOST_STORE --executor shell
 ```
@@ -517,7 +517,7 @@ in that fixture; the normal non-root dry run is not a configuration pass.
 These scripts are not a product distribution installer or a container manager.
 
 ```sh
-python native/guest-exec-lab/test_distribution_app.py BUILD \
+python tests/test_distribution_app.py BUILD \
   --store DISPOSABLE_HOST_STORE --runtime IMMUTABLE_STAGED_HELPERS \
   --keyboard-directory HOST_XKB --protocol wayland --application writer
 ```
@@ -550,7 +550,7 @@ dumpable is disabled. The fixture never enables it again. Execute these native
 controls separately from the guest runtime:
 
 ```sh
-python native/guest-exec-lab/test_notifications.py BUILD
+python tests/test_notifications.py BUILD
 ```
 
 The runner checks the selected UID, stages fresh binaries, retains hashes,
@@ -565,8 +565,8 @@ current guest adapter. They deliberately reproduce policy failures: a completed
 run is not successful browser sandboxing. Build and execute them independently:
 
 ```sh
-sh native/guest-exec-lab/build-sandbox-fixtures.sh BUILD
-python native/guest-exec-lab/test_sandbox.py BUILD \
+sh tests/build-sandbox-fixtures.sh BUILD
+python tests/test_sandbox.py BUILD \
   --runtime IMMUTABLE_STAGED_HELPERS --store DISPOSABLE_GLIBC_STORE
 ```
 
@@ -577,8 +577,8 @@ does not alter the installed adapter. The same research note records positive
 controls and unresolved security/lifecycle requirements.
 
 ```sh
-sh native/guest-exec-lab/build-hybrid-fixture.sh BUILD
-python native/guest-exec-lab/test_hybrid.py BUILD
+sh tests/build-hybrid-fixture.sh BUILD
+python tests/test_hybrid.py BUILD
 ```
 
 The [browser fixtures](browser/README.md) build the production runtime, including
@@ -598,8 +598,8 @@ memory/listener errors. It uses no ptrace and is not virtual chroot or browser
 support:
 
 ```sh
-sh native/guest-exec-lab/build-domain-fixture.sh BUILD
-python native/guest-exec-lab/test_domain.py BUILD --repeat 10
+sh tests/build-domain-fixture.sh BUILD
+python tests/test_domain.py BUILD --repeat 10
 ```
 
 The [helper/context control](chromium-isolation.md#helper-and-protected-memory-control)
@@ -611,9 +611,9 @@ The explicit namespace fallback, fixed-image exec scope and remaining set-ID/
 guest-ELF gates are documented with the results:
 
 ```sh
-python native/guest-exec-lab/build-suid-context.py BUILD
-python native/guest-exec-lab/test_domain.py BUILD --fixture suid-context --repeat 10
-python native/guest-exec-lab/test_domain.py BUILD --fixture suid-context --suid-main --repeat 10
+python tests/build-suid-context.py BUILD
+python tests/test_domain.py BUILD --fixture suid-context --repeat 10
+python tests/test_domain.py BUILD --fixture suid-context --suid-main --repeat 10
 ```
 
 `md-exec-policy-test INTERPRETER` compares executable memfd scripts under the
@@ -622,7 +622,7 @@ native shell and guest. X_OK succeeding does not override a kernel exec denial.
 For a prepared GUI store:
 
 ```sh
-python native/guest-exec-lab/test_userspace.py BUILD \
+python tests/test_userspace.py BUILD \
   --store HOST_STORE --runtime STAGED_HELPERS --recipes BUILD/recipe-classes \
   --keyboard-directory HOST_XKB --protocol wayland --installed
 ```
@@ -636,9 +636,9 @@ mapped native window. Host/user HOME and Desktop ownership must remain unchanged
 The whole-desktop fixture uses the same connection and execution contracts:
 
 ```sh
-node native/guest-exec-lab/prepare.mjs build/guest-desktop --desktop --suite trixie
-sh native/guest-exec-lab/build.sh build/guest-desktop
-python native/guest-exec-lab/test_desktop.py BUILD \
+node tests/prepare.mjs build/guest-desktop --desktop --suite trixie
+sh tests/build.sh build/guest-desktop
+python tests/test_desktop.py BUILD \
   --store HOST_STORE --runtime STAGED_HELPERS --keyboard-directory HOST_XKB --installed
 ```
 
@@ -732,7 +732,7 @@ The device implements DRM_VERSION through bounded nested-pointer ioctl
 marshalling shared with other typed controls. It does not claim unrelated DRM
 operations. No preload, extra browser flags or separate Mesa build is installed.
 
-Run `python native/guest-exec-lab/test_render.py BUILD STORE` from the repository
+Run `python tests/test_render.py BUILD STORE` from the repository
 root with a prepared Turnip test environment.
 The unit/guest fixtures cover capability admission, disabled profiles, device
 and sysfs identity, FD duplication/transfer, namespaces, invalid ioctl buffers

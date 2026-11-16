@@ -1157,8 +1157,8 @@ the filesystem worker or affect independent shell services.
 
 ### Host Kernel Profiles
 
-Fixture builds (`MAGICDESK_GUEST_FIXTURES=ON`) support `linux-5.15` through
-`native/guest-exec-lab/kernel_profile.c`. Release builds contain neither the
+Fixture builds (`SHROOT_BUILD_TESTS=ON`) support `linux-5.15` through
+`tests/kernel_profile.c`. Release builds contain neither the
 profile implementation nor the supervisor startup hooks. The profile does not
 change the storage format, APK requirements, guest uname or selected executor.
 

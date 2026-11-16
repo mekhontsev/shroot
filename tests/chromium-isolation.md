@@ -12,8 +12,8 @@ The independent native fixture excludes the guest loader, syscall adapter,
 ptrace and its seccomp filters:
 
 ```sh
-sh native/guest-exec-lab/build-isolation-fixture.sh BUILD
-python native/guest-exec-lab/test_isolation.py BUILD
+sh tests/build-isolation-fixture.sh BUILD
+python tests/test_isolation.py BUILD
 ```
 
 It records the actual UID, capabilities, no_new_privs and seccomp state, kernel
@@ -66,8 +66,8 @@ distribution's browser build.
 ## External Domain Fixture
 
 ```sh
-sh native/guest-exec-lab/build-domain-fixture.sh BUILD
-python native/guest-exec-lab/test_domain.py BUILD --repeat 10
+sh tests/build-domain-fixture.sh BUILD
+python tests/test_domain.py BUILD --repeat 10
 ```
 
 A default-deny filter and external USER_NOTIF broker expose a bounded read-only
@@ -93,9 +93,9 @@ cannot be inferred away from successful ERRNO/TRAP controls.
 ## Helper And Protected Memory Control
 
 ```sh
-python native/guest-exec-lab/build-suid-context.py BUILD
-python native/guest-exec-lab/test_domain.py BUILD --fixture suid-context --repeat 10
-python native/guest-exec-lab/test_domain.py BUILD --fixture suid-context --suid-main --repeat 10
+python tests/build-suid-context.py BUILD
+python tests/test_domain.py BUILD --fixture suid-context --repeat 10
+python tests/test_domain.py BUILD --fixture suid-context --suid-main --repeat 10
 ```
 
 This static Bionic fixture combines retained root/cwd ownership with protected

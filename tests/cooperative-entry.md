@@ -14,10 +14,10 @@ exercise it independently of machine-code discovery.
 Configure `MAGICDESK_GUEST_FIXTURES=ON` as described in the fixture guide:
 
 ```sh
-python native/guest-exec-lab/test_cooperative_runtime.py BUILD --base
-python native/guest-exec-lab/test_cooperative_runtime.py BUILD --machine-entry
-python native/guest-exec-lab/test_resources.py BUILD
-python native/guest-exec-lab/test_watch_runtime.py BUILD --contracts
+python tests/test_cooperative_runtime.py BUILD --base
+python tests/test_cooperative_runtime.py BUILD --machine-entry
+python tests/test_resources.py BUILD
+python tests/test_watch_runtime.py BUILD --contracts
 ```
 
 The entry suite covers argv/environment layout, protected copies, unavailable
@@ -51,8 +51,8 @@ Compile the `test_cooperative_libc.c` workload against an existing distribution
 sysroot:
 
 ```sh
-python native/guest-exec-lab/build_svc_glibc.py STOCK_SYSROOT OUTPUT --environment ubuntu
-python native/guest-exec-lab/test_svc_libc.py BUILD OUTPUT/probe-stock --checks-only
+python tests/build_svc_glibc.py STOCK_SYSROOT OUTPUT --environment ubuntu
+python tests/test_svc_libc.py BUILD OUTPUT/probe-stock --checks-only
 ```
 
 The builder compiles only the probe. Dynamic checks require `--dynamic-loader`,

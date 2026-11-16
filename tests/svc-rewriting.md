@@ -289,12 +289,12 @@ connection under the selected executor and retain exact receipts in `build/`.
 
 ```sh
 cmake --build BUILD -j4
-python native/guest-exec-lab/audit_svc_payload.py BUILD
-python native/guest-exec-lab/test_cooperative_runtime.py BUILD --base
-python native/guest-exec-lab/test_cooperative_runtime.py BUILD --machine-entry
-python native/guest-exec-lab/test_svc_direct_signal.py BUILD
-python native/guest-exec-lab/test_svc_patch.py BUILD STOCK_GO --rounds 5
-python native/guest-exec-lab/test_svc_libc.py BUILD STOCK_LIBC_PROBE --checks-only --signal-storm
+python tests/audit_svc_payload.py BUILD
+python tests/test_cooperative_runtime.py BUILD --base
+python tests/test_cooperative_runtime.py BUILD --machine-entry
+python tests/test_svc_direct_signal.py BUILD
+python tests/test_svc_patch.py BUILD STOCK_GO --rounds 5
+python tests/test_svc_libc.py BUILD STOCK_LIBC_PROBE --checks-only --signal-storm
 ```
 
 The SVC runner's `--section` selects `entry`, `channels`, `filters`, `protected`, `images`,

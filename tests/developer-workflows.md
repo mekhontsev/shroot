@@ -93,9 +93,9 @@ in the main harness.
 Prepare a new build-only sysroot with the authenticated package helper:
 
 ```sh
-node native/guest-exec-lab/prepare.mjs build/guest-compile \
+node tests/prepare.mjs build/guest-compile \
     --suite trixie --package gcc --package make --package time --package coreutils
-python native/guest-exec-lab/benchmark_compile.py build/guest-compile \
+python tests/benchmark_compile.py build/guest-compile \
     --sqlite PATH_TO_SQLITE_AMALGAMATION --runtime INSTALLED_GUEST_BUNDLE
 ```
 

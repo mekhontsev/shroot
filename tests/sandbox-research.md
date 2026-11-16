@@ -20,11 +20,11 @@ SIGSYS handlers and alternate stacks belong to the application. See the
 Use a disposable prepared glibc store and an immutable staged runtime:
 
 ```sh
-sh native/guest-exec-lab/build-sandbox-fixtures.sh BUILD
-python native/guest-exec-lab/test_sandbox.py BUILD \
+sh tests/build-sandbox-fixtures.sh BUILD
+python tests/test_sandbox.py BUILD \
   --runtime IMMUTABLE_STAGED_HELPERS --store DISPOSABLE_GLIBC_STORE
-sh native/guest-exec-lab/build-hybrid-fixture.sh BUILD
-python native/guest-exec-lab/test_hybrid.py BUILD --runs 50
+sh tests/build-hybrid-fixture.sh BUILD
+python tests/test_hybrid.py BUILD --runs 50
 ```
 
 The runners record device/kernel identity, actual UID, helper hashes, output
@@ -67,9 +67,9 @@ Build with `MAGICDESK_GUEST_FIXTURES=ON`, then supply two raw AArch64
 
 ```sh
 cmake --build BUILD --target test_seccomp_entry
-python native/guest-exec-lab/test_seccomp_entry.py BUILD FILE_FILTER FD_FILTER \
+python tests/test_seccomp_entry.py BUILD FILE_FILTER FD_FILTER \
   --rounds 5 --executor shell
-python native/guest-exec-lab/test_seccomp_entry.py APK_BUILD FILE_FILTER FD_FILTER \
+python tests/test_seccomp_entry.py APK_BUILD FILE_FILTER FD_FILTER \
   --rounds 5 --executor app
 ```
 
@@ -229,7 +229,7 @@ service single-step. Build the controls with `MAGICDESK_GUEST_FIXTURES=ON`:
 
 ```sh
 cmake --build BUILD --target test_signal_checkpoint
-python native/guest-exec-lab/test_signal_checkpoint.py BUILD
+python tests/test_signal_checkpoint.py BUILD
 ```
 
 The runner uses UID 2000 and records the kernel, fixture hash, controls, timings
@@ -306,7 +306,7 @@ their final BRK or a racy VMA precheck.
 Run the bounded copy investigation without the complete checkpoint matrix:
 
 ```sh
-python native/guest-exec-lab/test_signal_checkpoint.py BUILD --copy-fault
+python tests/test_signal_checkpoint.py BUILD --copy-fault
 ```
 
 It retains the six negative LDR controls and adds 72 native self-`process_vm`

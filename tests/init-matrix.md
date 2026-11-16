@@ -35,11 +35,11 @@ launch and checks that the launch has retired. Systemd exits its guest manager,
 not Android. Reports retain the native binary hashes and command output.
 
 ```sh
-python native/guest-exec-lab/test_os_boot.py --build app/build/shroot --store STORE
-python native/guest-exec-lab/test_systemd.py --build app/build/shroot --store STORE \
+python tests/test_os_boot.py --build app/build/shroot --store STORE
+python tests/test_systemd.py --build app/build/shroot --store STORE \
   --property StateDirectory=md-init-probe --property SetCredential=md-probe:hello \
   --property ProtectProc=invisible --property ProcSubset=pid
-python native/guest-exec-lab/test_os_boot.py --build app/build/shroot \
+python tests/test_os_boot.py --build app/build/shroot \
   --init runit --store STORE
 ```
 

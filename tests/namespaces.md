@@ -371,8 +371,8 @@ account resolution, registry and inode contracts, plus `credentials_guest` for
 intercepted calls. The device runner accepts a prepared device-side OCI layout:
 
 ```sh
-python native/guest-exec-lab/test_credentials_runtime.py BUILD LOCAL_LAYOUT --packages debian
-python native/guest-exec-lab/test_credentials_runtime.py BUILD LOCAL_LAYOUT --packages alpine
+python tests/test_credentials_runtime.py BUILD LOCAL_LAYOUT --packages debian
+python tests/test_credentials_runtime.py BUILD LOCAL_LAYOUT --packages alpine
 ```
 
 The runner accepts `--executor app|shell` or `SHROOT_TEST_EXECUTOR` and creates
@@ -414,8 +414,8 @@ check, not a passing baseline or evidence of complete ancillary custody.
 For Debian's activation/FD workflow:
 
 ```sh
-sh native/guest-exec-lab/build-ipc-dbus.sh PREPARED_SYSROOT BUILD/ipc-dbus
-python native/guest-exec-lab/test_ipc_credentials_runtime.py BUILD DEVICE_STORE --gdbus --activation BUILD/ipc-dbus
+sh tests/build-ipc-dbus.sh PREPARED_SYSROOT BUILD/ipc-dbus
+python tests/test_ipc_credentials_runtime.py BUILD DEVICE_STORE --gdbus --activation BUILD/ipc-dbus
 ```
 
 The activation fixture installs/removes only its own service file in the disposable

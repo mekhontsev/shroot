@@ -18,9 +18,9 @@ production dependency, with `MD_SQLITE_BUILD` optionally selecting its existing
 build directory.
 
 ```sh
-sh native/guest-exec-lab/browser/build.sh build/guest-browser
-python native/guest-exec-lab/browser/run.py --build build/guest-browser --store DEVICE_GUEST_STORE --expect-artifact /tmp/NEW_FIREFOX_PROFILE/page.png -- /bin/sh -ec 'mkdir /tmp/NEW_FIREFOX_PROFILE; exec /usr/bin/firefox-esr --headless --no-remote --profile /tmp/NEW_FIREFOX_PROFILE --window-size 800,600 --screenshot /tmp/NEW_FIREFOX_PROFILE/page.png "data:text/html,<h1>MagicDesk guest browser</h1>"'
-python native/guest-exec-lab/browser/test_browser.py --build build/guest-browser --store DEVICE_GUEST_STORE
+sh tests/browser/build.sh build/guest-browser
+python tests/browser/run.py --build build/guest-browser --store DEVICE_GUEST_STORE --expect-artifact /tmp/NEW_FIREFOX_PROFILE/page.png -- /bin/sh -ec 'mkdir /tmp/NEW_FIREFOX_PROFILE; exec /usr/bin/firefox-esr --headless --no-remote --profile /tmp/NEW_FIREFOX_PROFILE --window-size 800,600 --screenshot /tmp/NEW_FIREFOX_PROFILE/page.png "data:text/html,<h1>MagicDesk guest browser</h1>"'
+python tests/browser/test_browser.py --build build/guest-browser --store DEVICE_GUEST_STORE
 ```
 
 Use `--software` for the same DOM, screenshot and sandbox checks without Turnip
@@ -90,8 +90,8 @@ requires a successful exit and expectations. `sandboxSupportEstablished` and
   be used for browsing.
 
 ```sh
-python native/guest-exec-lab/browser/test_credentials.py --build BUILD --store DEVICE_GUEST_STORE
-python native/guest-exec-lab/browser/test_retained.py --build BUILD --store DEVICE_GUEST_STORE
+python tests/browser/test_credentials.py --build BUILD --store DEVICE_GUEST_STORE
+python tests/browser/test_retained.py --build BUILD --store DEVICE_GUEST_STORE
 ```
 
 `build-control.sh` builds `control.c` for the prepared guest libc.
@@ -130,7 +130,7 @@ are overridden. See Chromium's
 [runtime feature selection](https://chromium.googlesource.com/chromium/src/+/HEAD/content/child/runtime_features.cc).
 
 ```sh
-python native/guest-exec-lab/browser/benchmark.py --build BUILD --store DEVICE_GUEST_STORE --executor app --video LOCAL_VIDEO.webm --output build/browser-video --seconds 45 --rounds 2
+python tests/browser/benchmark.py --build BUILD --store DEVICE_GUEST_STORE --executor app --video LOCAL_VIDEO.webm --output build/browser-video --seconds 45 --rounds 2
 ```
 
 `--chromium` selects the installed ELF. Use `--executor shell` with a Shell-owned

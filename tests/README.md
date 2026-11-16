@@ -156,11 +156,11 @@ workers, without putting a denial filter around the guest or disabling lazy SVC.
 It needs neither root nor a phone reboot. Existing Linux sessions are unchanged.
 
 ```sh
-python native/guest-exec-lab/test_resources.py BUILD --case kernel-baseline
-python native/guest-exec-lab/test_resources.py BUILD --case fs-results --kernel-profile linux-5.15
-python native/guest-exec-lab/test_watch_runtime.py BUILD --kernel-profile linux-5.15
-python native/guest-exec-lab/test_systemd.py --build BUILD --store STORE --kernel-profile linux-5.15 --machine-entry
-SHROOT_TEST_KERNEL_PROFILE=linux-5.15 python native/guest-exec-lab/test_clone3.py --build BUILD --name ENVIRONMENT
+python tests/test_resources.py BUILD --case kernel-baseline
+python tests/test_resources.py BUILD --case fs-results --kernel-profile linux-5.15
+python tests/test_watch_runtime.py BUILD --kernel-profile linux-5.15
+python tests/test_systemd.py --build BUILD --store STORE --kernel-profile linux-5.15 --machine-entry
+SHROOT_TEST_KERNEL_PROFILE=linux-5.15 python tests/test_clone3.py --build BUILD --name ENVIRONMENT
 ```
 
 `kernel-baseline` always compares both profiles and both syscall entry modes.
@@ -397,7 +397,7 @@ release. They do not assume fixed test ports are unused. Docker diagnostic
 profiles use a private empty daemon config so their explicit flags do not collide
 with `/etc/docker/daemon.json` written by the installer. This does not validate
 that system daemon's service-unit startup. Host-side observer ownership checks:
-`python native/guest-exec-lab/test_network_observer.py`.
+`python tests/test_network_observer.py`.
 The Docker probe selects a Python image automatically for `--exercise-ports`;
 an explicit `--image` must also provide Python for that scenario.
 `--profile nftables --no-userland-proxy` requires Docker 29+ and checks the
@@ -505,15 +505,15 @@ in `ASSETS` as `tun2socks-linux-arm64` and `gost`. TAP requires the distribution
 virtio-net modules, and the static `packet_vm` test target:
 
 ```sh
-python native/guest-exec-lab/probe_packet_runtime.py --kind tun --assets ASSETS
+python tests/probe_packet_runtime.py --kind tun --assets ASSETS
 cmake --build build/shroot-image-tests --target packet_vm
-python native/guest-exec-lab/probe_packet_runtime.py --kind tap \
+python tests/probe_packet_runtime.py --kind tap \
   --kernel vmlinuz-virt --initramfs initramfs-virt
-python native/guest-exec-lab/probe_packet_runtime.py --kind vpn --installed
-python native/guest-exec-lab/probe_packet_runtime.py --kind wireguard
-python native/guest-exec-lab/probe_packet_runtime.py --kind openconnect
-python native/guest-exec-lab/probe_packet_runtime.py --kind ipsec --network bridge
-python native/guest-exec-lab/probe_packet_runtime.py --kind tailscale --network bridge --assets ASSETS
+python tests/probe_packet_runtime.py --kind vpn --installed
+python tests/probe_packet_runtime.py --kind wireguard
+python tests/probe_packet_runtime.py --kind openconnect
+python tests/probe_packet_runtime.py --kind ipsec --network bridge
+python tests/probe_packet_runtime.py --kind tailscale --network bridge --assets ASSETS
 ```
 
 Use `--build BUILD`, `--environment NAME` and `--base` as needed. `--installed`
@@ -887,45 +887,47 @@ ordinary system calls is part of this approach.
 
 ### Rootfs Fixtures
 
-The following prepared graphical workflows run from the **MagicDesk checkout**.
-Their Java recipe adapter and APK presentation are integration tests, not
-dependencies of this repository's `tests/build.sh` or native runtime.
+The following prepared graphical workflows use an explicit **MagicDesk checkout**.
+Their prepared-rootfs builder, Java recipe adapter and APK presentation are
+integration inputs, not dependencies of this repository's `tests/build.sh` or
+native runtime. Run these commands from the Shroot checkout, with
+`MAGICDESK_SOURCE` pointing to MagicDesk.
 
 `prepare.mjs` authenticates Debian archive metadata and packages, then extracts
 an isolated test rootfs without maintainer scripts or host installation.
-MagicDesk's `native/guest-exec-lab/build.sh` builds its CMake runtime and Bionic/glibc
-fixtures. It requires the Termux development toolchain and JDK; installed guest launches
+MagicDesk's prepared-rootfs builder supplies the Bionic/glibc fixtures and
+graphical Java recipes. It requires the Termux development toolchain and JDK; installed guest launches
 do not require Termux. Exact inputs are retained in the build's `manifest.json`.
 
 ```sh
-node native/guest-exec-lab/prepare.mjs build/guest-fixtures --gtk
-sh native/guest-exec-lab/build.sh build/guest-fixtures
-python native/guest-exec-lab/test_device.py build/guest-fixtures --packages
-python native/guest-exec-lab/test_graphics.py build/guest-fixtures
-python native/guest-exec-lab/test_graphics.py build/guest-fixtures --gtk
+node tests/prepare.mjs build/guest-fixtures --gtk
+sh "$MAGICDESK_SOURCE/native/guest-exec-lab/build.sh" build/guest-fixtures
+python tests/test_device.py build/guest-fixtures --packages
+python tests/test_graphics.py build/guest-fixtures
+python tests/test_graphics.py build/guest-fixtures --gtk
 ```
 
 For real application workflows, use a separate prepared build:
 
 ```sh
-node native/guest-exec-lab/prepare.mjs build/guest-applications --applications
-sh native/guest-exec-lab/build.sh build/guest-applications
-python native/guest-exec-lab/test_device.py build/guest-applications --packages
-python native/guest-exec-lab/test_graphics.py build/guest-applications --application mousepad --network
-python native/guest-exec-lab/test_graphics.py build/guest-applications --application galculator
-python native/guest-exec-lab/test_graphics.py build/guest-applications --application mousepad --routed
-python native/guest-exec-lab/test_graphics.py build/guest-applications --application mousepad --routed --protocol x11
-python native/guest-exec-lab/test_shortcuts.py build/guest-applications --protocol wayland
-python native/guest-exec-lab/test_shortcuts.py build/guest-applications --protocol x11
+node tests/prepare.mjs build/guest-applications --applications
+sh "$MAGICDESK_SOURCE/native/guest-exec-lab/build.sh" build/guest-applications
+python tests/test_device.py build/guest-applications --packages
+python tests/test_graphics.py build/guest-applications --application mousepad --network
+python tests/test_graphics.py build/guest-applications --application galculator
+python tests/test_graphics.py build/guest-applications --application mousepad --routed
+python tests/test_graphics.py build/guest-applications --application mousepad --routed --protocol x11
+python tests/test_shortcuts.py build/guest-applications --protocol wayland
+python tests/test_shortcuts.py build/guest-applications --protocol x11
 ```
 
 For Qt text-input-v3, prepare the newer Debian userspace separately:
 
 ```sh
-node native/guest-exec-lab/prepare.mjs build/guest-qt --qt --suite trixie
-sh native/guest-exec-lab/build.sh build/guest-qt
-python native/guest-exec-lab/test_device.py build/guest-qt --packages
-python native/guest-exec-lab/test_qt.py build/guest-qt
+node tests/prepare.mjs build/guest-qt --qt --suite trixie
+sh "$MAGICDESK_SOURCE/native/guest-exec-lab/build.sh" build/guest-qt
+python tests/test_device.py build/guest-qt --packages
+python tests/test_qt.py build/guest-qt
 ```
 
 Bookworm is the default suite; trixie uses the same pinned signature and package

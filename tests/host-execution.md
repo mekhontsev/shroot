@@ -270,7 +270,7 @@ shared `FixtureExecutor` still owns guest execution; `su` prepares host access
 only. Production User and Shell libraries remain separate.
 
 ```sh
-python native/guest-exec-lab/test_borrowed_environment.py \
+python tests/test_borrowed_environment.py \
   --name steamos --command 'cat /etc/os-release; id' \
   --output build/borrowed-steamos
 ```
@@ -1286,7 +1286,7 @@ access. Such an unavailable oracle is reported separately; guest assertions
 remain mandatory and ordinary test failures are never treated as unavailable.
 
 ```sh
-SHROOT_TEST_EXECUTOR=app python native/guest-exec-lab/test_k3s.py \
+SHROOT_TEST_EXECUTOR=app python tests/test_k3s.py \
   app/build/shroot alpine /path/to/k3s-arm64 --output build/app-uid-k3s
 ```
 

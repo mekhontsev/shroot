@@ -84,8 +84,8 @@ Build `resource_guest` and `test_task_resources` with
 checks; the device runner compares actual shell UID 2000 with intercepted guests:
 
 ```sh
-python native/guest-exec-lab/test_resources.py BUILD
-python native/guest-exec-lab/test_resources.py BUILD --case fs-buffer
+python tests/test_resources.py BUILD
+python tests/test_resources.py BUILD --case fs-buffer
 ```
 
 The runner owns disposable stores and removes them unless `--keep` is selected.
@@ -152,7 +152,7 @@ for work counts. Timings are observations, not pass/fail thresholds.
 The offline importer tests require Python and the `zstd` CLI:
 
 ```sh
-python native/guest-exec-lab/test_oci.py BUILD_DIRECTORY -v
+python tests/test_oci.py BUILD_DIRECTORY -v
 ```
 
 The importer must run in a native environment that permits its syscalls.
@@ -167,7 +167,7 @@ reproducible inputs. Run independent Alpine and Debian layouts through actual
 shell UID 2000:
 
 ```sh
-python native/guest-exec-lab/test_oci_runtime.py BUILD_DIRECTORY ALPINE_LAYOUT DEBIAN_LAYOUT
+python tests/test_oci_runtime.py BUILD_DIRECTORY ALPINE_LAYOUT DEBIAN_LAYOUT
 ```
 
 The runner stages production helpers, tests snapshot and mount contracts, then
@@ -182,7 +182,7 @@ standalone helper coverage alone does not verify APK packaging and dispatch.
 The installed named manager has a separate workflow:
 
 ```sh
-python native/guest-exec-lab/test_environment_cli.py --apk app/build/outputs/apk/debug/app-debug.apk
+python tests/test_environment_cli.py --apk app/build/outputs/apk/debug/app-debug.apk
 ```
 
 It downloads public Alpine and Debian images through the APK's registry client,
@@ -196,10 +196,10 @@ image configuration, storage paths and command results.
 Stock service-image workflows and development tools:
 
 ```sh
-python native/guest-exec-lab/test_oci_services.py OUTPUT --nginx NGINX_LAYOUT --redis REDIS_LAYOUT --postgres POSTGRES_LAYOUT
-python native/guest-exec-lab/test_oci_services.py OUTPUT --python PYTHON_LAYOUT --node NODE_LAYOUT --httpd HTTPD_LAYOUT --memcached MEMCACHED_LAYOUT --java TEMURIN_JDK_LAYOUT
-python native/guest-exec-lab/test_development_runtime.py OUTPUT --debian DEBIAN_LAYOUT --install
-python native/guest-exec-lab/test_service_runtime.py BUILD DEVICE_STORE OTHER_DEVICE_STORE --installed
+python tests/test_oci_services.py OUTPUT --nginx NGINX_LAYOUT --redis REDIS_LAYOUT --postgres POSTGRES_LAYOUT
+python tests/test_oci_services.py OUTPUT --python PYTHON_LAYOUT --node NODE_LAYOUT --httpd HTTPD_LAYOUT --memcached MEMCACHED_LAYOUT --java TEMURIN_JDK_LAYOUT
+python tests/test_development_runtime.py OUTPUT --debian DEBIAN_LAYOUT --install
+python tests/test_service_runtime.py BUILD DEVICE_STORE OTHER_DEVICE_STORE --installed
 ```
 
 The first two commands use packaged helpers by default; `--build BUILD` explicitly
@@ -289,10 +289,10 @@ individual workflows. See the [SysV contract](../sysv-ipc.md).
 Distribution and emulator workflows use the same runner and per-instance policy:
 
 ```sh
-python native/guest-exec-lab/test_distribution_runtime.py OUTPUT --build BUILD ubuntu --layout UBUNTU_LAYOUT --install
-python native/guest-exec-lab/test_distribution_runtime.py OUTPUT --build BUILD centos --layout CENTOS_LAYOUT --install
-python native/guest-exec-lab/rootfs_oci_fixture.py --help
-python native/guest-exec-lab/test_qemu_runtime.py --help
+python tests/test_distribution_runtime.py OUTPUT --build BUILD ubuntu --layout UBUNTU_LAYOUT --install
+python tests/test_distribution_runtime.py OUTPUT --build BUILD centos --layout CENTOS_LAYOUT --install
+python tests/rootfs_oci_fixture.py --help
+python tests/test_qemu_runtime.py --help
 ```
 
 The rootfs wrapper retains an unchanged official Arch Linux ARM tarball as one
@@ -314,8 +314,8 @@ UID 2000, but does not mistake that probe for enforcement coverage.
 
 ```sh
 cmake --build BUILD --target bootstrap supervisor run image landlock_guest vm_init
-python native/guest-exec-lab/test_arch_runtime.py BUILD ARCH_STORE --install-package
-python native/guest-exec-lab/test_kernel_vm.py BUILD --kernel ARM64_KERNEL \
+python tests/test_arch_runtime.py BUILD ARCH_STORE --install-package
+python tests/test_kernel_vm.py BUILD --kernel ARM64_KERNEL \
   --fixture BUILD/libmagicdesk_guest_landlock_guest.so
 ```
 
@@ -361,7 +361,7 @@ checks remain required under the selected executor.
 ## Watch Transport Controls
 
 ```sh
-python native/guest-exec-lab/test_watch_runtime.py build/shroot-image-tests --contracts
+python tests/test_watch_runtime.py build/shroot-image-tests --contracts
 ```
 
 The production watch runner also executes the Bionic transport controls built
@@ -449,10 +449,10 @@ FD limit to 65536 is retained as an explicit report limit; watch and bus failure
 are not ignored. Build-only prepared inputs:
 
 ```sh
-node native/guest-exec-lab/prepare.mjs build/watch-gio-sysroot --package libglib2.0-dev
-sh native/guest-exec-lab/build-watch-gio.sh build/watch-gio-sysroot/sysroot build/watch-gio
-python native/guest-exec-lab/prepare-watch-userspace.py PREPARED_DEBIAN_ROOTFS build/watch-userspace.tar.gz
-python native/guest-exec-lab/test_watch_runtime.py BUILD_DIRECTORY \
+node tests/prepare.mjs build/watch-gio-sysroot --package libglib2.0-dev
+sh tests/build-watch-gio.sh build/watch-gio-sysroot/sysroot build/watch-gio
+python tests/prepare-watch-userspace.py PREPARED_DEBIAN_ROOTFS build/watch-userspace.tar.gz
+python tests/test_watch_runtime.py BUILD_DIRECTORY \
     --userspace build/watch-userspace.tar.gz --gio build/watch-gio --contracts
 ```
 

@@ -40,6 +40,8 @@ def main():
 
 
 def run(args):
+    from executors.magicdesk import source_root
+    installer = source_root() / 'scripts/install_linux.sh'
     suite = Suite(args.output, args.build, machine_entry=args.machine_entry,
                   kernel_profile=args.kernel_profile, executor=args.executor)
     target = '/md-k3s-boot-' + suite.report['id']
@@ -83,7 +85,7 @@ def run(args):
         suite.command([suite.base + '/crash-launch'])
         with tempfile.TemporaryDirectory() as directory:
             helper = Path(directory) / 'magicdesk-init'
-            helper.write_text(subprocess.check_output(['sh', str(source.parents[1] / 'scripts/install_linux.sh'),
+            helper.write_text(subprocess.check_output(['sh', str(installer),
                                                       '--print-init-session'], text=True))
             suite.upload(helper, suite.base + '/magicdesk-init')
             suite.chmod('700', suite.base + '/magicdesk-init')
