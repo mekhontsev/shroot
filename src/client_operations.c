@@ -98,16 +98,17 @@ int shroot_import_version(shroot_context *context, const struct shroot_io *io, s
 static void options(struct shroot_arguments *args, const char *name, const char *const *values) {
     if (values) for (size_t i = 0; values[i]; ++i) shroot_option(args, name, values[i]);
 }
-int shroot_launch(shroot_store *store, const struct shroot_launch_options *launch,
-        const struct shroot_io *io, shroot_job **out) {
+static int launch_command(shroot_context *context, const char *library, const char *selector,
+        const struct shroot_launch_options *launch, const struct shroot_io *io, shroot_job **out) {
     struct shroot_arguments args = {0};
     if (!launch || launch->kind < SHROOT_RUN || launch->kind > SHROOT_LOGIN || launch->flags & ~15u
             || (launch->bind_count && !launch->binds) || (launch->route_count && !launch->routes)) {
         if (out) *out = NULL;
         return -EINVAL;
     }
+    if (library) { shroot_argument(&args,"library"); shroot_argument(&args,library); }
     shroot_argument(&args, launch->kind == SHROOT_RUN ? "run" : launch->kind == SHROOT_EXEC ? "exec" : "login");
-    shroot_argument(&args, store ? store->path : NULL);
+    shroot_argument(&args, selector);
     shroot_option(&args, "--user", launch->user);
     shroot_option(&args, "--cwd", launch->cwd);
     shroot_option(&args, "--entrypoint", launch->entrypoint);
@@ -141,5 +142,70 @@ int shroot_launch(shroot_store *store, const struct shroot_launch_options *launc
         shroot_argument(&args, launch->flags & SHROOT_SIGNAL_DIAGNOSTICS ? "--diagnostics=signals" : "--diagnostics");
     shroot_argument(&args, "--");
     if (launch->arguments) for (size_t i = 0; launch->arguments[i]; ++i) shroot_argument(&args, launch->arguments[i]);
-    return shroot_client_start(store ? store->context : NULL, &args, io, out);
+    return shroot_client_start(context, &args, io, out);
+}
+int shroot_launch(shroot_store *store,const struct shroot_launch_options *launch,const struct shroot_io *io,shroot_job **out) {
+    return launch_command(store ? store->context : NULL,NULL,store ? store->path : NULL,launch,io,out);
+}
+int shroot_environment_launch(shroot_library *lib,const char *name,const struct shroot_launch_options *launch,
+        const struct shroot_io *io,shroot_job **out) {
+    return launch_command(lib ? lib->context : NULL,lib ? lib->path : NULL,name,launch,io,out);
+}
+static void library_arguments(struct shroot_arguments *args,shroot_library *lib,const char *operation) {
+    shroot_argument(args,"library");
+    shroot_argument(args,lib ? lib->path : NULL);
+    shroot_argument(args,operation);
+}
+static int library_command(shroot_library *lib,const char *operation,const char *first,const char *second,
+        const struct shroot_io *io,shroot_job **out) {
+    struct shroot_arguments args={0};
+    library_arguments(&args,lib,operation);
+    if (first) shroot_argument(&args,first);
+    if (second) shroot_argument(&args,second);
+    return shroot_client_start(lib ? lib->context : NULL,&args,io,out);
+}
+#define LIBRARY_OPERATION(function,operation) \
+    int function(shroot_library *lib,const struct shroot_io *io,shroot_job **out) { \
+        return library_command(lib,operation,NULL,NULL,io,out); \
+    }
+LIBRARY_OPERATION(shroot_library_initialize,"init")
+LIBRARY_OPERATION(shroot_library_list,"list")
+LIBRARY_OPERATION(shroot_library_prune,"prune")
+#undef LIBRARY_OPERATION
+#define ENVIRONMENT_OPERATION(function,operation) \
+    int function(shroot_library *lib,const char *name,const struct shroot_io *io,shroot_job **out) { \
+        if (!name || !*name) { if (out) *out=NULL; return -EINVAL; } \
+        return library_command(lib,operation,name,NULL,io,out); \
+    }
+ENVIRONMENT_OPERATION(shroot_environment_resolve,"resolve")
+ENVIRONMENT_OPERATION(shroot_environment_remove,"remove")
+#undef ENVIRONMENT_OPERATION
+int shroot_environment_install(shroot_library *lib,const struct shroot_install_options *options,
+        const struct shroot_io *io,shroot_job **out) {
+    if (!options || options->kind<SHROOT_SOURCE_ROOTFS || options->kind>SHROOT_SOURCE_OCI) {
+        if (out) *out=NULL;
+        return -EINVAL;
+    }
+    struct shroot_arguments args={0};
+    library_arguments(&args,lib,"install");
+    shroot_argument(&args,options->kind==SHROOT_SOURCE_ROOTFS ? "rootfs" : "oci");
+    shroot_argument(&args,options->source); shroot_argument(&args,options->name);
+    shroot_option(&args,"--resolver",options->resolver);
+    return shroot_client_start(lib ? lib->context : NULL,&args,io,out);
+}
+int shroot_environment_restore(shroot_library *lib,const char *archive,const char *name,const struct shroot_io *io,shroot_job **out) {
+    if (!archive || !name) { if (out) *out=NULL; return -EINVAL; }
+    return library_command(lib,"restore",archive,name,io,out);
+}
+int shroot_environment_backup(shroot_library *lib,const char *name,const char *archive,const struct shroot_io *io,shroot_job **out) {
+    if (!archive || !name) { if (out) *out=NULL; return -EINVAL; }
+    return library_command(lib,"backup",name,archive,io,out);
+}
+int shroot_environment_resolver(shroot_library *lib,const char *name,const char *servers,int replace,
+        const struct shroot_io *io,shroot_job **out) {
+    struct shroot_arguments args={0};
+    library_arguments(&args,lib,"resolver");
+    shroot_argument(&args,name); shroot_argument(&args,servers);
+    if (replace) shroot_argument(&args,"--replace");
+    return shroot_client_start(lib ? lib->context : NULL,&args,io,out);
 }

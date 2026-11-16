@@ -4,6 +4,7 @@
 
 struct shroot_context { char *worker; };
 struct shroot_store { shroot_context *context; char *path; };
+struct shroot_library { shroot_context *context; char *path; };
 struct shroot_arguments { const char **values; size_t count, capacity; int error; };
 void shroot_argument(struct shroot_arguments *, const char *);
 void shroot_option(struct shroot_arguments *, const char *, const char *);

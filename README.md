@@ -9,7 +9,8 @@ with separate storage and retained launch identities. Ordinary ARM64 Linux is
 also a delivery target; its runtime qualification is not yet complete.
 
 Start with [embedding](embedding.md) for library use and standalone operations,
-and [images and views](images.md) for storage, import and backup contracts.
+and [environment libraries](library.md) for named installation and cleanup.
+[Images and views](images.md) describes storage, import and backup contracts.
 This file is the architecture map. The [fixture guide](tests/README.md) owns
 runtime test evidence; some integration runners still require their MagicDesk
 transport adapter. A root-backed Shell service is not a separate native-root
@@ -82,7 +83,8 @@ Android kernel: actual task lifetime, descriptors, data IO and native checks
 | Owner | Responsibility | Does not own |
 | --- | --- | --- |
 | `libshroot`, CLI | Explicit runtime/store selection, typed requests, IO, exact-child lifetime and completion | In-process guest execution, Android authorization or guest syscall policy |
-| Application services | Authorization, catalog/registry downloads, launch recipes, immutable helper staging, PTY, graphics/audio/input connections | Guest syscall policy or native resource lifetime |
+| Native library/image owners | Named environments, imports, shared-source dependencies, backup/restore and cleanup | Android authorization, presentation or guest syscall scheduling |
+| Application services | Authorization, registry downloads, launch recipes, immutable helper staging, PTY, graphics/audio/input connections | Guest syscall policy or native resource lifetime |
 | `namespace_run.c` | Explicit launch configuration and native process owner | Global current distribution or automatic privilege switching |
 | `bootstrap.c`, `elf.c`, `exec.c` | ELF admission/mapping, stack and exec reentry | Distribution-specific loader or libc policy |
 | `supervisor.c` | Launch services, event-loop ordering, progress and cancellation | Operation-specific syscall implementations |
@@ -118,9 +120,10 @@ The native image worker owns validated import, snapshots, backup, maintenance
 and launch data. `libshroot` and its CLI use this owner through a private,
 same-bundle management contract. Standalone `service` and offline clients reuse
 the filesystem engine rather than a separate filesystem implementation.
-MagicDesk's existing named-environment catalog and registry downloader are still
-app-side integration; moving those policies into the native project is separate
-from the already native store and runtime operations.
+The [native named catalog](library.md) supplies local OCI/rootfs installation and
+dependency-aware cleanup through the public library and CLI. Registry downloads
+and MagicDesk's migration to this catalog remain integration work; runtime and
+local catalog operations already run independently.
 
 Named environments use the inode backend. A direct-rootfs backend remains a
 low-level fixture/control path, never a fallback after a namespace error.

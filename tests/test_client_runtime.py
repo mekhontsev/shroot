@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Native client integration; no Android application or automation service."""
 import argparse
-import io
 import json
 from pathlib import Path
 import subprocess
-import tarfile
 import tempfile
+from client_fixture import archive_fixture
 
 
 def main():
@@ -21,23 +20,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="shroot-client-", dir=build) as directory:
         root = Path(directory)
         archive = root / "rootfs.tar"
-        with tarfile.open(archive, "w", format=tarfile.PAX_FORMAT) as tar:
-            for name in ("bin", "tmp", "etc"):
-                entry = tarfile.TarInfo(name)
-                entry.type = tarfile.DIRTYPE
-                entry.mode = 0o755
-                tar.addfile(entry)
-            tar.add(build / "client-guest", arcname="bin/client-guest")
-            payload = b"libshroot payload"
-            entry = tarfile.TarInfo("payload")
-            entry.mode = 0o644
-            entry.size = len(payload)
-            tar.addfile(entry, io.BytesIO(payload))
-            for name, kind in (("hardlink", tarfile.LNKTYPE), ("link", tarfile.SYMTYPE)):
-                entry = tarfile.TarInfo(name)
-                entry.type = kind
-                entry.linkname = "payload"
-                tar.addfile(entry)
+        archive_fixture(build, archive)
         subprocess.run([str(build / "test_client_integration"), str(runtime), str(archive), str(root)],
                        check=True, timeout=180)
         cli = [str(prefix / "bin/shroot")] if prefix else [str(build / "shroot"), "--runtime", str(build)]

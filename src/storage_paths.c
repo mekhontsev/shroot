@@ -17,6 +17,31 @@ int md_storage_directory_path(int directory,char *path,size_t size) {
     memcpy(path,resolved,length+1); return 0;
 }
 
+int md_storage_source_path(const char *directory,const char *source,char *out,size_t size) {
+    if (!directory || *directory!='/' || !source || !*source || size<2) return -EINVAL;
+    char joined[PATH_MAX];
+    int n=*source=='/' ? snprintf(joined,sizeof(joined),"%s",source)
+        : snprintf(joined,sizeof(joined),"%s/%s",directory,source);
+    if (n<0 || n>=(int)sizeof(joined)) return -ENAMETOOLONG;
+    size_t used=1;
+    out[0]='/';
+    for (const char *p=joined; *p;) {
+        while (*p=='/') ++p;
+        const char *start=p;
+        while (*p && *p!='/') ++p;
+        size_t length=(size_t)(p-start);
+        if (!length || (length==1 && *start=='.')) continue;
+        if (length==2 && start[0]=='.' && start[1]=='.') {
+            while (used>1 && out[--used]!='/') { }
+            continue;
+        }
+        if (used+(used>1)+length>=size) return -ENAMETOOLONG;
+        if (used>1) out[used++]='/';
+        memcpy(out+used,start,length); used+=length;
+    }
+    out[used]=0; return 0;
+}
+
 int md_storage_relative_path(const char *directory,const char *target,char *path,size_t size) {
     if (!directory || !target || *directory!='/' || *target!='/') return -EINVAL;
     size_t common=1;

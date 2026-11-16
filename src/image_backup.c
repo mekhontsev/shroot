@@ -240,15 +240,9 @@ static int backup_config(int fd, sqlite3 *db, char **out, int *guest_users) {
     }
     sqlite3_finalize(q); free(data); archive_read_free(ar); return r;
 }
-int md_image_archive_import(const char *archive, const char *destination, int backup) {
-    int fd = open(archive, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) return -errno;
-    struct md_image_publish p = {.parent=-1, .stage=-1};
-    int r = md_image_publish_begin(destination, &p);
-    int snapshot = -1;
-    if (!r) r = md_image_snapshot(fd, p.stage, MD_IMAGE_MAX_BYTES, &snapshot);
+static int archive_install(int snapshot, struct md_image_publish *p, int backup) {
     struct md_inode_store *s = NULL;
-    if (!r) r = md_inode_store_open(p.path, 1, &s);
+    int r = md_inode_store_open(p->path, 1, &s);
     char *config = NULL;
     int guest_users = 1;
     if (!r) r = backup ? backup_config(snapshot, s->db, &config, &guest_users) : ((config = strdup(default_config)) ? 0 : -ENOMEM);
@@ -264,7 +258,24 @@ int md_image_archive_import(const char *archive, const char *destination, int ba
     if (!r && !backup) r = md_inode_store_seal(s);
     if (!r && fsync(s->lifetime->root)) r = -errno;
     md_inode_store_close(s);
-    if (!r) r = md_image_publish_commit(&p);
-    if (snapshot >= 0) close(snapshot);
-    md_image_publish_close(&p); free(config); close(fd); return r;
+    if (!r) r = md_image_publish_commit(p);
+    free(config); return r;
+}
+int md_image_archive_snapshot(int snapshot, const char *destination, int backup) {
+    struct md_image_publish p = {.parent=-1, .stage=-1};
+    int r = md_image_publish_begin(destination, &p);
+    if (!r && lseek(snapshot,0,SEEK_SET)<0) r=-errno;
+    if (!r) r=archive_install(snapshot,&p,backup);
+    md_image_publish_close(&p); return r;
+}
+int md_image_archive_import(const char *archive, const char *destination, int backup) {
+    int fd = open(archive, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) return -errno;
+    struct md_image_publish p = {.parent=-1, .stage=-1};
+    int r = md_image_publish_begin(destination, &p);
+    int snapshot = -1;
+    if (!r) r = md_image_snapshot(fd, p.stage, MD_IMAGE_MAX_BYTES, &snapshot);
+    if (!r) r=archive_install(snapshot,&p,backup);
+    if (snapshot>=0) close(snapshot);
+    md_image_publish_close(&p); close(fd); return r;
 }

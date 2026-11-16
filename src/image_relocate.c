@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "image_maintenance.h"
+#include "image_library.h"
 #include "storage_paths.h"
 #include "storage_database.h"
 #include "inode_schema.h"
@@ -106,9 +107,7 @@ int md_image_relocate_library(const char *source,const char *destination) {
     if (!r && !fstatat(parent,name,&existing,AT_SYMLINK_NOFOLLOW)) r=-EEXIST;
     else if (!r && errno!=ENOENT) r=-errno;
     int catalog=-1,previous_parent=-1;
-    if (!r && (catalog=openat(root,"library.lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600))<0) r=-errno;
-    struct flock lock={.l_type=F_WRLCK,.l_whence=SEEK_SET,.l_start=0,.l_len=0};
-    if (!r && fcntl(catalog,F_SETLK,&lock)) r=errno==EAGAIN || errno==EACCES ? -EBUSY : -errno;
+    if (!r && (catalog=md_library_lock(root))<0) r=catalog;
     if (!r && (previous_parent=openat(root,"..",O_RDONLY|O_DIRECTORY|O_CLOEXEC))<0) r=-errno;
     struct store_lease *leases=NULL;
     const char *groups[]={"images","instances","layers"};

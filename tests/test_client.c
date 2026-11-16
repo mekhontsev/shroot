@@ -67,6 +67,22 @@ static void arguments(shroot_context *context, const char *directory) {
     assert(!shroot_launch(store, &options, &io, &job));
     struct shroot_result result = wait_job(job);
     assert(!result.error && !result.signal && result.exit_code == 42);
+    shroot_library *library=NULL;
+    assert(!shroot_library_open(context,"/missing/catalog with spaces",&library));
+    file=tmpfile(); assert(file);
+    io=(struct shroot_io){-1,fileno(file),-1,env};
+    struct shroot_install_options install={SHROOT_SOURCE_ROOTFS,"/input ' literal","named","nameserver 192.0.2.1\n"};
+    assert(!shroot_environment_install(library,&install,&io,&job));
+    assert(!wait_job(job).error);
+    rewind(file); memset(output,0,sizeof(output)); assert(fread(output,1,sizeof(output)-1,file)>0);
+    assert(strstr(output,"library\n/missing/catalog with spaces\ninstall\nrootfs\n/input ' literal\nnamed\n"));
+    assert(strstr(output,"--resolver\nnameserver 192.0.2.1\n"));
+    fclose(file);
+    io=(struct shroot_io){-1,-1,-1,launch_env};
+    assert(!shroot_environment_launch(library,"named",&options,&io,&job));
+    result=wait_job(job);
+    assert(!result.error && result.exit_code==42 && !result.signal);
+    shroot_library_close(library);
     shroot_store_close(store);
 }
 struct wait_context { shroot_job *job; struct shroot_result result; int error; };

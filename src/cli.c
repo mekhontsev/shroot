@@ -10,7 +10,8 @@
 #include <sys/signalfd.h>
 #include <unistd.h>
 
-static int launch(shroot_store *store, enum shroot_launch_kind kind, int argc, char **argv, shroot_job **out) {
+static int launch(shroot_store *store, shroot_library *library, const char *name,
+        enum shroot_launch_kind kind, int argc, char **argv, shroot_job **out) {
     struct shroot_launch_options options = {.kind=kind};
     const char **env = calloc((size_t)argc + 1, sizeof(*env));
     const char **dns = calloc((size_t)argc + 1, sizeof(*dns));
@@ -62,12 +63,39 @@ static int launch(shroot_store *store, enum shroot_launch_kind kind, int argc, c
     options.arguments = (const char *const *)(argv + at);
     options.environment = env; options.dns = dns; options.ports = ports;
     options.binds = binds; options.routes = routes;
-    if (!r) r = shroot_launch(store, &options, NULL, out);
+    if (!r) r = library ? shroot_environment_launch(library,name,&options,NULL,out) : shroot_launch(store, &options, NULL, out);
     free(env); free(dns); free(ports); free(binds); free(routes); return r;
+}
+static int library_submit(shroot_context *context,int argc,char **argv,shroot_job **out) {
+    if (argc<2) return -EINVAL;
+    shroot_library *library=NULL;
+    int r=shroot_library_open(context,argv[0],&library);
+    if (r) return r;
+    const char *operation=argv[1];
+    r=-EINVAL;
+    if (argc==2 && !strcmp(operation,"init")) r=shroot_library_initialize(library,NULL,out);
+    else if (argc==2 && !strcmp(operation,"list")) r=shroot_library_list(library,NULL,out);
+    else if (argc==2 && !strcmp(operation,"prune")) r=shroot_library_prune(library,NULL,out);
+    else if (argc==3 && !strcmp(operation,"resolve")) r=shroot_environment_resolve(library,argv[2],NULL,out);
+    else if (argc==3 && !strcmp(operation,"remove")) r=shroot_environment_remove(library,argv[2],NULL,out);
+    else if (argc==4 && !strcmp(operation,"backup")) r=shroot_environment_backup(library,argv[2],argv[3],NULL,out);
+    else if (argc==4 && !strcmp(operation,"restore")) r=shroot_environment_restore(library,argv[2],argv[3],NULL,out);
+    else if ((argc==5 || (argc==7 && !strcmp(argv[5],"--resolver"))) && !strcmp(operation,"install")) {
+        struct shroot_install_options options={.source=argv[3],.name=argv[4],.resolver=argc==7 ? argv[6] : NULL};
+        if (!strcmp(argv[2],"rootfs") || !strcmp(argv[2],"oci")) {
+            options.kind=!strcmp(argv[2],"rootfs") ? SHROOT_SOURCE_ROOTFS : SHROOT_SOURCE_OCI;
+            r=shroot_environment_install(library,&options,NULL,out);
+        }
+    } else if ((argc==4 || (argc==5 && !strcmp(argv[4],"--replace"))) && !strcmp(operation,"resolver"))
+        r=shroot_environment_resolver(library,argv[2],argv[3],argc==5,NULL,out);
+    else if (argc>=3 && (!strcmp(operation,"run") || !strcmp(operation,"exec") || !strcmp(operation,"login")))
+        r=launch(NULL,library,argv[2],!strcmp(operation,"run") ? SHROOT_RUN : !strcmp(operation,"exec") ? SHROOT_EXEC : SHROOT_LOGIN,argc-3,argv+3,out);
+    shroot_library_close(library); return r;
 }
 static int submit(shroot_context *context, int argc, char **argv, shroot_job **out) {
     if (!argc) return -EINVAL;
     const char *name = argv[0];
+    if (!strcmp(name,"library")) return library_submit(context,argc-1,argv+1,out);
     if (argc == 1 && !strcmp(name, "format")) return shroot_storage_format(context, NULL, out);
     if (argc == 1 && !strcmp(name, "import-version")) return shroot_import_version(context, NULL, out);
     if (argc == 2 && !strcmp(name, "recover-staging")) return shroot_recover_staging(context, argv[1], NULL, out);
@@ -108,7 +136,7 @@ static int submit(shroot_context *context, int argc, char **argv, shroot_job **o
     else if ((argc == 3 || (argc == 4 && !strcmp(argv[3], "--replace"))) && !strcmp(name, "resolver"))
         r = shroot_resolver(store, argv[2], argc == 4, NULL, out);
     else if (!strcmp(name, "run") || !strcmp(name, "exec") || !strcmp(name, "login"))
-        r = launch(store, !strcmp(name, "run") ? SHROOT_RUN : !strcmp(name, "exec") ? SHROOT_EXEC : SHROOT_LOGIN, argc-2, argv+2, out);
+        r = launch(store, NULL, NULL, !strcmp(name, "run") ? SHROOT_RUN : !strcmp(name, "exec") ? SHROOT_EXEC : SHROOT_LOGIN, argc-2, argv+2, out);
     shroot_store_close(store); return r;
 }
 static int runtime_directory(char path[PATH_MAX]) {
@@ -127,6 +155,10 @@ static int runtime_directory(char path[PATH_MAX]) {
 }
 static void usage(void) {
     puts("Usage: shroot [--runtime DIRECTORY] COMMAND [ARGS]\n"
+        "  library DIRECTORY init | list | prune | resolve NAME | remove NAME\n"
+        "  library DIRECTORY install rootfs|oci SOURCE NAME [--resolver CONTENTS]\n"
+        "  library DIRECTORY backup NAME ARCHIVE | restore ARCHIVE NAME\n"
+        "  library DIRECTORY exec|run|login NAME [OPTIONS] [-- COMMAND...]\n"
         "  rootfs ARCHIVE NEW_IMAGE | import OCI_LAYOUT NEW_IMAGE --preserve-ownership\n"
         "  create IMAGE NEW_INSTANCE | restore ARCHIVE NEW_INSTANCE\n"
         "  inspect STORE | prepare STORE | maintain STORE | remove STORE\n"

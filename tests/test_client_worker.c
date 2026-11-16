@@ -38,7 +38,8 @@ int main(int argc, char **argv) {
         message(SHROOT_CLIENT_DONE, 0); return 0;
     }
     if (mode && !strcmp(mode, "launch")) {
-        assert(!strcmp(argv[2], "exec"));
+        int at=!strcmp(argv[2],"library") ? 4 : 2;
+        assert(argc>at && !strcmp(argv[at], "exec"));
         close(SHROOT_CLIENT_FD); return 42;
     }
     if (mode && !strcmp(mode, "incomplete")) return 0;

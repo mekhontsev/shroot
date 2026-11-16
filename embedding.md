@@ -108,14 +108,17 @@ contract fixture. `TEST_REJECTION=ON` verifies rejection before storage mutation
   or an open SQLite connection. It does not lock or pin the directory's name;
   coordinate deletion, replacement and relocation with other callers. The
   existing native admission owner performs schema checks and locking when used.
+- A library captures an absolute catalog directory, without creating it or
+  opening its metadata in the embedding process. Named install, resolve, launch,
+  backup/restore and prune use the [native catalog owner](library.md).
 - A job owns one child process, its pidfd and its completion channel. A submitted
   job is independent of the context and store objects.
 - Contexts may be used concurrently. A job has one wait owner; another thread
   may signal or cancel it. Coordinate object destruction with all users.
 
-Contexts outlive store handles. Close every completed job. Closing a running
+Contexts outlive store and library handles. Close every completed job. Closing a running
 job returns `-EBUSY`; it does not detach a process or silently kill its tree.
-Destroying a context or store does not terminate previously submitted jobs.
+Destroying a context, store or library does not terminate previously submitted jobs.
 
 All strings and IO descriptors passed to a submission are borrowed only until
 that function returns. `NULL` IO inherits standard descriptors and the host
@@ -166,6 +169,8 @@ arguments, early and running cancellation, guest exit status, and preservation
 of caller state. Runtime integration imports an archive with hardlinks and a
 symlink, creates two instances, executes stock native guest programs, checks
 descriptor isolation and descendant cleanup, and backs up/restores metadata.
+The native library suite adds catalog admission, shared image/layer dependencies,
+relocation, recovery and named launch cancellation.
 
 ```sh
 ctest --test-dir build --output-on-failure

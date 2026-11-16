@@ -14,6 +14,7 @@ extern "C" {
 
 typedef struct shroot_context shroot_context;
 typedef struct shroot_store shroot_store;
+typedef struct shroot_library shroot_library;
 typedef struct shroot_job shroot_job;
 
 /* All functions return zero or a negative errno unless documented otherwise.
@@ -24,6 +25,11 @@ int shroot_context_open(const char *runtime_directory, shroot_context **out);
 void shroot_context_close(shroot_context *);
 int shroot_store_open(shroot_context *, const char *path, shroot_store **out);
 void shroot_store_close(shroot_store *);
+/* Captures the absolute catalog path; performs no IO or mutation of the catalog.
+ * Contexts outlive their libraries. Initialize/install creates a missing root
+ * whose parent exists; reads/removal never implicitly create it. */
+int shroot_library_open(shroot_context *, const char *path, shroot_library **out);
+void shroot_library_close(shroot_library *);
 
 /* NULL inherits standard IO and the host environment. Other descriptors are
  * closed in the worker. Supplied descriptors are borrowed until start returns;
@@ -80,6 +86,22 @@ int shroot_remove_layer(shroot_context *, const char *path, const struct shroot_
 int shroot_storage_format(shroot_context *, const struct shroot_io *, shroot_job **);
 int shroot_import_version(shroot_context *, const struct shroot_io *, shroot_job **);
 
+enum shroot_source_kind { SHROOT_SOURCE_ROOTFS, SHROOT_SOURCE_OCI };
+struct shroot_install_options {
+    enum shroot_source_kind kind;
+    const char *source, *name, *resolver;
+};
+int shroot_library_initialize(shroot_library *, const struct shroot_io *, shroot_job **);
+int shroot_library_list(shroot_library *, const struct shroot_io *, shroot_job **);
+int shroot_library_prune(shroot_library *, const struct shroot_io *, shroot_job **);
+int shroot_environment_resolve(shroot_library *, const char *name, const struct shroot_io *, shroot_job **);
+int shroot_environment_remove(shroot_library *, const char *name, const struct shroot_io *, shroot_job **);
+int shroot_environment_install(shroot_library *, const struct shroot_install_options *, const struct shroot_io *, shroot_job **);
+int shroot_environment_restore(shroot_library *, const char *archive, const char *name, const struct shroot_io *, shroot_job **);
+int shroot_environment_backup(shroot_library *, const char *name, const char *archive, const struct shroot_io *, shroot_job **);
+int shroot_environment_resolver(shroot_library *, const char *name, const char *servers, int replace,
+    const struct shroot_io *, shroot_job **);
+
 enum shroot_launch_kind { SHROOT_RUN, SHROOT_EXEC, SHROOT_LOGIN };
 enum shroot_bind_kind { SHROOT_BIND, SHROOT_BIND_READONLY, SHROOT_BIND_CREATE, SHROOT_BIND_STORE_READONLY };
 struct shroot_bind { enum shroot_bind_kind kind; const char *source, *target; };
@@ -109,6 +131,8 @@ struct shroot_launch_options {
 /* EXEC starts a new supervised tree in this store, not an exec in a live tree.
  * The runtime, including PTY and process-tree cleanup, remains out of process. */
 int shroot_launch(shroot_store *, const struct shroot_launch_options *, const struct shroot_io *, shroot_job **);
+int shroot_environment_launch(shroot_library *, const char *name, const struct shroot_launch_options *,
+    const struct shroot_io *, shroot_job **);
 
 #ifdef __cplusplus
 }

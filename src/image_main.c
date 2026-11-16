@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "image_io.h"
 #include "image_import.h"
+#include "image_library.h"
 #include "image_launch.h"
 #include "image_publish.h"
 #include "image_backup.h"
@@ -36,6 +37,7 @@ static int execute(int argc, char **argv) {
     umask(0);
     const char *reference = NULL, *pool = NULL, *blobs = NULL;
     int r = -EINVAL;
+    if (argc >= 3 && !strcmp(argv[1], "library")) return md_library_command(argc-2,argv+2);
     if (argc >= 5 && !strcmp(argv[1], "import")
             && (!strcmp(argv[4], "--map-current-user") || !strcmp(argv[4], "--preserve-ownership"))) {
         for (int i=5; i<argc; i+=2) {
@@ -49,7 +51,7 @@ static int execute(int argc, char **argv) {
     } else if (argc == 2 && !strcmp(argv[1], "format")) { printf("%d\n", md_inode_store_format()); r = 0; }
     /* Import semantics, not the SQLite layout or runtime build. Keep this key
      * stable across metadata upgrades so installed sources retain identity. */
-    else if (argc == 2 && !strcmp(argv[1], "import-version")) { puts("1"); r = 0; }
+    else if (argc == 2 && !strcmp(argv[1], "import-version")) { printf("%d\n",MD_IMAGE_IMPORT_VERSION); r = 0; }
     else if (argc == 3 && !strcmp(argv[1], "prepare")) {
         struct md_inode_store *store=NULL;
         r=md_inode_store_open(argv[2],0,&store);

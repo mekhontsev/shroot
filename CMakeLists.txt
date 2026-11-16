@@ -33,7 +33,7 @@ install(EXPORT ShrootTargets NAMESPACE Shroot:: DESTINATION lib/cmake/Shroot COM
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/ShrootConfig.cmake" "${CMAKE_CURRENT_BINARY_DIR}/ShrootConfigVersion.cmake"
     DESTINATION lib/cmake/Shroot COMPONENT Shroot)
 install(FILES include/shroot.h DESTINATION include COMPONENT Shroot)
-install(FILES LICENSE embedding.md DESTINATION share/doc/shroot COMPONENT Shroot)
+install(FILES LICENSE embedding.md library.md DESTINATION share/doc/shroot COMPONENT Shroot)
 add_executable(shroot-cli src/cli.c)
 set_target_properties(shroot-cli PROPERTIES OUTPUT_NAME shroot)
 target_compile_options(shroot-cli PRIVATE -std=c17 -O2 -Wall -Wextra -Werror)
@@ -221,7 +221,7 @@ target_link_libraries(service PRIVATE guest-database guest-sha256 m)
 
 include(image-dependencies.cmake)
 guest_executable(image ${src}/image_main.c ${src}/process_owner.c ${src}/image_io.c ${src}/image_json.c ${src}/launch_registry.c ${src}/image_launches.c ${src}/image_applications.c
-    ${src}/image_import.c ${src}/image_oci.c ${src}/image_layer.c ${src}/image_pool.c ${src}/image_backup.c ${src}/image_maintenance.c ${src}/image_relocate.c
+    ${src}/image_import.c ${src}/image_library.c ${src}/image_library_gc.c ${src}/image_oci.c ${src}/image_layer.c ${src}/image_pool.c ${src}/image_backup.c ${src}/image_maintenance.c ${src}/image_relocate.c
     ${src}/image_acl.c ${src}/image_publish.c ${src}/image_launch.c ${src}/image_prepare.c ${src}/image_export.c ${src}/guest_accounts.c ${src}/socket_routes.c ${inodes}
     ${namespace_engine} ${mounts} ${src}/image_catalogue.c ${src}/elf_admission.c ${identity} ${src}/proc_paths.c
     ${src}/elf.c ${src}/fs_client.c ${wire} ${raw})
@@ -267,6 +267,8 @@ if(SHROOT_BUILD_TESTS)
         if(Python3_Interpreter_FOUND)
             add_test(NAME client_runtime COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_runtime.py" "${CMAKE_CURRENT_BINARY_DIR}")
+            add_test(NAME library COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_library.py" "${CMAKE_CURRENT_BINARY_DIR}")
         endif()
     endif()
     guest_executable(test_robust_futex tests/test_robust_futex.c tests/test_robust_futex_entry.S ${src}/robust_futex.c

@@ -62,6 +62,27 @@ int shroot_store_open(shroot_context *context, const char *path, shroot_store **
 void shroot_store_close(shroot_store *store) {
     if (store) { free(store->path); free(store); }
 }
+int shroot_library_open(shroot_context *context,const char *path,shroot_library **out) {
+    if (!out) return -EINVAL;
+    *out=NULL;
+    if (!context || !path || !*path) return -EINVAL;
+    shroot_library *library=calloc(1,sizeof(*library));
+    if (!library) return -ENOMEM;
+    int r=0;
+    if (*path=='/') library->path=strdup(path);
+    else {
+        char *cwd=getcwd(NULL,0);
+        if (!cwd) r=-errno;
+        else if (asprintf(&library->path,"%s/%s",cwd,path)<0) r=-ENOMEM;
+        free(cwd);
+    }
+    if (!r && !library->path) r=-ENOMEM;
+    if (r) { shroot_library_close(library); return r; }
+    library->context=context; *out=library; return 0;
+}
+void shroot_library_close(shroot_library *library) {
+    if (library) { free(library->path); free(library); }
+}
 void shroot_argument(struct shroot_arguments *args, const char *value) {
     if (args->error) return;
     if (!value) { args->error = -EINVAL; return; }
@@ -106,7 +127,9 @@ int shroot_client_start(shroot_context *context, struct shroot_arguments *args,
     if (!r) {
         atomic_init(&job->finished, 0);
         job->process = job->channel = -1;
-        job->launch = !strcmp(args->values[0], "run") || !strcmp(args->values[0], "exec") || !strcmp(args->values[0], "login");
+        const char *operation=args->values[0];
+        if (!strcmp(operation,"library") && args->count>=3) operation=args->values[2];
+        job->launch = !strcmp(operation, "run") || !strcmp(operation, "exec") || !strcmp(operation, "login");
         shroot_argument(&command, context->worker);
         shroot_argument(&command, SHROOT_CLIENT_OPTION);
         for (size_t i = 0; i < args->count; ++i) shroot_argument(&command, args->values[i]);
