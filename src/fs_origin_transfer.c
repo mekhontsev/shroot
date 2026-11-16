@@ -86,6 +86,7 @@ static int identity(int fd, struct md_fd_identity *out) {
     *out=md_fd_identity(&st); return 0;
 }
 static int path_identity(int fd, struct md_fd_identity *out) {
+    *out=(struct md_fd_identity){0};
     int flags=fcntl(fd,F_GETFL);
     if (flags<0) return -errno;
     if (!(flags&O_PATH)) return -EPROTO;
