@@ -112,8 +112,8 @@ static void ordinary(int directory) {
         int fd=mdi_native_create(directory,"ordinary",O_RDWR,0,0,0644); assert(fd>=0);
         assert(write(fd,"body",4)==4);
         metadata(fd,0,0,0644,1);
-        assert(!mdi_native_metadata(fd,0,0,0755)); metadata(fd,0,0,0755,1);
-        assert(!mdi_native_metadata(fd,0,0,0644));
+        assert(!mdi_native_metadata(fd,0,0,0755,true)); metadata(fd,0,0,0755,1);
+        assert(!mdi_native_metadata(fd,0,0,0644,true));
         assert(!renameat2(directory,"ordinary",directory,"renamed",RENAME_NOREPLACE));
         assert(!unlinkat(directory,"renamed",0));
         metadata(fd,0,0,0644,0); close(fd);
@@ -185,18 +185,18 @@ static void detached(int directory) {
     assert(!unlinkat(directory,"moved",0));
     int replacement=mdi_native_create(directory,"detached",O_RDWR,0,0,0644); assert(replacement>=0);
     reset();
-    assert(!mdi_native_metadata(path,42,43,0000));
+    assert(!mdi_native_metadata(path,42,43,0000,true));
     metadata(fd,42,43,0000,0); metadata(path,42,43,0000,0); metadata(replacement,0,0,0644,1);
     int barriers=syncs; assert(barriers>0);
-    assert(!mdi_native_metadata(fd,44,45,06755));
+    assert(!mdi_native_metadata(fd,44,45,06755,true));
     assert(syncs==barriers);
     metadata(path,44,45,06755,0);
     struct stat physical; assert(!fstat(fd,&physical) && !(physical.st_mode&06000));
     assert(pwrite(fd,"mapped",6,0)==6 && !memcmp(mapping,"mapped",6));
-    reset(); assert(!mdi_native_metadata(fd,44,45,06755) && !sets && !syncs);
-    assert(!mdi_native_metadata(path,0,0,0644));
+    reset(); assert(!mdi_native_metadata(fd,44,45,06755,true) && !sets && !syncs);
+    assert(!mdi_native_metadata(path,0,0,0644,true));
     reset(); metadata(path,0,0,0644,0); assert(!gets && !sets && !syncs);
-    assert(!mdi_native_metadata(path,46,47,0000)); metadata(fd,46,47,0000,0);
+    assert(!mdi_native_metadata(path,46,47,0000,true)); metadata(fd,46,47,0000,0);
     munmap(mapping,4096); close(fd); close(path); close(replacement);
     assert(!unlinkat(directory,"detached",0));
     puts("PASS O_PATH and open-unlinked metadata retain inode/mmap/replacement isolation and can return to implicit metadata");
@@ -206,16 +206,16 @@ static void interrupted(int directory,int point,int error) {
     int fd=mdi_native_create(directory,name,O_RDWR,0,0,0644); assert(fd>=0);
     reset();
     if (error) {
-        fail_at=point; assert(mdi_native_metadata(fd,42,43,0000)==-EIO); fail_at=0;
+        fail_at=point; assert(mdi_native_metadata(fd,42,43,0000,true)==-EIO); fail_at=0;
     } else {
         pid_t child=fork(); assert(child>=0);
-        if (!child) { kill_after=point; (void)mdi_native_metadata(fd,42,43,0000); _exit(97); }
+        if (!child) { kill_after=point; (void)mdi_native_metadata(fd,42,43,0000,true); _exit(97); }
         int status; assert(waitpid(child,&status,0)==child && WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL);
     }
     close(fd); fd=openat(directory,name,O_RDWR|O_CLOEXEC); assert(fd>=0);
     int committed=!error && point==4;
     metadata(fd,committed ? 42 : 0,committed ? 43 : 0,committed ? 0000 : 0644,1);
-    reset(); assert(!mdi_native_metadata(fd,42,43,0000)); metadata(fd,42,43,0000,1);
+    reset(); assert(!mdi_native_metadata(fd,42,43,0000,true)); metadata(fd,42,43,0000,1);
     close(fd); assert(!unlinkat(directory,name,0));
 }
 static void staged(int directory) {
@@ -223,18 +223,18 @@ static void staged(int directory) {
         reset();
         if (error) {
             fail_at=point;
-            assert(mdi_native_prepare(directory,"staged",O_RDWR,42,43,0400)==-EIO);
+            assert(mdi_native_prepare(directory,"staged",O_RDWR,42,43,0400,true)==-EIO);
             fail_at=0;
             struct stat st; assert(fstatat(directory,"staged",&st,0)<0 && errno==ENOENT);
         } else {
             pid_t child=fork(); assert(child>=0);
-            if (!child) { kill_after=point; (void)mdi_native_prepare(directory,"staged",O_RDWR,42,43,0400); _exit(98); }
+            if (!child) { kill_after=point; (void)mdi_native_prepare(directory,"staged",O_RDWR,42,43,0400,true); _exit(98); }
             int status; assert(waitpid(child,&status,0)==child && WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL);
             assert(!unlinkat(directory,"staged",0));
         }
     }
     reset();
-    int fd=mdi_native_prepare(directory,"staged",O_WRONLY,42,43,0400); assert(fd>=0);
+    int fd=mdi_native_prepare(directory,"staged",O_WRONLY,42,43,0400,true); assert(fd>=0);
     assert(syncs==1 && sets==1);
     assert(!renameat2(directory,"staged",directory,"published",RENAME_NOREPLACE));
     metadata(fd,42,43,0400,1); close(fd);
@@ -252,7 +252,7 @@ static void malformed(int directory) {
     assert(mdi_leaf_id(&st,scope,id)==-EIO);
     scope[12]=0; assert(mdi_leaf_id(&st,scope,id)==-EIO);
     assert(mdi_native_stat(fd,&st)==-EIO);
-    assert(mdi_native_metadata(fd,1,2,0000)==-EIO);
+    assert(mdi_native_metadata(fd,1,2,0000,true)==-EIO);
     assert(!fsetxattr(fd,MDI_NATIVE_METADATA,"bad",3,0));
     assert(mdi_native_stat(fd,&st)==-EIO);
     uint32_t bad[4]={0x31464c53,UINT32_MAX,0,0600};
@@ -261,12 +261,12 @@ static void malformed(int directory) {
     bad[1]=0; bad[3]=010000;
     assert(!fsetxattr(fd,MDI_NATIVE_METADATA,bad,sizeof(bad),0));
     assert(mdi_native_stat(fd,&st)==-EIO);
-    assert(mdi_native_metadata(fd,UINT32_MAX,0,0600)==-EINVAL);
+    assert(mdi_native_metadata(fd,UINT32_MAX,0,0600,true)==-EINVAL);
     close(fd); assert(!unlinkat(directory,"malformed",0));
     puts("PASS missing, malformed and out-of-range private metadata fail explicitly");
 }
 static void metadata_reads(int directory) {
-    int fd=mdi_native_prepare(directory,"metadata-reads",O_RDWR,42,43,0644); assert(fd>=0);
+    int fd=mdi_native_prepare(directory,"metadata-reads",O_RDWR,42,43,0644,true); assert(fd>=0);
     int path=openat(directory,"metadata-reads",O_PATH|O_CLOEXEC); assert(path>=0);
     reset(); metadata(fd,42,43,0644,1); assert(gets==1);
     reset(); metadata(path,42,43,0644,1); assert(gets==2);
@@ -277,14 +277,14 @@ static void metadata_reads(int directory) {
     acl.entries[42]=(struct md_acl_entry){MD_ACL_MASK,4,UINT32_MAX};
     acl.entries[43]=(struct md_acl_entry){MD_ACL_OTHER,4,UINT32_MAX};
     assert(md_acl_valid(&acl,sizeof(acl)));
-    assert(!mdi_native_attribute_set(fd,0,&acl,sizeof(acl),0644));
+    assert(!mdi_native_attribute_set(fd,0,&acl,sizeof(acl),0644,true));
     reset(); metadata(fd,42,43,0644,1); assert(gets==3);
     unsigned char actual[sizeof(acl)];
     assert(mdi_native_attribute(path,0,actual,sizeof(actual))==sizeof(actual));
     assert(!memcmp(actual,&acl,sizeof(acl)));
     assert(mdi_native_attribute(fd,0,actual,sizeof(actual)-1)==-ERANGE);
-    assert(!mdi_native_metadata(path,44,45,0600)); metadata(fd,44,45,0600,1);
-    assert(!mdi_native_attribute_set(fd,0,NULL,0,0600));
+    assert(!mdi_native_metadata(path,44,45,0600,true)); metadata(fd,44,45,0600,1);
+    assert(!mdi_native_attribute_set(fd,0,NULL,0,0600,true));
     reset(); metadata(path,44,45,0600,1); assert(gets==2);
     assert(mdi_native_attribute(fd,0,NULL,0)==-ENODATA);
     close(path); close(fd); assert(!unlinkat(directory,"metadata-reads",0));
@@ -321,7 +321,7 @@ static void catalogue(const char *path) {
     struct md_inode_store *s; assert(!md_inode_store_open(path,1,&s));
     int directory=md_inode_open(s,-1,"/",O_RDONLY|O_DIRECTORY,0); assert(directory>=0);
     int fd=mdi_native_create(directory,"leaf",O_RDWR,0,0,0644); assert(fd>=0);
-    assert(!mdi_native_metadata(fd,42,43,0640));
+    assert(!mdi_native_metadata(fd,42,43,0640,true));
     assert(!fsetxattr(fd,"user.visible","yes",3,0));
     struct stat physical; assert(!fstat(fd,&physical));
     struct mdi_node parent,node;
@@ -587,8 +587,8 @@ static void stat_replacement(struct md_inode_store *s,int dir) {
     int original=md_inode_create(s,dir,"stat-race",0644);
     int replacement=md_inode_create(s,dir,"race-replacement",0644);
     assert(original>=0 && replacement>=0 && native_node(s,original) && native_node(s,replacement));
-    assert(!mdi_native_metadata(original,41,42,0640));
-    assert(!mdi_native_metadata(replacement,51,52,0600));
+    assert(!mdi_native_metadata(original,41,42,0640,true));
+    assert(!mdi_native_metadata(replacement,51,52,0600,true));
     replacement_directory=dir;
     struct stat st,actual;
     assert(md_inode_stat(s,dir,"stat-race",0,&st)==-ESTALE && replacement_directory==-1);

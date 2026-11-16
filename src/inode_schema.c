@@ -144,7 +144,7 @@ int mdi_schema_admit(struct md_inode_store *s, int allow_update, int exclusive,
      * before any origins/clients escape; its caller must close on any error. */
     if (!exclusive && flock(s->lifetime->root,LOCK_EX|LOCK_NB))
         return errno==EWOULDBLOCK ? -EBUSY : -errno;
-    r=mdi_sql(s,"PRAGMA synchronous=FULL");
+    r=s->lifetime->temporary ? 0 : mdi_sql(s,"PRAGMA synchronous=FULL");
     /* Journal conversion cannot be inside the DDL transaction. It changes no
      * logical data; retry accepts either journal mode with the old revision. */
     if (!r && mode) r=journal_mode(s,"PRAGMA journal_mode=WAL","wal");

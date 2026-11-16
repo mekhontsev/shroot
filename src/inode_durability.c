@@ -54,7 +54,7 @@ int md_inode_sync(struct md_inode_store *s,int fd,enum md_inode_sync_mode mode) 
     struct mdi_node node;
     if (fd>=0) r=mdi_fd(s,fd,&node);
     if (!r && mode!=MD_INODE_SYNC_FILESYSTEM && node.kind!=S_IFREG && node.kind!=S_IFDIR) r=-EINVAL;
-    if (!r) {
+    if (!r && !s->lifetime->temporary) {
         int result=mode==MD_INODE_SYNC_FILESYSTEM ? syncfs(s->objects)
             : mode==MD_INODE_SYNC_DATA ? fdatasync(fd) : fsync(fd);
         if (result) r=-errno;

@@ -20,7 +20,7 @@ void mdi_leaf_admit(struct md_inode_store *s) {
     int fd=openat(s->objects,".",O_TMPFILE|O_RDWR|O_CLOEXEC,0600);
     if (fd<0) return;
     struct stat st;
-    int r=mdi_native_metadata(fd,1,1,0);
+    int r=mdi_native_metadata(fd,1,1,0,false);
     if (!r) r=mdi_native_stat(fd,&st);
     s->native_files=!r && st.st_uid==1 && st.st_gid==1 && !(st.st_mode&07777);
     close(fd);
@@ -45,7 +45,7 @@ static int prepare_backing(struct md_inode_store *s,const struct mdi_node *paren
         int flags,uint32_t uid,uint32_t gid,mode_t mode) {
     int fd=mdi_native_eligible(uid,gid,mode)
         ? mdi_native_create(s->objects,stage,flags,uid,gid,mode)
-        : mdi_native_prepare(s->objects,stage,flags,uid,gid,mode);
+        : mdi_native_prepare(s->objects,stage,flags,uid,gid,mode,!s->lifetime->temporary);
     if (fd<0) return fd;
     if (parent->acl_mask&MD_ACL_DEFAULT) {
         struct mdi_node node={.native=1,.descriptor=fd+1,.kind=S_IFREG,.mode=mode,.uid=uid,.gid=gid};
@@ -340,7 +340,7 @@ int mdi_leaf_attribute_set(struct md_inode_store *s,const struct mdi_node *node,
         const void *value,size_t size,mode_t mode) {
     int fd=mdi_backing_open(s,node,O_PATH);
     if (fd<0) return fd;
-    int r=mdi_native_attribute_set(fd,cap,value,size,mode);
+    int r=mdi_native_attribute_set(fd,cap,value,size,mode,!s->lifetime->temporary);
     close(fd); return r;
 }
 int mdi_leaf_import_attributes(struct md_inode_store *s,const struct mdi_node *node,int fd) {

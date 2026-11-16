@@ -51,7 +51,7 @@ static int setup(const char *path,struct md_inode_store **s,int *directory) {
     assert(!md_inode_import_metadata(*s,*directory,0,0,0700));
     int fd=openat(*directory,"file",O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600); assert(fd>=0);
     assert(!ftruncate(fd,4096) && pwrite(fd,"contents",8,0)==8);
-    assert(!mdi_native_metadata(fd,41,42,0640));
+    assert(!mdi_native_metadata(fd,41,42,0640,true));
     return fd;
 }
 static unsigned descriptors(void) {
@@ -127,10 +127,10 @@ static void success(const char *path) {
     assert(pin>=0 && plan.kind==MD_OPEN_PLAN && plan.native_leaf);
     struct stat proven;
     assert(!md_inode_fstat_origin(s,pin,&proven,1) && proven.st_uid==41 && proven.st_gid==42);
-    assert(!mdi_native_metadata(fd,43,44,0600));
+    assert(!mdi_native_metadata(fd,43,44,0600,true));
     assert(!md_inode_fstat_origin(s,pin,&proven,1) && proven.st_uid==43 && proven.st_gid==44
         && (proven.st_mode&07777)==0600);
-    assert(!mdi_native_metadata(fd,41,42,0640));
+    assert(!mdi_native_metadata(fd,41,42,0640,true));
     char *memory=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0); assert(memory!=MAP_FAILED);
     int watch=md_inode_watch_create(s,IN_NONBLOCK); assert(watch>=0);
     assert(md_inode_watch_add(s,watch,directory,IN_CREATE|IN_DELETE|IN_MOVED_FROM|IN_MOVED_TO)>0);

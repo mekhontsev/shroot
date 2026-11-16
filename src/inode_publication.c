@@ -163,7 +163,7 @@ int mdi_publication_recover(struct md_inode_store *s) {
     }
     if (!r && s->publication->inspect) return -EBUSY;
     if (!r) atomic_store_explicit(s->publication->pending,1,memory_order_release);
-    if (!r) r=mdi_sql(s,"PRAGMA synchronous=FULL");
+    if (!r && !s->lifetime->temporary) r=mdi_sql(s,"PRAGMA synchronous=FULL");
     if (!r) r=publish(s,&p);
     if (!r) atomic_store_explicit(s->publication->pending,0,memory_order_release);
     int restore=mdi_sql(s,s->lifetime->temporary ? "PRAGMA synchronous=OFF" : "PRAGMA synchronous=NORMAL");
@@ -237,7 +237,7 @@ int mdi_publication_promote(struct md_inode_store *s,const struct mdi_node *pare
     if (r) return r;
     int write=s->write_transaction;
     if (!sqlite3_get_autocommit(s->db)) r=mdi_sql(s,"ROLLBACK");
-    if (!r) r=mdi_sql(s,"PRAGMA synchronous=FULL");
+    if (!r && !s->lifetime->temporary) r=mdi_sql(s,"PRAGMA synchronous=FULL");
     /* Set before publishing the intent. A killed owner cannot leave its live
      * peers believing that an uncompleted native move is an ordinary lookup. */
     if (!r) atomic_store_explicit(s->publication->pending,1,memory_order_release);

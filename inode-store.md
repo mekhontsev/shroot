@@ -724,6 +724,9 @@ independent of OCI parsing and launch-local directory attachments.
   checkpoints start at 1024 pages, with a 4 MiB retained-WAL limit on reset. A large transaction or pinned
   external reader can exceed that threshold; it is not a storage quota.
   Temporary mounts retain transactional rollback but use `synchronous=OFF`.
+  Their metadata transitions and native-leaf publication preserve live ordering
+  without disk barriers. Explicit sync validates the same descriptors and object
+  types but does not flush disposable backing data or the host filesystem.
   Watch wakeups observe the WAL, not checkpoint writes to the main database.
   Last-connection checkpoint/sidecar removal uses the same admission gate as
   opening and ordinary operations. SQLite's Unix VFS may retain closed main-DB

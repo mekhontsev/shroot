@@ -195,7 +195,7 @@ int mdi_metadata(struct md_inode_store *s, const struct mdi_node *node, uint32_t
     if (node->native) {
         int fd=mdi_backing_open(s,node,O_PATH);
         if (fd<0) return fd;
-        int r=mdi_native_metadata(fd,uid,gid,mode);
+        int r=mdi_native_metadata(fd,uid,gid,mode,!s->lifetime->temporary);
         close(fd); return r;
     }
     sqlite3_stmt *q = NULL;
@@ -272,7 +272,7 @@ int md_inode_metadata(struct md_inode_store *s, const struct md_fs_request *q) {
     if (!r && dir < 0) r = dir;
     if (!r && node.native && q->operation==MD_FS_CHOWN) {
         int fd=mdi_backing_open(s,&node,O_PATH);
-        r=fd<0 ? fd : mdi_native_chown(fd,uid,gid,mode);
+        r=fd<0 ? fd : mdi_native_chown(fd,uid,gid,mode,!s->lifetime->temporary);
         if (fd>=0) close(fd);
     } else if (!r && (ids || node.native) && q->operation != MD_FS_UTIMENS) r = mdi_metadata(s, &node, uid, gid, mode);
     else if (!r && q->operation == MD_FS_CHMOD) {

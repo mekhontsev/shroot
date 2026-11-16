@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "inode_internal.h"
+#include "inode_native.h"
 #include "inode_watch.h"
 #include <assert.h>
 #include <errno.h>
@@ -13,23 +14,30 @@
 #include <sys/inotify.h>
 #include <unistd.h>
 
-static int fail_fd=-1, fail_database, failures;
+static int fail_fd=-1, failures, sync_calls;
+static struct {
+    sqlite3_file *file;
+    const sqlite3_io_methods *original;
+    sqlite3_io_methods failed;
+} database_faults[2];
 static struct md_identity identity;
 int __real_fsync(int);
 int __real_fdatasync(int);
+int __real_syncfs(int);
 static int fail_sync(int fd) {
+    ++sync_calls;
     int fail=fd==fail_fd;
-    if (fail_database) {
-        char name[64], path[PATH_MAX];
-        snprintf(name,sizeof(name),"/proc/self/fd/%d",fd);
-        ssize_t n=readlink(name,path,sizeof(path)-1);
-        if (n>=0) { path[n]=0; fail=!!strstr(path,"namespace.db"); }
-    }
     if (fail) { ++failures; errno=EIO; }
     return fail;
 }
 int __wrap_fsync(int fd) { return fail_sync(fd) ? -1 : __real_fsync(fd); }
 int __wrap_fdatasync(int fd) { return fail_sync(fd) ? -1 : __real_fdatasync(fd); }
+int __wrap_syncfs(int fd) { return fail_sync(fd) ? -1 : __real_syncfs(fd); }
+static int fail_database_sync(sqlite3_file *file,int flags) {
+    (void)file; (void)flags;
+    ++failures; errno=EIO;
+    return SQLITE_IOERR_FSYNC;
+}
 static int scalar(struct md_inode_store *s,const char *sql) {
     sqlite3_stmt *q=NULL;
     assert(sqlite3_prepare_v2(s->db,sql,-1,&q,NULL)==SQLITE_OK);
@@ -82,9 +90,25 @@ static void barriers(const char *path) {
     int synchronous=md_inode_open(s,-1,"sync",O_CREAT|O_RDWR|O_DSYNC,0600);
     assert(synchronous>=0 && stats.checkpoint.calls==before+1); close(synchronous);
     assert(!md_inode_link(s,-1,"sync",-1,"sync-alias",0));
-    fail_database=1; int previous=failures;
-    assert(md_inode_sync(s,dir,MD_INODE_SYNC_FILE)==-EIO && failures>previous);
-    fail_database=0;
+    /* The VFS boundary also reaches an integrator's shared SQLite library. */
+    const int controls[]={SQLITE_FCNTL_FILE_POINTER,SQLITE_FCNTL_JOURNAL_POINTER};
+    for (unsigned i=0;i<2;++i) {
+        assert(sqlite3_file_control(s->db,"main",controls[i],&database_faults[i].file)==SQLITE_OK);
+        sqlite3_file *file=database_faults[i].file;
+        assert(file && file->pMethods);
+        database_faults[i].original=file->pMethods; database_faults[i].failed=*file->pMethods;
+        database_faults[i].failed.xSync=fail_database_sync;
+        file->pMethods=&database_faults[i].failed;
+    }
+    int previous=failures;
+    int result=md_inode_sync(s,dir,MD_INODE_SYNC_FILE);
+    if (result!=-EIO || failures==previous)
+        fprintf(stderr,"checkpoint fault result=%d failures=%d previous=%d\n",result,failures,previous);
+    assert(result==-EIO && failures>previous);
+    for (unsigned i=0;i<2;++i) {
+        assert(database_faults[i].file->pMethods==&database_faults[i].failed);
+        database_faults[i].file->pMethods=database_faults[i].original;
+    }
     close(dir); close(fd); md_inode_store_close(other); md_inode_store_close(s);
     assert(!md_inode_store_open(path,0,&s)); audit(s); md_inode_store_close(s);
     puts("PASS data/namespace barriers, other writer, hardlink/rename/unlinked FD, O_DSYNC and propagated data/WAL IO failures");
@@ -226,6 +250,38 @@ static void snapshot(const char *source,const char *target) {
     md_inode_store_close(b); md_inode_store_close(a);
     puts("PASS sealed image durability and snapshot-local allocation reserve");
 }
+static void temporary(const char *path) {
+    int parent=open(path,O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(parent>=0);
+    struct md_inode_store *s;
+    assert(!md_inode_store_transient(parent,NULL,&s));
+    s->identity=&identity;
+    int before=sync_calls;
+    assert(s->native_files && scalar(s,"PRAGMA synchronous")==0);
+    assert(!md_inode_mkdir(s,-1,"work",0777));
+    int dir=md_inode_open(s,-1,"work",O_RDONLY|O_DIRECTORY,0); assert(dir>=0);
+    int fd=md_inode_create(s,dir,"native",0644); assert(fd>=0);
+    assert(write(fd,"temporary",9)==9);
+    assert(!md_inode_import_metadata(s,fd,42,43,0640));
+    struct stat st; assert(!md_inode_fstat(s,fd,&st) && st.st_uid==42 && st.st_gid==43);
+    /* Link promotes the native leaf through the common publication journal. */
+    assert(!md_inode_link(s,dir,"native",dir,"alias",0));
+    assert(!md_inode_fstat(s,fd,&st) && st.st_nlink==2);
+    assert(scalar(s,"PRAGMA synchronous")==0);
+    struct md_identity user=md_identity_new(42,43); s->identity=&user;
+    int exceptional=md_inode_create(s,dir,"owned",0400); assert(exceptional>=0);
+    assert(!md_inode_fstat(s,exceptional,&st) && st.st_uid==42 && (st.st_mode&07777)==0400);
+    close(exceptional); s->identity=&identity; md_identity_release(&user);
+    for (int mode=MD_INODE_SYNC_FILE;mode<=MD_INODE_SYNC_FILESYSTEM;++mode)
+        assert(!md_inode_sync(s,fd,(enum md_inode_sync_mode)mode));
+    assert(!md_inode_sync(s,dir,MD_INODE_SYNC_FILE));
+    assert(!md_inode_sync(s,MD_INODE_ROOT,MD_INODE_SYNC_FILESYSTEM));
+    int opath=md_inode_open(s,dir,"alias",O_PATH,0); assert(opath>=0);
+    assert(md_inode_sync(s,opath,MD_INODE_SYNC_FILE)==-EBADF); close(opath);
+    assert(md_inode_sync(s,-2,MD_INODE_SYNC_FILE)==-EBADF);
+    assert(sync_calls==before);
+    close(fd); close(dir); md_inode_store_close(s); close(parent);
+    puts("PASS temporary metadata, exceptional birth, hardlink publication and explicit sync retain live semantics without disk barriers");
+}
 int main(int argc,char **argv) {
     assert(argc==2 && argv[1][0]=='/' && !mkdir(argv[1],0700));
     identity=md_identity_new(0,0);
@@ -239,5 +295,6 @@ int main(int argc,char **argv) {
     char target[PATH_MAX];
     snprintf(path,sizeof(path),"%s/image",argv[1]);
     snprintf(target,sizeof(target),"%s/instance",argv[1]); snapshot(path,target);
+    temporary(argv[1]);
     md_identity_release(&identity);
 }
