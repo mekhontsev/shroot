@@ -98,11 +98,26 @@ class CapturedCommands(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as output, \
                 mock.patch('executors.magicdesk.connect', return_value=(client, mock.Mock())) as connect, \
+                mock.patch('executors.app_files.AppFiles'), \
                 mock.patch.object(MagicDeskExecutor, '_app_command', launch):
             executor = FixtureExecutor.connect(output, 'app', config=Path('/selected/config'), server='selected')
         connect.assert_called_once_with(Path('/selected/config'), 'selected')
         self.assertEqual(observed, [(Path('/selected/config'), 'selected', 'selected-console')] * 2)
         self.assertEqual(executor.mode, 'app')
+
+    def test_close_releases_both_consoles_after_cancellation_failure(self):
+        executor = self.executor(Path('/unused'))
+        executor.closed = False
+        executor.files = mock.Mock()
+        executor.cancel = mock.Mock(side_effect=RuntimeError('cancellation failed'))
+        with self.assertRaisesRegex(RuntimeError, 'cancellation failed'):
+            executor.close()
+        executor.files.close.assert_called_once()
+        self.assertEqual(executor.client.call.call_args.args,
+                         ('console.close', dict(sessionId='console')))
+        self.assertTrue(executor.closed)
+        executor.close()
+        executor.cancel.assert_called_once()
 
 
 if __name__ == '__main__':

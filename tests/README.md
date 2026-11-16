@@ -34,17 +34,17 @@ separate `SHROOT_BUILD_TESTS=OFF` installation, not test-enabled helpers.
 
 ### Qualified Hosts
 
-The shared 78-test native set passes on both hosts below, using Clang and bundled
-static dependencies. It covers component, management, runtime, transport and
+The native set passes on both hosts below. It covers component, management, runtime, transport and
 packaging contracts, including native/kernel-profile admission and the complete
 applicable signal-checkpoint controls.
 
 | Host | Execution identity | Kernel / page size | Additional verified workflows |
 | --- | --- | --- | --- |
-| Raspberry Pi 5, Debian 13 | UID/GID 1000, no effective capabilities or inherited seccomp | 6.18.50+rpt-rpi-2712 / 16 KiB | Installed production API/CLI, independent CMake consumer, stripped archive audit, stock Alpine 3.23.8 with `apk update`, Debian trixie with `dpkg --audit` and `apt-get update` |
+| Raspberry Pi 5, Debian 13 | UID/GID 1000, no effective capabilities or inherited seccomp | 6.18.60+rpt-rpi-2712 / 16 KiB | Installed production API/CLI, independent CMake consumer, stripped archive audit, stock Alpine 3.23.8 with `apk update`, Debian trixie with `dpkg --audit` and `apt-get update`, stock k3s with network policies, Traefik ingress, PVC and server restart |
 | Android, Termux | UID/GID 10601, `untrusted_app_27`, no effective capabilities, inherited seccomp | 6.12.23-android16 / 4 KiB | Shared standalone native test set; not MagicDesk's Zygote identity or Shell |
 
-The Pi also passes all 77 checks for GCC with system SQLite and dynamic runtime
+Android passes all 83 checks with Clang and bundled static dependencies. The Pi
+passes all 82 applicable checks with GCC, system SQLite and dynamic runtime
 helpers. The static-only installed-bundle test is not registered for that
 configuration. Stock Alpine and Debian execute successfully with both builds in
 Base and lazy-SVC modes, sharing the same installed stores without copies.
@@ -891,21 +891,23 @@ ordinary system calls is part of this approach.
 
 ### Rootfs Fixtures
 
-The following prepared graphical workflows use an explicit **MagicDesk checkout**.
-Their prepared-rootfs builder, Java recipe adapter and APK presentation are
-integration inputs, not dependencies of this repository's `tests/build.sh` or
-native runtime. Run these commands from the Shroot checkout, with
-`MAGICDESK_SOURCE` pointing to MagicDesk.
+The prepared-rootfs builder is part of Shroot. Only graphical recipes and Android
+presentation need an explicit **MagicDesk checkout** through `MAGICDESK_SOURCE`.
+Run these commands from the Shroot checkout.
 
 `prepare.mjs` authenticates Debian archive metadata and packages, then extracts
 an isolated test rootfs without maintainer scripts or host installation.
-MagicDesk's prepared-rootfs builder supplies the Bionic/glibc fixtures and
-graphical Java recipes. It requires the Termux development toolchain and JDK; installed guest launches
-do not require Termux. Exact inputs are retained in the build's `manifest.json`.
+`build_prepared.py` reuses an existing native CMake build and cross-compiles the
+glibc probes with Clang/LLD, then packages them with the verified userspace.
+Use `SHROOT_BUILD_TESTS=ON` and `SHROOT_STATIC_RUNTIME=ON`: component fixtures
+embedded in the guest must not depend on the host's libc. `--graphics` additionally
+compiles the Java launch recipe and available graphical probes; it needs a JDK
+and a host `wayland-scanner`. Installed guest launches require none of these tools.
+Exact inputs remain in the build's `manifest.json`.
 
 ```sh
 node tests/prepare.mjs build/guest-fixtures --gtk
-sh "$MAGICDESK_SOURCE/native/guest-exec-lab/build.sh" build/guest-fixtures
+python tests/build_prepared.py build/guest-fixtures --native-build build/native --graphics
 python tests/test_device.py build/guest-fixtures --packages
 python tests/test_graphics.py build/guest-fixtures
 python tests/test_graphics.py build/guest-fixtures --gtk
@@ -915,7 +917,7 @@ For real application workflows, use a separate prepared build:
 
 ```sh
 node tests/prepare.mjs build/guest-applications --applications
-sh "$MAGICDESK_SOURCE/native/guest-exec-lab/build.sh" build/guest-applications
+python tests/build_prepared.py build/guest-applications --native-build build/native --graphics
 python tests/test_device.py build/guest-applications --packages
 python tests/test_graphics.py build/guest-applications --application mousepad --network
 python tests/test_graphics.py build/guest-applications --application galculator
@@ -929,7 +931,7 @@ For Qt text-input-v3, prepare the newer Debian userspace separately:
 
 ```sh
 node tests/prepare.mjs build/guest-qt --qt --suite trixie
-sh "$MAGICDESK_SOURCE/native/guest-exec-lab/build.sh" build/guest-qt
+python tests/build_prepared.py build/guest-qt --native-build build/native --graphics
 python tests/test_device.py build/guest-qt --packages
 python tests/test_qt.py build/guest-qt
 ```

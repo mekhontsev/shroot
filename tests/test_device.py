@@ -35,7 +35,7 @@ def main():
     if state.get("shell", {}).get("uid") != 2000:
         raise RuntimeError("Select shell access explicitly; this fixture never changes identity")
     session = client.call("console.open", {"directory": "/data/local/tmp"})["sessionId"]
-    root = "/data/local/tmp/md-guest-lab-" + uuid.uuid4().hex
+    root = "/data/local/tmp/magicdesk/cache/tmp/guest-lab-" + uuid.uuid4().hex
     results = {"device": state["device"], "app": state["app"], "manifest": manifest,
                "directory": root, "checks": []}
 
@@ -241,10 +241,12 @@ def main():
               + "/bin/cat /etc/md-guest-fixture", contains="guest-value\n")
     finally:
         try:
-            client.call("console.close", {"sessionId": session})
+            check("remove isolated fixture files", 'cd "$HOME" && rm -rf -- ' + shlex.quote(root))
         finally:
-            (args.build / "device-results.json").write_text(json.dumps(results, indent=2) + "\n")
-            print("Retained fixture files: " + root)
+            try:
+                client.call("console.close", {"sessionId": session})
+            finally:
+                (args.build / "device-results.json").write_text(json.dumps(results, indent=2) + "\n")
 
 
 if __name__ == "__main__":

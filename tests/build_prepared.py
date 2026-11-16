@@ -92,7 +92,7 @@ def main():
         compile_recipe(work / 'recipe-classes')
         run('sh', SOURCE / 'build-graphics-fixtures.sh', sysroot, root / 'usr/bin', work)
     shutil.copy2(work / 'manifest.json', bundle)
-    with tarfile.open(work / 'bundle.tar.gz', 'w:gz', dereference=False) as archive:
+    with tarfile.open(work / 'bundle.tar.gz', 'w:gz', compresslevel=1, dereference=False) as archive:
         archive.add(bundle, arcname='.')
     print(work / 'bundle.tar.gz')
 

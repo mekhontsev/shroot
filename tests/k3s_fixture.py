@@ -90,8 +90,29 @@ class Kubectl:
         print('KUBECTL_START', args, flush=True)
         # EVENT_WAIT: kubectl watch/response; timeout is a failure, not readiness.
         try:
-            result = subprocess.run([self.binary, 'kubectl', *args], env=self.env, text=True,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+            with subprocess.Popen([self.binary, 'kubectl', *args], env=self.env, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
+                try:
+                    output, _ = process.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired as error:
+                    print('KUBECTL_TIMEOUT_OUTPUT', error.stdout, flush=True)
+                    # Observe the exact client before killing it; timeout evidence
+                    # must not depend on a new kubectl request succeeding.
+                    try:
+                        for task in sorted(Path(f'/proc/{process.pid}/task').iterdir())[:64]:
+                            for name in ('status', 'wchan', 'syscall'):
+                                try:
+                                    print('KUBECTL_TIMEOUT_TASK', task.name, name,
+                                          (task / name).read_text()[:4096], flush=True)
+                                except OSError as failure:
+                                    print('KUBECTL_TIMEOUT_TASK_ERROR', task.name, name, str(failure), flush=True)
+                    except OSError as failure:
+                        print('KUBECTL_TIMEOUT_TASK_ERROR', str(failure), flush=True)
+                    finally:
+                        process.kill()
+                        process.communicate()
+                    raise
+                result = subprocess.CompletedProcess(process.args, process.returncode, output)
         finally:
             print('KUBECTL_DURATION', args, time.monotonic() - started, flush=True)
         print('KUBECTL', args, result.returncode, result.stdout, flush=True)

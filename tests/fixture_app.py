@@ -9,6 +9,7 @@ import time
 import uuid
 from fixture_executor import deadline_seconds
 from executors.magicdesk import connect, PACKAGE, PRIVATE_DIRECTORY
+from executors.app_files import AppFiles
 
 
 def main():
@@ -37,8 +38,7 @@ def main():
         transport.update(client, args.apk)
     before = client.call('get_state')
     session = args.console_id or client.call('console.open')['sessionId']
-    staging = '/data/local/tmp/magicdesk/cache/tmp/fixture-artifacts-' + uuid.uuid4().hex
-    remote = PRIVATE_DIRECTORY + '/runs/' + identity
+    files = None
 
     def command(argv, check=True):
         reply = client.call('console.execute', dict(sessionId=session, command=shlex.join(argv)))
@@ -48,13 +48,12 @@ def main():
 
     def download(relative, target):
         source = remote + '/' + relative
-        copied = command(['/system/bin/sh', '-c',
-            shlex.join(['run-as', PACKAGE, 'cat', source]) + ' > ' + shlex.quote(staging)], False)
-        if copied['exitCode']:
-            raise RuntimeError('Missing exact fixture artifact: ' + source)
-        transport.download(client, staging, target, overwrite=True)
+        files.transfer(source, target)
 
     try:
+        files = AppFiles(client)
+        home = files.command('printf %s "$HOME"')['output']
+        remote = home + '/' + PRIVATE_DIRECTORY + '/runs/' + identity
         if not args.observe_run:
             argv = ['am', 'start-foreground-service', '-n', PACKAGE + '/.GuestFixtureService',
                     '--es', 'operation', 'shell', '--es', 'runId', identity,
@@ -71,7 +70,7 @@ def main():
         delay = 0.1
         while time.monotonic() < deadline:
             # Bounded observation of the atomic receipt, not a settling delay.
-            observed = command(['run-as', PACKAGE, 'cat', remote + '/result.json'], False)
+            observed = files.command(shlex.join(['cat', remote + '/result.json']), check=False)
             if not observed['exitCode']:
                 try:
                     report = json.loads(observed['output'])
@@ -101,7 +100,8 @@ def main():
         raise TimeoutError('Unconfirmed fixture run: ' + identity + '; not replayed')
     finally:
         try:
-            command(['rm', '-f', staging], False)
+            if files:
+                files.close()
         finally:
             if not args.console_id:
                 client.call('console.close', dict(sessionId=session))

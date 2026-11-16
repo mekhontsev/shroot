@@ -57,6 +57,7 @@ class MagicDeskExecutor:
             raise ValueError('Unknown fixture executor: ' + self.mode)
         self.tag = uuid.uuid4().hex
         self.console = client.call('console.open')['sessionId']
+        self.files = None
         self.receipts = []
         self.packaged = {}
         self.executables = {}
@@ -65,6 +66,8 @@ class MagicDeskExecutor:
         self.lock = threading.Lock()
         try:
             if self.mode == 'app':
+                from executors.app_files import AppFiles
+                self.files = AppFiles(client)
                 result = self._app_command('printf "%s\\n" "$HOME"', 30)
                 self.home = result['output'].strip()
                 assert self.home.startswith('/data/'), self.home
@@ -92,8 +95,8 @@ class MagicDeskExecutor:
         identity = uuid.uuid4().hex
         directory = self.output / ('app-command-' + identity)
         driver = Path(__file__).parent.parent / 'fixture_app.py'
-        # The existing debug service is the sole launch owner. run-as below
-        # transports inert bytes; it never executes a native or guest test.
+        # The debug service owns the launch and receipt; its User console only
+        # transports inert artifacts under that same application identity.
         with self.lock:
             if self.closed:
                 raise RuntimeError('Fixture executor is closed')
@@ -125,8 +128,7 @@ class MagicDeskExecutor:
         # still verifies that the main MagicDesk process retained its identity.
         if 'PASS main MagicDesk process retained' not in completed.stdout:
             raise RuntimeError(completed.stdout + completed.stderr)
-        self._transport_command(shlex.join(['run-as', PACKAGE, 'rm', '-rf',
-            PRIVATE_DIRECTORY + '/runs/' + report['runId']]))
+        self.files.command('rm -rf "$HOME/' + PRIVATE_DIRECTORY + '/runs/' + identity + '"')
         return dict(exitCode=record['exitCode'],
                     output=(directory / (report['runId'] + '-shell.log')).read_text(errors='replace'))
 
@@ -173,24 +175,16 @@ class MagicDeskExecutor:
         if executable and source.name.startswith('libmagicdesk_guest_'):
             packaged = self.libraries + '/' + source.name
             if source.name not in self.packaged:
-                output = self._transport_command(shlex.join(['sha256sum', packaged]))
+                output = self.files.command(shlex.join(['sha256sum', packaged]))['output']
                 self.packaged[source.name] = output.split()[0]
             if self.packaged[source.name] != digest:
                 raise RuntimeError('Install a fixture APK containing the exact build of ' + source.name)
             # Guest mounts need a regular file, not a symlink escaping their
             # root. Native execution separately selects the immutable APK ELF.
-            self._transport_command(shlex.join(['run-as', PACKAGE,
-                                               'cp', packaged, target]))
+            self.files.command(shlex.join(['cp', packaged, target]))
             self.executables[target] = packaged
             return dict(path=target, sha256=digest, packaged=packaged)
-        staging = '/data/local/tmp/magicdesk/cache/tmp/fixture-transfer-' + uuid.uuid4().hex
-        try:
-            self.transport.upload(self.client, source, staging)
-            self._transport_command(shlex.join(['run-as', PACKAGE,
-                '/system/bin/sh', '-c', 'cat > ' + shlex.quote(target)]) + ' < ' + shlex.quote(staging))
-        finally:
-            self._transport_command(shlex.join(['rm', '-f', staging]))
-        return dict(path=target, sha256=digest)
+        return self.files.transfer(target, source, upload=True)
 
     def chmod(self, mode, *targets):
         return self.execute(shlex.join(['chmod', mode, *targets]))
@@ -251,20 +245,20 @@ class MagicDeskExecutor:
     def download(self, source, target, **options):
         if self.mode == 'shell':
             return self.transport.download(self.client, source, target, **options)
-        staging = '/data/local/tmp/magicdesk/cache/tmp/fixture-transfer-' + uuid.uuid4().hex
-        try:
-            self._transport_command(shlex.join(['run-as', PACKAGE,
-                'cat', source]) + ' > ' + shlex.quote(staging))
-            return self.transport.download(self.client, staging, target, **options)
-        finally:
-            self._transport_command(shlex.join(['rm', '-f', staging]))
+        return self.files.transfer(source, target)
 
     def close(self):
         if not self.closed:
-            self.cancel()
-            self.client.call('console.close', dict(sessionId=self.console),
-                             deadline=time.monotonic() + 30, request_timeout=30)
-            self.closed = True
+            try:
+                self.cancel()
+            finally:
+                try:
+                    if self.files:
+                        self.files.close()
+                finally:
+                    self.client.call('console.close', dict(sessionId=self.console),
+                                     deadline=time.monotonic() + 30, request_timeout=30)
+                    self.closed = True
 
     def cancel(self):
         with self.lock:

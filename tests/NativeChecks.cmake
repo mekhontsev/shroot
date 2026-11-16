@@ -4,6 +4,9 @@ if(CMAKE_CROSSCOMPILING)
     return()
 endif()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME fixture_contracts COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+    -s "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit")
+set_tests_properties(fixture_contracts PROPERTIES LABELS transport TIMEOUT 120)
 set(component_runner "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_component.py")
 add_custom_target(shroot-check-fixtures DEPENDS
     shroot-cli test_client test_client_worker test_client_integration client-guest
@@ -41,7 +44,7 @@ foreach(mode exit kill exec exec-fault exec-real-first exec-private-first exec-d
     shroot_component(robust_futex_${mode} test_robust_futex --native ${mode})
 endforeach()
 shroot_component(elf test_elf @WORK@/elf)
-foreach(name inodes schema snapshot image_layer)
+foreach(name inodes schema snapshot image_layer durability native_leaf publication)
     shroot_component(${name} test_${name} @WORK@/store)
 endforeach()
 add_test(NAME oci COMMAND "${Python3_EXECUTABLE}"
