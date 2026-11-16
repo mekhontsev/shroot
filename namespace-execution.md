@@ -285,13 +285,13 @@ retains the same failing hard-link controls as a separate comparison.
 
 This is one fixture lifecycle, not full-distribution compatibility. Separate
 fresh-image APT/APK checks and selected upgrades are documented in the
-[application coverage](../../docs/shroot.md#coverage-and-limits).
+[application coverage](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#coverage-and-limits).
 Arbitrary maintainer scripts, privileged kernel operations,
 broader GTK/Qt workflows, exact hardlink-dentry notifications, object reclamation,
 power loss and API 34/16 KiB coverage retain their documented limits. Execution-policy checks described in the main
 README still apply; X_OK is not a replacement for full kernel execution policy.
 
-The [software GUI fixture](../guest-exec-lab/README.md#prepared-runtime-fixtures)
+The [software GUI fixture](tests/README.md#prepared-runtime-fixtures)
 also runs from the imported namespace. Its Wayland connection survives the service/guardian/guest launch
 boundary without extra copies retained by those supervisors. Both a native
 memfd and an unlinked namespace file supply wl_shm pixels to MagicDesk's app-UID

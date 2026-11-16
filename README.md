@@ -354,8 +354,9 @@ See [guest policy](#guest-policy),
 
 ## Application Integration
 
-Graphics, audio, gamepads, files and command access are connections supplied by
-existing MagicDesk services. The native runtime does not acquire Desktop, HOME,
+Graphics, audio, gamepads, files and command access are explicit host connections.
+MagicDesk supplies an optional integration through its existing services; it is
+not a native runtime dependency. The runtime does not acquire Desktop, HOME,
 an Android display or input ownership. Renderers stay under the app UID even
 when the selected executor is root.
 
@@ -378,7 +379,7 @@ host storage identity or admission routes. Distribution session D-Bus comes from
 the guest; the APK ships no D-Bus daemon.
 
 Optional `--magicdesk` access is explicit launch-scoped delegation through the
-[command client](../command-client/README.md), shared with PRoot/native Termux.
+[command client](https://github.com/mekhontsev/magicdesk/blob/develop/native/command-client/README.md), shared with PRoot/native Termux.
 It is not an implicit consequence of guest root and is separate from syscall
 adaptation.
 

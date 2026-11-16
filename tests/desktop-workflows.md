@@ -1,6 +1,6 @@
 # Desktop And GPU Fixtures
 
-[Fixture guide](README.md) | [Native architecture](../shroot/README.md)
+[Fixture guide](README.md) | [Native architecture](../README.md)
 
 SteamOS, libc/toolkit applications and guest GPU rendering. A rendered compositor is not proof of every application, input or audio workflow.
 
@@ -77,7 +77,7 @@ a Wayland window's changing frames, pointer input and normal closure. Wake both
 the Android output and the guest compositor; an Android wake lease does not
 override KDE's own DPMS. The install/update trigger and ordinary GL.host selection
 have been checked on SteamOS with Freedesktop 25.08. Other runtimes need their own
-admission and rendering checks; see [the publisher](../../docs/graphics.md#flatpak-gpu-drivers).
+admission and rendering checks; see [the publisher](https://github.com/mekhontsev/magicdesk/blob/develop/docs/graphics.md#flatpak-gpu-drivers).
 
 `sh fixtures/sandbox-document-portal.sh APP [flatpak|snap]` separately requires temporary document
 export, read/write through the exported path inside Flatpak, and revocation. It
@@ -95,7 +95,7 @@ SquashFS case checks ELF/script execution, dynamic loading, private mappings,
 noexec, concurrent readers and a file retained through lazy unmount. Default
 launches use stock libraries and lazy entry; `--base` selects ordinary interception
 and `--machine-entry` requires actual accelerated completions. See
-[FUSE contracts](../shroot/fuse.md) for unsupported operations.
+[FUSE contracts](../fuse.md) for unsupported operations.
 
 The portal and session cases compile the production `LinuxGraphicalEnvironment`
 wrapper; they do not substitute a fixture-only unmount trap. `session` retains
@@ -140,7 +140,7 @@ Manual preparation inside the same booted guest is:
 magicdesk-snap-gpu --jobs 4
 ```
 
-See [Snap GPU preparation](../../docs/graphics.md#snap-gpu-drivers) for ABI checks
+See [Snap GPU preparation](https://github.com/mekhontsev/magicdesk/blob/develop/docs/graphics.md#snap-gpu-drivers) for ABI checks
 and connection ownership. The shared Mesa patch and publisher serve every recipe;
 an SDK-specific experiment is not an automatic installer step.
 
@@ -165,7 +165,7 @@ python3 fixtures/fuse-mapping-probe.py \
 ```
 
 This checks initial mapping visibility, not coherent writable shared mmap.
-Native fixtures own [FUSE mapping/lifetime coverage](../shroot/fuse.md#mapping-limits).
+Native fixtures own [FUSE mapping/lifetime coverage](../fuse.md#mapping-limits).
 `fixtures/fuse-squashfs.py` separately checks executable naming and a sibling
 library resolved through `$ORIGIN`.
 
@@ -445,7 +445,7 @@ SIGKILL trace recorded no signal addressed to those processes and no dropped
 trace events. Keep this separate from the deterministic birth/exit, signal-mask,
 descriptor-publication and fairness fixtures: a stress pass alone cannot prove
 correct process lifetime under every ordering. The relevant ownership contracts are
-in [interception](../shroot/interception.md).
+in [interception](../interception.md).
 
 ## Libc, IPC And Desktop Checks
 
@@ -808,13 +808,13 @@ inside Shroot.
 Hardware acceptance covers compositor and browser separately: working WebGL in
 an ordinary client does not prove that a protected KWin process selected Turnip.
 Use the recipe's system driver discovery for protected processes and the
-[GPU publishers](../../docs/graphics.md#flatpak-gpu-drivers) for sandbox runtimes.
+[GPU publishers](https://github.com/mekhontsev/magicdesk/blob/develop/docs/graphics.md#flatpak-gpu-drivers) for sandbox runtimes.
 The common GBM build resolves its backend through `$ORIGIN/gbm`.
 Keep renderer sandbox, GPU sandbox, composition and video decoding as distinct
 checks; none substitutes for the others.
 
 Debugger/collector lifecycle uses the shared
-[debugger ownership contract](../shroot/debugging.md#waits-and-process-identity).
+[debugger ownership contract](../debugging.md#waits-and-process-identity).
 The graphical wrapper detaches its owned mounts before removing the runtime
 directory, verified by the `session` workflow above. Process-tree cleanup is
 separate: compositor exit alone does not prove that every Plasma background
@@ -870,7 +870,7 @@ the installed implementation. Neither it nor the production checks prove
 general DRM support, strict confinement, performance or another GPU/distribution.
 Zink can log an unsuccessful DRM-device match before its working fallback.
 The fence fixture requires the post-5.15 sync-file bridge recorded in
-[kernel compatibility](../shroot/kernel-compatibility.md#newer-interfaces).
+[kernel compatibility](../kernel-compatibility.md#newer-interfaces).
 
 ### Allocator Rejection And Desktop Presentation
 
@@ -945,5 +945,5 @@ prepared Turnip manifest passes the same workflow. Keep this distribution
 failure distinct from the guest syscall mechanism or Android frame transport.
 
 Exact successful device coverage and unsupported ABI surfaces belong in
-[Guest runtime](../../docs/shroot.md#coverage-and-limits), not a general
+[Guest runtime](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#coverage-and-limits), not a general
 claim of distribution or driver compatibility.

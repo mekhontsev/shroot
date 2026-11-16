@@ -127,7 +127,7 @@ also check their original policy before the native effect. The mapping
 fixture verifies actual accelerated completions, page-rounded unmapping,
 misaligned-address rejection, signal-handler reentry and a subsequent seccomp
 denial. The ownership and revocation contract is described in
-[cooperative entry](../shroot/cooperative-entry.md#native-memory-effects).
+[cooperative entry](../cooperative-entry.md#native-memory-effects).
 
 Broker discovery uses a bounded recent-address cache only to suppress repeated
 cold attempts. A cache miss always delegates, evicting an older address if

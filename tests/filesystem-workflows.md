@@ -1,6 +1,6 @@
 # Filesystem And OCI Fixtures
 
-[Fixture guide](README.md) | [Native architecture](../shroot/README.md)
+[Fixture guide](README.md) | [Native architecture](../README.md)
 
 OCI images, mount views, storage semantics and file-watch workflows. Use disposable environments for mutation and failure-injection tests.
 
@@ -91,20 +91,20 @@ python native/guest-exec-lab/test_resources.py BUILD --case fs-buffer
 The runner owns disposable stores and removes them unless `--keep` is selected.
 `--compare-installed` adds matched metadata/spawn controls against the installed
 runtime; instrumented counters remain separate from timings. See
-[resource verification](../shroot/resource-tests.md) for detailed assertions.
+[resource verification](../resource-tests.md) for detailed assertions.
 This guide indexes those checks rather than maintaining a second copy:
 
 | Area | Focused cases | Contract |
 | --- | --- | --- |
-| Live readonly policy, graph publication, copied views and retained dirfds | `mount-policy`, `mount-graph`, `mount-namespace` | [Mount views](../shroot/mount-views.md) |
-| Portable store/lower leases, authenticated origins and owner death | `inode-custody`, `origin-transfer`, `ipc-origins`, `ipc-origin-guest` | [Origin transfer](../shroot/mount-views.md#authenticated-origin-transfer) |
-| Peer agreement, scoped rendezvous, ancillary formats and message custody | `ipc-peer`, `ipc-paths`, `ipc-ancillary`, `fd-messages` | [Unix IPC](../shroot/ipc-credentials.md) |
-| Exact FD publication, terminal receipts, quotas and protected callers | `fd-observation`, `fd-handoff`, `fd-custody`, `fd-custody-dirfd`, `fd-custody-nofollow` | [Descriptor origins](../shroot/descriptor-origins.md) |
-| Captured paths, checked output, native results and transfer cancellation | `fs-buffer`, `fs-dispatch`, `fs-results`, `fs-signals`, `fs-export`, `fs-return`, `fs-directory`, `fs-capture` | [Filesystem service](../shroot/filesystem-service.md) |
-| Proc images, cwd, executable custody and restricted descriptors | `proc-custody`, `exec-custody`, `restricted-descriptors` | [Process resources](../shroot/process-resources.md) |
-| Concurrent progress, ordered completion and descendant cleanup | `control-event`, `event-fairness`, `ofd-order`, `open-job`, `launch-cancel`, `rpc` | [Resource verification](../shroot/resource-tests.md) |
-| Store recovery and lifetime | `stores`, `durability`, `transient-store` | [Inode store](../shroot/inode-store.md) |
-| Minimum-kernel routes and mandatory-operation failure | `kernel-baseline` | [Kernel compatibility](../shroot/kernel-compatibility.md) |
+| Live readonly policy, graph publication, copied views and retained dirfds | `mount-policy`, `mount-graph`, `mount-namespace` | [Mount views](../mount-views.md) |
+| Portable store/lower leases, authenticated origins and owner death | `inode-custody`, `origin-transfer`, `ipc-origins`, `ipc-origin-guest` | [Origin transfer](../mount-views.md#authenticated-origin-transfer) |
+| Peer agreement, scoped rendezvous, ancillary formats and message custody | `ipc-peer`, `ipc-paths`, `ipc-ancillary`, `fd-messages` | [Unix IPC](../ipc-credentials.md) |
+| Exact FD publication, terminal receipts, quotas and protected callers | `fd-observation`, `fd-handoff`, `fd-custody`, `fd-custody-dirfd`, `fd-custody-nofollow` | [Descriptor origins](../descriptor-origins.md) |
+| Captured paths, checked output, native results and transfer cancellation | `fs-buffer`, `fs-dispatch`, `fs-results`, `fs-signals`, `fs-export`, `fs-return`, `fs-directory`, `fs-capture` | [Filesystem service](../filesystem-service.md) |
+| Proc images, cwd, executable custody and restricted descriptors | `proc-custody`, `exec-custody`, `restricted-descriptors` | [Process resources](../process-resources.md) |
+| Concurrent progress, ordered completion and descendant cleanup | `control-event`, `event-fairness`, `ofd-order`, `open-job`, `launch-cancel`, `rpc` | [Resource verification](../resource-tests.md) |
+| Store recovery and lifetime | `stores`, `durability`, `transient-store` | [Inode store](../inode-store.md) |
+| Minimum-kernel routes and mandatory-operation failure | `kernel-baseline` | [Kernel compatibility](../kernel-compatibility.md) |
 
 The kernel-baseline case disables PIDFD_THREAD and exercises the existing fallback;
 a newer kernel passing that case is not a test on Linux 5.15. Missing Shroot
@@ -135,7 +135,7 @@ resource suite. In particular:
 - Carrier agreement cannot change an existing NATIVE connection into ORIGINS_V1.
   Native peers must never receive private framing.
 
-The [resource verification guide](../shroot/resource-tests.md#message-origin-association-candidate)
+The [resource verification guide](../resource-tests.md#message-origin-association-candidate)
 retains candidate semantics, rejected alternatives and quota comparisons.
 
 ## OCI And Service Workflows
@@ -216,7 +216,7 @@ The development check installs packages only with explicit `--install`, in its
 selected disposable Debian store. Compiler and live-debugger results are separate;
 reading symbols is not a debugger pass. Reports preserve failures, image digests
 and exact commands. Current coverage and unsupported requirements are in
-[image checks](../shroot/images.md#checks).
+[image checks](../images.md#checks).
 
 `test_proot_debugger.py REPORT.json --distribution ubuntu` runs the same GDB
 sources, commands and assertions in an installed Termux PRoot distribution with
@@ -249,7 +249,7 @@ profiling. Device capability and debugger compatibility are separate results.
 This permits a current gdbserver control when an older distribution package has
 an upstream ARM64 register bug. Timeouts fail their cases and the launch owner
 cancels remaining descendants. Shroot fixtures persist only in the explicitly
-selected disposable store. See the [debugger contract and measured coverage](../shroot/debugging.md).
+selected disposable store. See the [debugger contract and measured coverage](../debugging.md).
 
 `test_kernel_contract.py OUTPUT --fixture BUILD/libmagicdesk_guest_kernel_contract.so
 --instance STORE [--build BUILD]` compares normalized observations from the same
@@ -282,7 +282,7 @@ semantics, protected copying, independent launch traffic and owner-death recover
 `test_sysv_apps.py` accepts the same arguments and tests stock fakeroot-sysv,
 PHP with sysvsem/sysvmsg/pcntl, Symfony Lock and Apache prefork. These packages
 must already be present; the tests do not install software. `--case NAME` selects
-individual workflows. See the [SysV contract](../shroot/sysv-ipc.md).
+individual workflows. See the [SysV contract](../sysv-ipc.md).
 
 ## Distribution Controls
 
@@ -400,7 +400,7 @@ Activation controls explicitly observe EBUSY for a second USER_NOTIF listener,
 ENOSYS rather than listener inheritance for a listenerless notification filter,
 and TSYNC rejection after a peer diverges its filter chain. These are verified
 limitations, not successful runtime workarounds. Production integration and
-its ownership limits are described in the [watch contract](../shroot/watches.md).
+its ownership limits are described in the [watch contract](../watches.md).
 
 ## Production Watch Checks
 

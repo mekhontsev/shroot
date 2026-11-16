@@ -272,7 +272,7 @@ protection. Two containers, published TCP/UDP, peer IP/names, local outbound,
 external DNS/HTTP, occupied-port rejection and cleanup pass. Guest API mounts
 are prepared before dropping to the user. These container runs do not certify
 resource enforcement; its supported subset and limits belong in the
-[cgroup contract](../shroot/namespace-providers.md#cgroups).
+[cgroup contract](../namespace-providers.md#cgroups).
 The same matrix passes in Base mode with the retained image cache:
 `build/shroot-image-tests/oci-services-cee84332ef414dd5a5b8bb1c22e58ea4.json`.
 The current staged runtime repeats local container, peer-name/IP, published-port,
@@ -2151,7 +2151,7 @@ binds/exec, conflicts, port release and internet with 20 external DNS requests p
 container pass in fixture `167fb8c48e574c369c467ecee7f3b926`, supervisor
 `1dc8f911dce6594d514f741295c65c3496e849e6f1a50935aa3d73c4802a18e5`.
 Counter accounting follows the mediated-traffic scope documented in
-[`networking.md`](../shroot/networking.md); existing native streams are not
+[`networking.md`](../networking.md); existing native streams are not
 retroactively relayed or counted.
 
 ## NixOS

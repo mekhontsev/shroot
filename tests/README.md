@@ -25,6 +25,13 @@ failure; assertions remain in the same C tests used by device runners.
 selects native management/import workflows. Cross-built binaries must run on
 their target, not the build machine.
 
+The independent [CI matrix](../embedding.md#continuous-integration) runs these
+contracts on ARM64 Linux and builds Android artifacts on Linux and Windows.
+`ctest -L packaging` tests archive validation and dependency-source preparation;
+`tests/audit_bundle.py` checks a cross-built production archive without target
+execution. Production API/CLI qualification uses the test harness against a
+separate `SHROOT_BUILD_TESTS=OFF` installation, not test-enabled helpers.
+
 ## Fixture Transports
 
 Shared resource, runtime, OCI service and headless-browser runners default to
@@ -154,7 +161,7 @@ semantics. It does not replace testing on a real 5.15 device.
 A disposable-library recipe test is not end-to-end installer acceptance. Before
 a release, also exercise the ordinary user path with the packaged APK:
 
-1. Open [MagicDesk Console](../../docs/getting-started.md#open-the-android-shell-console)
+1. Open [MagicDesk Console](https://github.com/mekhontsev/magicdesk/blob/develop/docs/getting-started.md#open-the-android-shell-console)
    and download the maintained installer.
 2. Use the default environment library, without a test-only
    `MAGICDESK_GUEST_HOME` override or staged helper bundle.

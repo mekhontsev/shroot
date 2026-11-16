@@ -4,7 +4,7 @@ These fixtures distinguish native Android kernel authority, bounded broker
 experiments and production Shroot browser execution. They concern Linux
 browsers, not the Android Chrome APK. For current launch routes and acceptance
 criteria use [the browser guide](browser/README.md); for implemented isolation
-limits use [Shroot](../../docs/shroot.md#boundaries).
+limits use [Shroot](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#boundaries).
 
 ## Native Kernel Baseline
 
@@ -124,8 +124,8 @@ inode store and credential model. Keep their evidence separate from this control
 - Treat native controls, production execution compatibility and security
   equivalence as separate results. No fixture here certifies complete isolation.
 
-Ownership is specified by [interception](../shroot/interception.md),
-[resource contexts](../shroot/process-resources.md),
-[guest credentials](../shroot/ipc-credentials.md) and
-[namespace execution](../shroot/namespace-execution.md), not by a separate
+Ownership is specified by [interception](../interception.md),
+[resource contexts](../process-resources.md),
+[guest credentials](../ipc-credentials.md) and
+[namespace execution](../namespace-execution.md), not by a separate
 browser-specific implementation.

@@ -1,6 +1,6 @@
 # Debugging And Performance Fixtures
 
-[Fixture guide](README.md) | [Native architecture](../shroot/README.md)
+[Fixture guide](README.md) | [Native architecture](../README.md)
 
 Debugger workflows and matched measurements. Keep tracing overhead, fixture completion and production workload success separate.
 
@@ -28,7 +28,7 @@ directory; SSH retains key authentication and strict ownership checks.
 
 `test_fifo_runtime.py BUILD --store STORE` checks independent launches sharing
 FIFO streams and repeated ownership lifetimes. The service fixture covers
-single-launch FIFO semantics; the [FIFO contract](../shroot/fifos.md)
+single-launch FIFO semantics; the [FIFO contract](../fifos.md)
 lists readiness and watch limitations rather than treating these as certified.
 
 `prepare_blender_gpu.py` stages explicitly supplied, hash-recorded Zink/Turnip

@@ -1,0 +1,28 @@
+# The downloaded tree is immutable; only the private generated copy is patched.
+# Content identity also covers explicit source overrides used by parent projects.
+file(GLOB_RECURSE context_inputs LIST_DIRECTORIES FALSE "${upstream}/src/*")
+list(SORT context_inputs)
+file(SHA256 "${patch}" context_identity)
+foreach(input IN LISTS context_inputs)
+    file(SHA256 "${input}" input_hash)
+    file(RELATIVE_PATH input_name "${upstream}" "${input}")
+    string(APPEND context_identity "\n${input_name}:${input_hash}")
+endforeach()
+string(SHA256 context_identity "${context_identity}")
+set(stamp "${output}/.source-identity")
+set(previous_identity "")
+if(EXISTS "${stamp}" AND IS_DIRECTORY "${output}/src")
+    file(READ "${stamp}" previous_identity)
+endif()
+if(NOT context_identity STREQUAL previous_identity)
+    file(REMOVE_RECURSE "${output}")
+    file(COPY "${upstream}/src" DESTINATION "${output}")
+    get_filename_component(parent "${output}" DIRECTORY)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E env "GIT_CEILING_DIRECTORIES=${parent}"
+        "${GIT_EXECUTABLE}" apply "${patch}" WORKING_DIRECTORY "${output}"
+        RESULT_VARIABLE patch_result ERROR_VARIABLE patch_error)
+    if(NOT patch_result EQUAL 0)
+        message(FATAL_ERROR "lwIP context patch: ${patch_error}")
+    endif()
+    file(WRITE "${stamp}" "${context_identity}")
+endif()

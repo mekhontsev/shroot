@@ -657,4 +657,4 @@ A daemon may warn that its requested FD limit exceeds the executor's hard limit;
 this does not justify fabricating a successful setrlimit. A working session bus
 does not imply system-bus policy, arbitrary package configuration or full Linux
 service startup. Device/build coverage remains that of the
-[guest runtime](../../docs/shroot.md).
+[guest runtime](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md).

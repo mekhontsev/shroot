@@ -1,6 +1,6 @@
 # Namespace And Sandbox Fixtures
 
-[Fixture guide](README.md) | [Native architecture](../shroot/README.md)
+[Fixture guide](README.md) | [Native architecture](../README.md)
 
 Stock namespace clients and credential workflows. Logical namespace success must not be reported as native kernel confinement.
 

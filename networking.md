@@ -64,7 +64,7 @@ catalog entry, control FD or per-read resolver work. Last-FD closure reclaims th
 backing file even after abrupt process exit. Persistent DNS installation and
 launch-local resolver configuration remain separate operations.
 
-The public [CLI contract](../../docs/shroot.md#network-modes) records limits and
+The public [CLI contract](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#network-modes) records limits and
 isolation caveats. `test_launch_network.py` exercises independent native clients,
 TCP/UDP publication, real resolver IO, outbound traffic and cleanup; native model
 tests also cover partial reservation rollback and typed nft round trips.

@@ -188,7 +188,7 @@ persistent storage family is required.
 store separation, permissions, read-only faults, fork/exec/exit, IPC_RMID, partial
 munmap and unrelated mappings in holes. `test_oci_services.py` runs stock PostgreSQL
 initdb, SQL traffic, shutdown and fresh-process readback. Device scope is recorded
-in [guest coverage](../../docs/shroot.md#coverage-and-limits).
+in [guest coverage](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#coverage-and-limits).
 
 `test_ipc_database.c` and `test_shm_bridge.c` check namespace/credential capture,
 read-only enforcement, invalid requests, malformed/extra ancillary FDs, queued

@@ -1,0 +1,168 @@
+name: Native CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Build client without runtime dependencies
+        run: >-
+          cmake -S . -B build/client -G Ninja
+          -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          -DSHROOT_BUILD_RUNTIME=OFF -DSHROOT_BUILD_TESTS=ON
+      - run: cmake --build build/client --parallel 4
+      - run: ctest --test-dir build/client --output-on-failure
+      - name: Verify artifact checks and local transport
+        run: |
+          python3 tests/test_bundle_layout.py
+          python3 tests/test_lwip_prepare.py
+          python3 tests/test_local_executor.py
+          python3 tests/test_fixture_executor.py
+      - name: Compile independent installed consumer
+        run: |
+          cmake --install build/client --prefix "$RUNNER_TEMP/shroot client" --component Shroot --strip
+          cmake -S examples/client -B build/consumer -G Ninja \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/shroot client" -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          cmake --build build/consumer --parallel 4
+
+  linux-runtime:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: clang
+            sqlite: bundled
+            static: 'ON'
+          - compiler: gcc
+            sqlite: system
+            static: 'OFF'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang llvm libsqlite3-dev pkg-config openssl
+      - name: Configure native runtime
+        run: >-
+          cmake -S . -B build/test -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          -DCMAKE_ASM_COMPILER=${{ matrix.compiler }} -DSHROOT_BUILD_TESTS=ON
+          -DSHROOT_SQLITE=${{ matrix.sqlite }} -DSHROOT_STATIC_RUNTIME=${{ matrix.static }}
+      - name: Record actual unprivileged execution host
+        run: |
+          python3 -c 'import json,sys; sys.path.insert(0,"tests"); from executors.local import host_identity; print(json.dumps(host_identity(),indent=2))' > build/test/host.json
+          test "$(id -u)" -ne 0
+      - run: cmake --build build/test --target shroot-check-fixtures --parallel 4
+      - name: Run component and native integration contracts
+        run: ctest --test-dir build/test --output-on-failure --parallel 2
+      - name: Build production runtime without test hooks
+        if: matrix.sqlite == 'bundled'
+        run: |
+          cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_ASM_COMPILER=clang -DSHROOT_BUILD_TESTS=OFF
+          cmake --build build/release --parallel 4
+          cmake --install build/release --prefix "$RUNNER_TEMP/shroot release" --component Shroot --strip
+      - name: Qualify production API and CLI
+        if: matrix.sqlite == 'bundled'
+        run: python3 tests/test_client_runtime.py build/test --prefix "$RUNNER_TEMP/shroot release"
+      - name: Package and audit production artifact
+        if: matrix.sqlite == 'bundled'
+        run: |
+          cpack --config build/release/CPackConfig.cmake -B artifacts
+          for archive in artifacts/*.tar.gz; do
+            python3 tests/audit_bundle.py "$archive" --system Linux --version "$(cat VERSION)" --production
+          done
+          printf 'commit=%s\nrun=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > artifacts/BUILD.txt
+      - name: Upload Linux bundle
+        if: matrix.sqlite == 'bundled'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: shroot-linux-arm64-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload native test evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: tests-linux-${{ matrix.compiler }}-${{ matrix.sqlite }}-${{ github.sha }}
+          path: |
+            build/test/host.json
+            build/test/Testing/Temporary/
+            build/test/CMakeFiles/CMakeConfigureLog.yaml
+          retention-days: 14
+
+  android-build:
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [ubuntu-24.04, windows-2022]
+    env:
+      NDK_VERSION: 27.3.13750724
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: source tree
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: source tree
+      - name: Select pinned NDK
+        run: |
+          $ndk = (Resolve-Path (Join-Path $env:ANDROID_HOME "ndk/$env:NDK_VERSION")).Path.Replace('\', '/')
+          $hostTag = if ($IsWindows) { 'windows-x86_64' } else { 'linux-x86_64' }
+          $suffix = if ($IsWindows) { '.exe' } else { '' }
+          $readelf = "$ndk/toolchains/llvm/prebuilt/$hostTag/bin/llvm-readelf$suffix"
+          if (!(Test-Path $readelf)) { throw "Missing NDK readelf: $readelf" }
+          "SHROOT_NDK=$ndk" >> $env:GITHUB_ENV
+          "SHROOT_READELF=$readelf" >> $env:GITHUB_ENV
+      - name: Configure production Android bundle
+        run: >-
+          cmake -S . -B build/android -G Ninja -DCMAKE_BUILD_TYPE=Release
+          "-DCMAKE_TOOLCHAIN_FILE=$env:SHROOT_NDK/build/cmake/android.toolchain.cmake"
+          -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-34 -DSHROOT_BUILD_TESTS=OFF
+      - run: cmake --build build/android --parallel 4
+      - run: cpack --config build/android/CPackConfig.cmake -B artifacts
+      - name: Audit archive without executing Android code
+        run: |
+          $archives = @(Get-ChildItem artifacts/*.tar.gz)
+          if ($archives.Count -ne 1) { throw 'Expected one Android runtime archive' }
+          python tests/audit_bundle.py $archives[0].FullName --readelf "$env:SHROOT_READELF" `
+            --system Android --version (Get-Content VERSION -Raw).Trim() --production
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "commit=$env:GITHUB_SHA`nrun=$env:GITHUB_RUN_ID" | Set-Content artifacts/BUILD.txt
+      - name: Upload Android bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: shroot-android-arm64-${{ matrix.host }}-${{ github.sha }}
+          path: source tree/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload configure evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: configure-android-${{ matrix.host }}-${{ github.sha }}
+          path: source tree/build/android/CMakeFiles/CMakeConfigureLog.yaml
+          retention-days: 14

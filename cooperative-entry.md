@@ -797,14 +797,14 @@ queue selectors still collect virtual events. Positive finite waits and temporar
 masks retain ordinary admission. Filtered readiness calls first admit the
 original timeout and mask; the owned probe is an implementation operation,
 not another application request with substituted arguments.
-See [protocol coverage](../guest-exec-lab/sandbox-research.md#signal-neutral-checkpoints).
+See [protocol coverage](tests/sandbox-research.md#signal-neutral-checkpoints).
 
 Known separate limitation: a fault in a fallback userspace memory copy can
 reset an ignored/blocked SIGSEGV disposition before ptrace observes it. A
 signal-neutral completion marker does not make that access kernel-mediated.
 The fault control remains explicit; this protocol does not claim transparent
 invalid-pointer handling under every protected-memory and seccomp combination.
-The [kernel-copy controls](../guest-exec-lab/sandbox-research.md#invalid-pointer-copy-controls)
+The [kernel-copy controls](tests/sandbox-research.md#invalid-pointer-copy-controls)
 record safe-copy behavior, filter restrictions and isolated cost; they do not
 change the ordinary copy path.
 
@@ -1350,7 +1350,7 @@ source and a reachable resident gate; publication alone is not acceleration.
 The stock musl/glibc fixtures exercise cancellation, signal abandonment,
 FIFO restart, FD counts and static/dynamic linking. They compile only the small
 test workload against distribution libraries. The
-[SVC guide](../guest-exec-lab/svc-rewriting.md#product-boundary)
+[SVC guide](tests/svc-rewriting.md#product-boundary)
 documents publication, signal semantics and verification boundaries.
 
 ## Verification And Performance
@@ -1405,7 +1405,7 @@ Use
 `benchmark_readiness.py --statistics` for separate instrumented runs; ordinary
 paired timing runs must omit that option.
 Current device qualification and its scope are recorded in the
-[task-channel acceptance](../guest-exec-lab/svc-rewriting.md#task-channel-acceptance).
+[task-channel acceptance](tests/svc-rewriting.md#task-channel-acceptance).
 `nativeOpen`, `nativeClose`, `nativeFlags`, `nativeDuplicate`, `nativeSeek` and
 `nativeReadiness` count admitted native plans/flag
 queries, not necessarily successful effects (a stop can cancel a plan).
@@ -1455,7 +1455,7 @@ and interrupted-token-check cases; a successful check never installs another FD.
 
 The stock-libc runner measures real guest pointers, task identity, lifecycle
 and completion ownership. See the
-[measurement workflow](../guest-exec-lab/cooperative-entry.md).
+[measurement workflow](tests/cooperative-entry.md).
 
 No storage-format change, runtime dependency, ART integration or kernel newer
 than 5.15 is required. Extending SVC-free execution to more syscall families and

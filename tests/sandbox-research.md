@@ -4,7 +4,7 @@ These native fixtures isolate kernel behavior under the selected shell executor.
 They are not a second production backend or a browser-certification suite.
 Production Shroot uses selective TRACE/USER_NOTIF interception; application
 SIGSYS handlers and alternate stacks belong to the application. See the
-[interception contract](../shroot/interception.md) and
+[interception contract](../interception.md) and
 [production browser workflows](browser/README.md).
 
 - [Reproduction](#reproduction)
@@ -213,7 +213,7 @@ The fixture checks:
 - Signal masks, original PC/result/siginfo, nested calls and kernel-owned
   EINTR/SA_RESTART behavior.
 - Rejection of a second native tracer. Guest debugger compatibility is a
-  separate [Shroot contract](../shroot/debugging.md).
+  separate [Shroot contract](../debugging.md).
 
 Temporary copies are untrusted input. No stale notification ID authorizes work.
 Cancellation before an external operation is not permission to replay a mutation

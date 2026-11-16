@@ -1092,7 +1092,7 @@ The observer runs as native Termux UID 10601, outside Shroot. These runs change
 neither Android addresses nor its routes. Podman's tested address is not `::1`;
 see the [fixture contract](README.md) for the separate observer/publication
 options. These runs do not certify memory-limit enforcement or OOM notifications;
-see the [cgroup contract](../shroot/namespace-providers.md).
+see the [cgroup contract](../namespace-providers.md).
 
 ### IPv6 Uplink Coverage
 

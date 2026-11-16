@@ -1,11 +1,11 @@
 # OCI Images And Filesystem Views
 
-The offline image utility accepts a local OCI image layout containing an OCI or
+The image utility accepts a local OCI image layout containing an OCI or
 Docker schema-2 Linux ARM64 manifest. It imports layers into a sealed inode store,
 creates independent writable instances and invokes the ordinary guest runner.
-The native utility has no registry client, Docker daemon, kernel mount or privilege
-change. The app-side [named-environment manager](../../docs/shroot.md#commands)
-supplies HTTPS acquisition, names and dependency-aware cleanup using this same API.
+The native [environment library](library.md) supplies HTTPS registry acquisition,
+names and dependency-aware cleanup through these same image owners. No Docker
+daemon, Java runtime, host mount or privilege change is required.
 This is image execution, not OCI runtime-spec or Docker Engine compatibility.
 
 - [Commands](#commands)
@@ -18,19 +18,19 @@ This is image execution, not OCI runtime-spec or Docker Engine compatibility.
 ## Commands
 
 ```sh
-shroot image import /host/layout /host/image --preserve-ownership
-shroot image create /host/image /host/instance
-shroot image inspect /host/instance
-shroot image format
-shroot image import-version
-shroot image prepare /host/instance
-shroot image run /host/instance -- /bin/sh
-shroot image run /host/instance --user 1000:1000 -- /bin/sh
-shroot image run /host/instance --bind /host/project /mnt -- /bin/sh
-shroot image import /host/layout /host/image2 --preserve-ownership --layers /host/layers
-shroot image rootfs /host/rootfs.tar.gz /host/rootfs-image
-shroot image backup /host/instance /host/backup.tar.zst
-shroot image restore /host/backup.tar.zst /host/restored-instance
+shroot import /host/layout /host/image --preserve-ownership
+shroot create /host/image /host/instance
+shroot inspect /host/instance
+shroot format
+shroot import-version
+shroot prepare /host/instance
+shroot run /host/instance -- /bin/sh
+shroot run /host/instance --user 1000:1000 -- /bin/sh
+shroot run /host/instance --bind /host/project /mnt -- /bin/sh
+shroot import /host/layout /host/image2 --preserve-ownership --layers /host/layers
+shroot rootfs /host/rootfs.tar.gz /host/rootfs-image
+shroot backup /host/instance /host/backup.tar.zst
+shroot restore /host/backup.tar.zst /host/restored-instance
 ```
 
 Destinations must not exist. `--reference TAG` selects an index annotation;
@@ -96,12 +96,12 @@ sealed-helper admission. Closing a launch does not delete its store or volumes;
 cancellation uses the existing process-tree guardian. Image configuration does
 not create a second launch supervisor or a global current distribution.
 
-`image resolver STORE TEXT [--replace]` prepares a bounded `/etc/resolv.conf`
+`shroot resolver STORE TEXT [--replace]` prepares a bounded `/etc/resolv.conf`
 under exclusive writable-store admission. By default it preserves nonempty files
 and symlinks. Explicit replacement replaces the symlink itself, not its target.
-The app-side manager selects DNS policy; the native tool never chooses a resolver.
+The caller selects DNS policy; this operation never chooses a resolver implicitly.
 
-`image export-tree STORE /GUEST/PATH HOST_DEST` exports a bounded regular-file
+`shroot export-tree STORE /GUEST/PATH HOST_DEST` exports a bounded regular-file
 tree through the inode API. It skips symlinks, rejects special files and publishes
 atomically without replacement (32 MiB, 4096 entries, depth 12). The Android
 adapter uses this for XKB data without extracting or guessing the store layout.
@@ -181,11 +181,12 @@ leaves the published destination for inspection; it is not permission to retry
 or delete it. Imports and backups retain an exclusive lock on their private
 `.md-image-<id>` directory until publication or cleanup. A short parent-directory
 lock serializes creation with recovery; active writers are never reclaimed.
-`image recover-staging DIRECTORY` removes only abandoned staging with the
+`shroot recover-staging DIRECTORY` removes only abandoned staging with the
 expected name, type, owner and permissions, without following symlinks. Publication
-also recovers its parent's abandoned staging before starting new work. The app's
-Java management child binds its native helper lifetime with a verified parent
-PID and a parent-death signal. Process-kill tests do not establish power-loss recovery.
+also recovers its parent's abandoned staging before starting new work.
+The [C management API](embedding.md#completion-and-cancellation) retains exact
+child ownership and explicit cancellation. Process-kill tests do not establish
+power-loss recovery.
 
 Before publishing a new image, the importer removes unreachable namespace objects,
 private backings and source references left by replacements or whiteouts. This
@@ -234,7 +235,7 @@ Logical watch subscriptions follow the object across promotion.
 
 Image directories must remain at their recorded locations while instances depend
 on them. `inspect` exposes dependencies; the native utility does not perform
-automatic image deletion or live object GC. The app-side library owns persistent
+automatic image deletion or live object GC. The native library owns persistent
 dependency checks for its resources. Removing an instance after its
 launches stop does not remove its image or attached directories. The caller
 must not edit sealed backing files outside the runtime. Sharing is not a security
@@ -368,15 +369,19 @@ FUSE remains unsupported.
 
 ## Checks
 
-`native/guest-exec-lab/test_environment_cli.py` exercises the installed APK's
+`tests/test_library.py`, `tests/test_registry.py` and
+`tests/test_client_runtime.py` exercise the native catalog, HTTPS registry and
+public API/CLI independently of an APK. They cover names, dependency cleanup,
+locking, redirect credentials, TLS validation, digest failures, cancellation,
+execution and backup/restore using disposable local inputs.
+
+The optional MagicDesk integration, `tests/test_environment_cli.py`, exercises the installed APK's
 named CLI through actual UID 2000: public Alpine/Debian pulls, independent stores,
 run/exec/login, writable/readonly directory attachments, portable backup/restore
 and dependency-aware prune followed by execution of the independent restore.
 A real guest HTTP request retains an active store while removal and backup must
 return EBUSY; both become available after that process exits.
-Its Java catalog/registry fixtures separately cover name validation, ownership
-contention, credential scope on redirects, TLS downgrade rejection and cache
-digest failures. These workflows need no Termux execution or Desktop session.
+This integration workflow needs no Termux execution or Desktop session.
 
 `test_environment_workflows.py` extends this to account login, fresh APT/APK
 GUI package installation, independent concurrent operations, helper-owned file
@@ -503,7 +508,7 @@ denied on the test device. Actual shell policy permits observations denied to th
 ordinary Termux UID; this does not grant CAP_NET_ADMIN, raw sockets or firewall control.
 
 These observations are from the RM11/API 36 device identified in
-[guest coverage](../../docs/shroot.md), not cross-device guarantees.
+[guest coverage](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md), not cross-device guarantees.
 `test_service_runtime.c` checks descriptor reopening and path identity, native
 O_DIRECT, capability/securebits transitions, file capabilities, POSIX ACLs,
 initial stack boundaries, protected copies, application seccomp precedence and

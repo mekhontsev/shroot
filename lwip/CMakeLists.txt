@@ -13,20 +13,12 @@ FetchContent_Declare(guest_lwip
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SOURCE_SUBDIR magicdesk-no-cmake)
 FetchContent_MakeAvailable(guest_lwip)
-# Keep the fetched upstream immutable. Reconfiguration applies the reviewed
-# patch to a fresh build-tree copy, including when the local patch changes.
 set(context_source ${CMAKE_CURRENT_BINARY_DIR}/source)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/context.patch)
-file(REMOVE_RECURSE ${context_source})
-file(COPY ${guest_lwip_SOURCE_DIR}/src DESTINATION ${context_source})
-execute_process(COMMAND ${CMAKE_COMMAND} -E env GIT_CEILING_DIRECTORIES=${CMAKE_CURRENT_BINARY_DIR}
-    ${GIT_EXECUTABLE} apply
-    ${CMAKE_CURRENT_SOURCE_DIR}/context.patch
-    WORKING_DIRECTORY ${context_source}
-    RESULT_VARIABLE patch_result ERROR_VARIABLE patch_error)
-if(NOT patch_result EQUAL 0)
-    message(FATAL_ERROR "lwIP context patch: ${patch_error}")
-endif()
+set(upstream "${guest_lwip_SOURCE_DIR}")
+set(patch "${CMAKE_CURRENT_SOURCE_DIR}/context.patch")
+set(output "${context_source}")
+include(prepare.cmake)
 set(core ${context_source}/src/core)
 add_library(guest-lwip STATIC context.c
     ${core}/init.c ${core}/def.c ${core}/inet_chksum.c ${core}/ip.c

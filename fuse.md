@@ -266,10 +266,10 @@ installed image. The guest identity is root; the Android executor remains shell.
 This is distinct from GUI verification. Non-root guest portal tests use the
 packaged fusermount set-ID metadata through ordinary execution, with no
 `--admit-elf` override.
-The [Firefox Snap GUI fixture](../guest-exec-lab/desktop-workflows.md#ubuntu-firefox-snap)
+The [Firefox Snap GUI fixture](tests/desktop-workflows.md#ubuntu-firefox-snap)
 checks keyboard/pointer input and download/chooser readback under Wayland.
 Its hardware WebRender and WebGL checks use the installer's local GPU content
-provider; see [Snap GPU drivers](../../docs/graphics.md#snap-gpu-drivers).
+provider; see [Snap GPU drivers](https://github.com/mekhontsev/magicdesk/blob/develop/docs/graphics.md#snap-gpu-drivers).
 
 Testing Snap is not evidence of AppArmor confinement: the tested Android kernel lacks
 AppArmor, and snapd reports its own reduced confinement capabilities. No

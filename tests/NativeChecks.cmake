@@ -45,6 +45,11 @@ foreach(name fixture_executor local_executor)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${name}.py")
     set_tests_properties(${name} PROPERTIES LABELS transport TIMEOUT 60)
 endforeach()
+foreach(name bundle_layout lwip_prepare)
+    add_test(NAME ${name} COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${name}.py")
+    set_tests_properties(${name} PROPERTIES LABELS packaging TIMEOUT 60)
+endforeach()
 add_test(NAME native_suite COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_suite.py" "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(native_suite PROPERTIES LABELS integration TIMEOUT 180)

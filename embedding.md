@@ -79,6 +79,38 @@ caches. Client-only archives have a `-client` filename suffix and no execution
 engine. A third-party shared SQLite remains the integrator's packaging obligation.
 The `bundle` test installs and relocates the default static-dependency package,
 audits its ELF dependencies and executes the shared native client/CLI workflow.
+Cross-built archives use the same layout audit without executing target code:
+
+```sh
+python3 tests/audit_bundle.py artifacts/shroot-1.0.0-dev-android-aarch64.tar.gz \
+    --readelf /path/to/ndk/llvm-readelf --system Android --version 1.0.0-dev --production
+```
+
+The audit verifies the checksum, helper set, dependency notices, ARM64 ELF
+headers, stripped debug information, load-segment alignment and host-only dynamic
+dependencies. Embedded library search paths and test-enabled production bundles
+are rejected. This checks packaging, not execution capability on a target device.
+
+### Continuous Integration
+
+The [native workflow](.github/workflows/ci.yml) is independent of MagicDesk:
+
+| Job | Contract |
+| --- | --- |
+| Client, GCC and Clang | No runtime downloads; C API tests and an independent installed CMake consumer |
+| ARM64 Linux, Clang | Bundled static dependencies, native component/integration tests, separate production build and execution |
+| ARM64 Linux, GCC | The same tests with system SQLite and dynamically linked execution helpers |
+| Android cross build, Linux and Windows | Pinned NDK, source path with spaces, stripped production bundle and archive/ELF audit |
+
+Native Linux tests run as the runner's unprivileged identity and record its
+kernel, UID, capabilities and page size. Android cross builds do not execute
+Android tests on the CI host. A successful build is not evidence for an untested
+device, kernel or page size.
+
+The workflow retains test logs and versioned production archives with SHA-256
+checksums and source commit/run identifiers. It does not publish a release or
+change versions automatically. ARM64 Linux execution in CI and physical device
+qualification are separate evidence from local Android runs.
 
 ### SQLite Provider
 

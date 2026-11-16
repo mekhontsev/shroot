@@ -1,12 +1,12 @@
 # Cooperative Entry Fixtures
 
-[Fixture guide](README.md) | [Runtime contract](../shroot/cooperative-entry.md) |
+[Fixture guide](README.md) | [Runtime contract](../cooperative-entry.md) |
 [Lazy SVC entry](svc-rewriting.md)
 
 Shroot uses lazy entry in stock programs by default. Shroot Base uses ordinary
 interception. The internal caller boundary uses the version declared by
 `MD_ENTRY_VERSION` in
-[`cooperative_entry.h`](../shroot/src/cooperative_entry.h); explicit API fixtures
+[`cooperative_entry.h`](../src/cooperative_entry.h); explicit API fixtures
 exercise it independently of machine-code discovery.
 
 ## Runtime Checks
@@ -147,4 +147,4 @@ Retain these constraints when considering new optimizations:
 - Fewer stops do not establish lower elapsed time. Compare complete interleaved
   runs with the same workload, not the best individual samples.
 - Kernel version or a declared flag does not prove firmware semantics. Keep
-  capability failures and fallbacks in the [kernel ledger](../shroot/kernel-compatibility.md).
+  capability failures and fallbacks in the [kernel ledger](../kernel-compatibility.md).

@@ -146,7 +146,7 @@ rejected, not advertised as enforced. Native host queries retain the kernel's
 own result. `landlock_guest` and `test_arch_runtime.py` distinguish that query
 from actual guest permission checks. The same ABI 1 assertions run under UID
 1000 in a reference Linux 6.18 QEMU VM; that reference does not raise Shroot's
-minimum. See [filesystem restrictions](../../docs/shroot.md#filesystem-restrictions)
+minimum. See [filesystem restrictions](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#filesystem-restrictions)
 for provider limits and the difference from native security confinement.
 
 ### Syscall Entry And FD Publication
@@ -1221,7 +1221,7 @@ fixture checks that missing host fences leave discovery absent for a bridge-only
 profile, while the completion-owned recipe admits real DMA-BUF allocations.
 Neither result blocks unrelated guest startup.
 
-The Alpine/Debian [distribution profile matrix](../guest-exec-lab/validation-matrix.md#linux-515-capability-profile)
+The Alpine/Debian [distribution profile matrix](tests/validation-matrix.md#linux-515-capability-profile)
 records init, containers, graphics, browsers and editor coverage separately from
 real-kernel acceptance. Focused epoll admission tests combine shared FD tables,
 different filter groups, queued file/mapping/metadata/IPC operations and
@@ -1259,7 +1259,7 @@ denial remains unknown liveness, never permission to discard provenance. The
 separate queued-pipe lifetime candidate uses baseline pipe/socket and poll/epoll
 operations and does not depend on socket diagnostics.
 
-The [entry/runtime fixtures](../guest-exec-lab/cooperative-entry.md) exercise
+The [entry/runtime fixtures](tests/cooperative-entry.md) exercise
 the production shared-memory channel, FD publication and cancellation owners.
 They add no post-5.15 dependency or separate transport implementation.
 An ordinary proc FD link is not a generic descriptor-transfer mechanism.
@@ -1364,7 +1364,7 @@ markers is not a fix for faulting memory access.
 
 ### Lazy SVC And Publication Coverage
 
-The default [lazy-entry owner](../guest-exec-lab/svc-rewriting.md)
+The default [lazy-entry owner](tests/svc-rewriting.md)
 (`SHROOT_MACHINE_ENTRY=0` selects Base) uses no hardware-breakpoint experiment. `svc_runtime.c` prepares private frames and nearby RX pools;
 `svc_registry.c` publishes a single SVC replacement through baseline
 PTRACE_POKETEXT after actual syscall execution. It requires HWCAP_ATOMICS,

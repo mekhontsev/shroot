@@ -45,7 +45,7 @@ preparation, and GDB start/continue/exit inside a PID namespace. `--trace` repea
 production paths through stock strace. Both the command exit and explicit output
 are checked; this is compatibility coverage, not kernel-equivalent isolation.
 Chromium automatic user/PID and explicit set-ID routes are checked separately in
-[Shroot](../../docs/shroot.md#application-filters-and-browsers).
+[Shroot](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#application-filters-and-browsers).
 `test_resources.py BUILD --case mount-namespace` also checks PID reservations,
 nested admission, signal/wait output, zombie proc lifetime, pidfd transfer to a
 protected receiver, orphan adoption, init thread exit and nonleader debugger exec.
