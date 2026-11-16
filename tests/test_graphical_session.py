@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Packaged guest helper with real distribution D-Bus; no Desktop or APK reinstall."""
 import argparse
+import hashlib
 from pathlib import Path
 import shlex
 
 from test_oci_services import Suite
+from fixture_executor import FixtureExecutor
 
 
 def main():
@@ -13,12 +15,15 @@ def main():
     parser.add_argument('--store', action='append', required=True)
     parser.add_argument('--user', default='root', help='Existing guest account for D-Bus authentication')
     parser.add_argument('--output', type=Path, default=Path('build/graphical-session-results'))
+    parser.add_argument('--build', type=Path, help='Native runtime bundle; required for local execution')
+    FixtureExecutor.add_argument(parser)
     args = parser.parse_args()
-    suite = Suite(args.output)
+    suite = Suite(args.output, build=args.build, executor=args.executor)
     try:
         suite.upload(args.helper, suite.base + '/guest-helper')
         suite.chmod('755', suite.base + '/guest-helper')
-        suite.report['helperSha256'] = suite.transport.digest(args.helper)
+        with args.helper.open('rb') as helper:
+            suite.report['helperSha256'] = hashlib.file_digest(helper, 'sha256').hexdigest()
         suite.report['guestUser'] = args.user
         probe = '''set -eu
 printf '%s' "$XDG_RUNTIME_DIR" > "$1"

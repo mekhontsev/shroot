@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
         close(fd);
         return 37;
     }
-    assert(getuid() == 2000 && geteuid() == 2000);
+    assert(getuid() != 0 && geteuid() == getuid());
     char value[64] = {0};
     int fd = open("/etc/md-guest-fixture", O_RDONLY);
     assert(fd >= 0 && read(fd, value, sizeof(value) - 1) == 12);

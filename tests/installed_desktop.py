@@ -186,7 +186,7 @@ def main():
     parser.add_argument('--name', required=True)
     parser.add_argument('--store', help='Existing store accessible to the selected executor; no import or copy')
     parser.add_argument('--output', type=Path, help='Retained fixture artifacts and session identity')
-    FixtureExecutor.add_argument(parser, graphics=True)
+    FixtureExecutor.add_argument(parser, android_only=True)
     parser.add_argument('--user', default='mdtester')
     parser.add_argument('--root', action='store_true')
     parser.add_argument('--wait', action='store_true', help='Wait for run completion and retain its log')

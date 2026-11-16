@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
         puts("PASS namespace exec preserves cwd, real umask and open-unlinked FD");
         return 0;
     }
-    CHECK(getuid() == 2000 && mkdir("/tmp/ns-check", 0700) == 0 && chdir("/tmp/ns-check") == 0);
+    CHECK(getuid() != 0 && geteuid() == getuid() && mkdir("/tmp/ns-check", 0700) == 0 && chdir("/tmp/ns-check") == 0);
     umask(0077);
     int fd = open("a", O_CREAT | O_EXCL | O_RDWR, 0666);
     CHECK(fd >= 0 && !(fcntl(fd, F_GETFD) & FD_CLOEXEC));

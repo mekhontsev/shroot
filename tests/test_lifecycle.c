@@ -239,7 +239,7 @@ static void bad_launch(const char *runner, const char *store,
     assert(waitpid(pid, &status, 0) == pid && md_process_status(status) == expected);
 }
 int main(int argc, char **argv) {
-    assert(argc == 4 && getuid() == 2000);
+    assert(argc == 4 && getuid() != 0);
     assert(atexit(cleanup) == 0);
     assert(prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0);
     sigset_t mask;

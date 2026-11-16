@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -35,7 +36,7 @@ static void image(int directory, const char *name, int interpreted) {
 int main(int argc, char **argv) {
     md_page_size = (size_t)sysconf(_SC_PAGESIZE);
     assert(argc == 2 && !mkdir(argv[1], 0700));
-    assert(!md_copy(md_files.root, sizeof(md_files.root), argv[1]));
+    assert(realpath(argv[1], md_files.root));
     int directory = open(argv[1], O_RDONLY | O_DIRECTORY | O_CLOEXEC); assert(directory >= 0);
     image(directory, "program", 1); image(directory, "loader", 0);
     assert(!symlinkat("program", directory, "alias"));

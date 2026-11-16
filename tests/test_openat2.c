@@ -19,7 +19,7 @@ static long open_how(const struct md_fs *fs, void *how, size_t size) {
 int main(int argc, char **argv) {
     assert(argc == 2);
     struct md_fs fs = {0};
-    assert(md_copy(fs.root, sizeof(fs.root), argv[1]) == 0);
+    assert(realpath(argv[1], fs.root));
     char path[PATH_MAX];
     assert(snprintf(path, sizeof(path), "%s/fixture", argv[1]) < (int)sizeof(path));
     int file = open(path, O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);

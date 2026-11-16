@@ -52,6 +52,7 @@ int main(int argc, char **argv) {
     assert(md_launch_identity(2000, 2000, 2000, 2000));
     assert(!md_launch_identity(2000, 0, 2000, 0));
     assert(!md_launch_identity(9999, 9999, 9999, 9999));
+    assert(md_launch_identity(getuid(), geteuid(), getgid(), getegid()));
     const int missing[] = {SYS_pidfd_open, SYS_faccessat2, SYS_seccomp,SYS_close_range,NO_ADDFD,NO_PRIVATE_CLONE};
     for (unsigned i = 0; i < sizeof(missing)/sizeof(*missing); ++i) {
         int expected=md_app_uid_active && missing[i]==SYS_faccessat2 ? 0 : 126;

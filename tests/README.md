@@ -913,6 +913,14 @@ python tests/test_graphics.py build/guest-fixtures
 python tests/test_graphics.py build/guest-fixtures --gtk
 ```
 
+The Android prepared-userspace runner also accepts `--executor app
+--native-build /path/to/exact/apk/native/build`. Install a debug fixture APK
+containing that build's prepared drivers first. It uses the same assertions and
+records native pathname-socket and hardlink controls for the selected identity;
+Shell-only denials are not required of an application UID. Direct execution uses
+immutable APK executables, while the imported userspace remains private test data.
+`--output` separates each run's complete logs and identity receipts.
+
 For real application workflows, use a separate prepared build:
 
 ```sh

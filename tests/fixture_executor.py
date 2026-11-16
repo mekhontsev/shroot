@@ -47,10 +47,10 @@ class FixtureExecutor:
     choices = ('local', 'shell', 'app')
 
     @classmethod
-    def add_argument(cls, parser, *, graphics=False):
-        choices = ('shell', 'app') if graphics else cls.choices
+    def add_argument(cls, parser, *, android_only=False):
+        choices = ('shell', 'app') if android_only else cls.choices
         parser.add_argument('--executor', choices=choices,
-                            default=os.environ.get('SHROOT_TEST_EXECUTOR', 'shell' if graphics else 'local'),
+                            default=os.environ.get('SHROOT_TEST_EXECUTOR', 'shell' if android_only else 'local'),
                             help='Host execution identity; local keeps the calling process UID')
 
     @classmethod

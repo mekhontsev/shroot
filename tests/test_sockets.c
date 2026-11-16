@@ -210,6 +210,14 @@ static int client(const char *base, const char *files, int stream, int packet, i
     return 0;
 }
 #ifdef MD_SOCKET_DRIVER
+static void sibling(char *path, size_t capacity, const char *name) {
+    ssize_t size = readlink("/proc/self/exe", path, capacity - 1);
+    CHECK(size > 0 && (size_t)size < capacity - 1);
+    path[size] = 0;
+    char *base = strrchr(path, '/'); CHECK(base);
+    size_t used = (size_t)(base + 1 - path);
+    CHECK(snprintf(path + used, capacity - used, "%s", name) < (int)(capacity - used));
+}
 static int routed_driver(const char *root) {
     struct sockaddr_un addr;
     char endpoint[64], launcher[4096], store[4096], fd_text[32], pid_text[32];
@@ -219,7 +227,7 @@ static int routed_driver(const char *root) {
     CHECK(server >= 0 && bind(server, (struct sockaddr *)&addr, length) == 0 && listen(server, 8) == 0);
     snprintf(fd_text, sizeof(fd_text), "%d", server);
     snprintf(pid_text, sizeof(pid_text), "%d", getpid());
-    CHECK(snprintf(launcher, sizeof(launcher), "%s/../libmagicdesk_guest_run.so", root) < (int)sizeof(launcher));
+    sibling(launcher, sizeof(launcher), "libmagicdesk_guest_run.so");
     CHECK(snprintf(store, sizeof(store), "%s/tmp/imported-rootfs", root) < (int)sizeof(store));
     char *args[] = {launcher, "--store", store,
         "--socket-path", "/tmp/virtual-display/s", addr.sun_path + 1,
@@ -244,13 +252,20 @@ static int driver(int argc, char **argv) {
         struct stat st; CHECK(fstat(dir, &st) == 0 && st.st_uid == getuid() && (st.st_mode & 0777) == 0700);
         int file = openat(dir, "file", O_CREAT | O_EXCL | O_WRONLY, 0600); CHECK(file >= 0); close(file);
         CHECK(fchdir(dir) == 0);
+        int denied = -1;
         for (unsigned i = 0; i < 2; ++i) {
             struct sockaddr_un addr; socklen_t size = address(&addr, i ? host : ".", i ? "alias" : "plain");
             int fd = socket(AF_UNIX, SOCK_STREAM, 0); CHECK(fd >= 0);
-            CHECK(bind(fd, (struct sockaddr *)&addr, size) == -1 && errno == EACCES); close(fd);
+            int result = bind(fd, (struct sockaddr *)&addr, size);
+            CHECK(result == 0 || (result == -1 && errno == EACCES));
+            if (denied < 0) denied = result < 0;
+            CHECK(denied == (result < 0));
+            close(fd);
         }
-        close(dir); puts("LIMIT native shell denies pathname bind on both ordinary and proc paths; regular-file creation succeeds");
-        return 77;
+        close(dir);
+        puts(denied ? "LIMIT native pathname bind denied on both ordinary and proc paths; regular-file creation succeeds"
+                    : "PASS native pathname bind on both ordinary and proc paths");
+        return denied ? 77 : 0;
     }
     CHECK(mkdirat(dir, "denied", 0000) == 0);
     char endpoints[96];
@@ -268,7 +283,7 @@ static int driver(int argc, char **argv) {
     if (native) {
         md_page_size = (size_t)sysconf(_SC_PAGESIZE);
         use_adapter = !strcmp(mode, "adapter");
-        CHECK(md_copy(test_fs.root, sizeof(test_fs.root), root) == 0);
+        CHECK(realpath(root, test_fs.root));
         if (use_adapter) {
             connection("/md-sockets-adapter", "s", fds[0], SOCK_STREAM, creator);
             puts("PASS sockets: explicit adapter resolves guest-root path to pinned native socket");
@@ -278,8 +293,8 @@ static int driver(int argc, char **argv) {
         close(dir); return r;
     }
     char launcher[4096], bootstrap[4096], store[4096], base[96], numbers[4][32];
-    CHECK(snprintf(launcher, sizeof(launcher), "%s/../%s", root,
-        !strcmp(mode, "direct") ? "libmagicdesk_guest_supervisor.so" : "libmagicdesk_guest_run.so") < (int)sizeof(launcher));
+    sibling(launcher, sizeof(launcher), !strcmp(mode, "direct")
+        ? "libmagicdesk_guest_supervisor.so" : "libmagicdesk_guest_run.so");
     if (abstract) snprintf(base, sizeof(base), "%s", endpoints);
     else if (!strcmp(mode, "direct")) snprintf(base, sizeof(base), "/tmp/md-sockets-direct");
     else snprintf(base, sizeof(base), "%s", host);
@@ -290,7 +305,7 @@ static int driver(int argc, char **argv) {
         CHECK(snprintf(store, sizeof(store), "%s/tmp/imported-rootfs", root) < (int)sizeof(store));
         args[n++] = "--store"; args[n++] = store; args[n++] = "--";
     } else {
-        CHECK(snprintf(bootstrap, sizeof(bootstrap), "%s/../libmagicdesk_guest_bootstrap.so", root) < (int)sizeof(bootstrap));
+        sibling(bootstrap, sizeof(bootstrap), "libmagicdesk_guest_bootstrap.so");
         args[n++] = bootstrap; args[n++] = (char *)root;
     }
     args[n++] = "/usr/bin/md-socket-fixture"; args[n++] = "client"; args[n++] = base; args[n++] = host;

@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Run the opt-in guest executor fixture through existing authorized MCP services."""
+"""Run prepared userspace through the shared Android executor fixtures."""
 import argparse
-from executors.magicdesk import load_transport
+from fixture_executor import FixtureExecutor
 import io
 import json
 from pathlib import Path
 import shlex
 import subprocess
 import tarfile
-import tomllib
-import uuid
 
 
 def main():
@@ -18,6 +16,9 @@ def main():
     parser.add_argument("--config", type=Path, default=Path.home() / ".codex/config.toml")
     parser.add_argument("--server", default="magicdesk")
     parser.add_argument("--packages", action="store_true", help="Observe actual dpkg transactions and known shell limits")
+    parser.add_argument("--native-build", type=Path, help="Exact packaged fixture build (required for User)")
+    parser.add_argument("--output", type=Path)
+    FixtureExecutor.add_argument(parser, android_only=True)
     args = parser.parse_args()
     manifest = json.loads((args.build / "manifest.json").read_text())
     archive = args.build / Path(next(p["file"] for p in manifest["packages"] if p["name"] == "gzip")).name
@@ -25,22 +26,16 @@ def main():
         package_links = [member for member in package.getmembers() if member.islnk()]
         uncompress = next(member for member in package.getmembers() if member.name.endswith("/uncompress"))
         gunzip = next(member for member in package.getmembers() if member.name.endswith("/gunzip"))
-    transport = load_transport()
-    config = tomllib.loads(args.config.read_text())["mcp_servers"][args.server]
-    # EVENT_WAIT: command completion may take its full 180-second bound plus
-    # process-tree cleanup. A transport timeout remains a failure, not a replay.
-    client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "),
-                              request_timeout=210)
-    state = client.call("get_state")
-    if state.get("shell", {}).get("uid") != 2000:
-        raise RuntimeError("Select shell access explicitly; this fixture never changes identity")
-    session = client.call("console.open", {"directory": "/data/local/tmp"})["sessionId"]
-    root = "/data/local/tmp/magicdesk/cache/tmp/guest-lab-" + uuid.uuid4().hex
-    results = {"device": state["device"], "app": state["app"], "manifest": manifest,
+    if args.executor == 'app' and args.native_build is None:
+        parser.error('--executor app requires --native-build matching the installed fixture APK')
+    output = args.output or args.build / ('results-' + args.executor)
+    executor = FixtureExecutor.connect(output, args.executor, 'prepared', config=args.config, server=args.server)
+    root = executor.root
+    results = {**executor.state, "manifest": manifest,
                "directory": root, "checks": []}
 
     def command(value):
-        return client.call("console.execute", {"sessionId": session, "command": value})
+        return executor.execute(value, 210, capture=True)
 
     def check(name, value, code=0, contains=None, limitation=False):
         result = command(value)
@@ -53,14 +48,25 @@ def main():
         print(("LIMIT " if ok and limitation else "PASS " if ok else "FAIL ") + name + "\n" + result["output"], flush=True)
         if not ok:
             raise RuntimeError("Fixture check failed: " + name)
+        return result
 
     try:
-        check("create isolated shell-owned directory", "mkdir -m 700 " + shlex.quote(root))
-        transport.upload(client, args.build / "bundle.tar.gz", root + "/bundle.tar.gz")
+        executor.upload(args.build / "bundle.tar.gz", root + "/bundle.tar.gz")
         check("extract without package installation", "tar -xzf " + root + "/bundle.tar.gz -C " + root)
+        if args.executor == 'app':
+            # Android executes immutable APK ELF files, not writable imported copies.
+            for target in ['libmagicdesk_guest_' + name + '.so' for name in ('supervisor', 'bootstrap', 'run', 'service', 'image')] + \
+                    ['md-command-test', 'md-capabilities-test', 'md-lifecycle-test', 'md-sockets-test']:
+                packaged = ('libmagicdesk_guest_capabilities.so' if target == 'md-capabilities-test' else
+                            'libmagicdesk_guest_prepared_' + target[3:].replace('-', '_') + '.so'
+                            if target.startswith('md-') else target)
+                source = args.native_build / ('libmagicdesk_guest_capabilities.so' if target == 'md-capabilities-test' else target)
+                remote = root + '/' + target
+                executor.upload(source, remote, packaged_name=packaged)
+                check('admit immutable ' + target, shlex.join(['ln', '-sf', executor.native_path(remote), remote]))
         launch = ("env PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/tmp TMPDIR=/tmp LANG=C "
                   + root + "/libmagicdesk_guest_supervisor.so " + root + "/libmagicdesk_guest_bootstrap.so " + root + "/rootfs ")
-        check("Android shell identity", "id", contains=["uid=2000(shell)", "context=u:r:shell:s0"])
+        check("selected Android identity", "id -u", contains=str(executor.uid) + '\n')
         check("kernel identity", "uname -a", contains="aarch64")
         check("page size observation", "getconf PAGE_SIZE")
         check("prepared executable and loader ownership", "timeout 30 " + root
@@ -110,9 +116,9 @@ def main():
                   contains=["PASS proc: file aliases", "PASS proc: posix_spawn", "PASS proc: renamed directory",
                             "PASS proc: native pipe descriptors", "PASS proc: inherited open-unlinked",
                             "PASS proc: deleted inode remains accessible"])
-        check("native shell pathname socket creation control", "timeout 15 " + root
-              + "/md-sockets-test probe " + root + "/rootfs", code=77,
-              contains="LIMIT native shell denies pathname bind", limitation=True)
+        probe = command("timeout 15 " + root + "/md-sockets-test probe " + root + "/rootfs")
+        assert probe['exitCode'] in (0, 77), probe
+        results['nativePathnameSockets'] = probe
         for backend in ["direct", "namespace"]:
             check(backend + " abstract Unix sockets and descriptor exchange", "timeout 60 " + root
                   + "/md-sockets-test " + backend + " " + root + "/rootfs abstract",
@@ -184,7 +190,7 @@ def main():
             assert uncompress.islnk() or uncompress.issym()
             check("namespace archive preserves declared link type", "timeout 30 " + namespace + "/bin/dash -c "
                   + shlex.quote("set -eu; test -f " + one + "; " + identity))
-        check("Debian identity", "timeout 20 " + launch + "/usr/bin/id -u", contains="2000\n")
+        check("Debian identity", "timeout 20 " + launch + "/usr/bin/id -u", contains=str(executor.uid) + '\n')
         check("Debian shell and child cat", "timeout 20 " + launch + "/bin/dash -c "
               + shlex.quote("/bin/cat /etc/md-guest-fixture"), contains="guest-value\n")
         check("pipeline and fork/exec", "timeout 20 " + launch + "/bin/dash -c "
@@ -210,8 +216,10 @@ def main():
               + "/usr/bin/stat /etc/md-guest-fixture", contains="Size: 12")
         check("shell vfork child", "timeout 20 " + launch + "/bin/dash /usr/bin/md-script", code=23,
               contains="guest-value\n")
-        check("host hard-link restriction control", "ln " + root + "/rootfs/etc/md-guest-fixture "
-              + root + "/host-hard-link", code=1, contains="Permission denied", limitation=True)
+        link_control = command("ln " + root + "/rootfs/etc/md-guest-fixture " + root + "/host-hard-link")
+        assert link_control['exitCode'] == 0 or (link_control['exitCode'] == 1 and 'Permission denied' in link_control['output']), link_control
+        hardlinks = link_control['exitCode'] == 0
+        results['nativeHardlinks'] = link_control
         if args.packages:
             version = next(p["version"] for p in manifest["packages"] if p["name"] == "dpkg").split(":")[-1]
             check("Debian package manager identity", "timeout 20 " + launch + "/usr/bin/dpkg --version",
@@ -221,17 +229,21 @@ def main():
             check("prepare isolated dpkg database", "timeout 20 " + launch + "/bin/mkdir -p /tmp/md-dpkg")
             check("dpkg setting transaction", "timeout 20 " + launch
                   + "/usr/bin/dpkg --admindir=/tmp/md-dpkg --force-not-root --add-architecture armhf")
-            check("dpkg database backup needs hard links", "timeout 20 " + launch
+            check("direct dpkg transaction follows native hard-link capability", "timeout 20 " + launch
                   + "/usr/bin/dpkg --admindir=/tmp/md-dpkg --force-not-root --install /tmp/md-package-fixture.deb",
-                  code=2, contains="error creating new backup file '/tmp/md-dpkg/status-old': Permission denied", limitation=True)
-            check("postinst executed despite failed database commit", "timeout 20 " + launch
-                  + "/bin/cat /usr/share/md-package-fixture/configured", contains="configured\n", limitation=True)
-            check("dpkg transaction remains uncommitted", "timeout 20 " + launch + "/bin/dash -c "
-                  + shlex.quote("test ! -s /tmp/md-dpkg/status && test -s /tmp/md-dpkg/status-new"), limitation=True)
+                  code=0 if hardlinks else 2,
+                  contains=None if hardlinks else "error creating new backup file '/tmp/md-dpkg/status-old': Permission denied",
+                  limitation=not hardlinks)
+            check("direct postinst execution", "timeout 20 " + launch
+                  + "/bin/cat /usr/share/md-package-fixture/configured", contains="configured\n")
+            check("direct dpkg commit matches native capability", "timeout 20 " + launch + "/bin/dash -c "
+                  + shlex.quote("test -s /tmp/md-dpkg/status" if hardlinks else
+                                "test ! -s /tmp/md-dpkg/status && test -s /tmp/md-dpkg/status-new"), limitation=not hardlinks)
             check("official gzip archive retains declared link semantics", "timeout 20 " + launch
                   + "/usr/bin/dpkg-deb --extract /tmp/md-hardlinks.deb /tmp/md-hardlinks",
-                  code=2 if package_links else 0, contains="Cannot hard link" if package_links else None,
-                  limitation=bool(package_links))
+                  code=2 if package_links and not hardlinks else 0,
+                  contains="Cannot hard link" if package_links and not hardlinks else None,
+                  limitation=bool(package_links) and not hardlinks)
         check("missing executable", "timeout 20 " + launch + "/usr/bin/not-installed", code=127)
         check("child exit status", "timeout 20 " + launch + "/bin/dash -c 'exit 42'", code=42)
         # Cancellation bound for a deliberately nonterminating guest, not a settling delay.
@@ -244,9 +256,10 @@ def main():
             check("remove isolated fixture files", 'cd "$HOME" && rm -rf -- ' + shlex.quote(root))
         finally:
             try:
-                client.call("console.close", {"sessionId": session})
+                executor.close()
             finally:
-                (args.build / "device-results.json").write_text(json.dumps(results, indent=2) + "\n")
+                results['executor'] = executor.evidence
+                (output / "device-results.json").write_text(json.dumps(results, indent=2) + "\n")
 
 
 if __name__ == "__main__":

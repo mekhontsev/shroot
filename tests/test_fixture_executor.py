@@ -2,6 +2,9 @@
 """Native diagnostic evidence must not inherit console preview truncation."""
 import argparse
 from pathlib import Path
+import shlex
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -11,6 +14,48 @@ from fixture_executor import FixtureExecutor, bounded_shell
 
 
 class CapturedCommands(unittest.TestCase):
+    def test_capture_survives_removing_the_workload_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'evidence'
+            output.mkdir()
+            root = Path(directory) / 'workload'
+            root.mkdir()
+            executor = self.executor(output)
+            executor.root = executor.directory = str(root)
+
+            def command(text, timeout=120):
+                result = subprocess.run(['sh', '-c', text], capture_output=True, text=True, timeout=timeout)
+                return dict(exitCode=result.returncode, output=result.stdout + result.stderr)
+
+            executor._shell_command = command
+            executor._transport_command = command
+            executor.download = shutil.copyfile
+            result = executor.execute('cd / && rm -rf -- ' + shlex.quote(str(root)) + '; printf cleaned', capture=True)
+            self.assertEqual(result, dict(exitCode=0, output='cleaned'))
+            self.assertFalse(root.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [output])
+
+    def test_packaged_alias_checks_exact_elf_before_admission(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'md-sockets-test'
+            source.write_bytes(b'\x7fELFfixture')
+            executor = self.executor(Path(directory))
+            executor.mode, executor.libraries = 'app', '/apk/lib'
+            executor.packaged, executor.executables = {}, {}
+            executor.files = mock.Mock()
+            executor.files.command.return_value = dict(output=hashlib.sha256(source.read_bytes()).hexdigest() + '  file')
+            name = 'libmagicdesk_guest_prepared_sockets_test.so'
+            executor.upload(source, '/owned/driver', packaged_name=name)
+            self.assertEqual(executor.native_path('/owned/driver'), '/apk/lib/' + name)
+            executor.files.transfer.assert_not_called()
+            source.write_bytes(b'\x7fELFchanged')
+            with self.assertRaisesRegex(RuntimeError, 'exact build'):
+                executor.upload(source, '/owned/other', packaged_name=name)
+            self.assertNotIn('/owned/other', executor.executables)
+            with self.assertRaises(ValueError):
+                executor.upload(source, '/owned/other', packaged_name='../invalid')
+
     def test_deadline_wrapper_keeps_the_executor_cancellation_owner(self):
         command = "sh -c 'printf ready; wait'"
         for mode in FixtureExecutor.choices:

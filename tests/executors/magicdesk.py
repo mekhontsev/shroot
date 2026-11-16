@@ -144,7 +144,8 @@ class MagicDeskExecutor:
             # Console replies are bounded summaries. Diagnostic assertions need
             # the complete stream, transported as a file without rerunning it.
             name = 'command-' + uuid.uuid4().hex + '.log'
-            remote, local = self.root + '/' + name, self.output / name
+            # Cleanup may remove the workload root; its receipt has independent ownership.
+            remote, local = self.root + '-' + name, self.output / name
             try:
                 value = self._shell_command(
                     '(\n' + command + '\n) > ' + shlex.quote(remote) + ' 2>&1', timeout)
@@ -164,7 +165,7 @@ class MagicDeskExecutor:
         assert result['exitCode'] == 0, result
         return result['output']
 
-    def upload(self, source, target, **options):
+    def upload(self, source, target, *, packaged_name=None, **options):
         source = Path(source)
         if self.mode == 'shell':
             return self.transport.upload(self.client, source, target, **options)
@@ -172,13 +173,16 @@ class MagicDeskExecutor:
             executable = stream.read(4) == b'\x7fELF'
             stream.seek(0)
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        if executable and source.name.startswith('libmagicdesk_guest_'):
-            packaged = self.libraries + '/' + source.name
-            if source.name not in self.packaged:
+        name = packaged_name or source.name
+        if packaged_name and (not name.startswith('libmagicdesk_guest_') or '/' in name):
+            raise ValueError('Invalid packaged fixture name')
+        if executable and name.startswith('libmagicdesk_guest_'):
+            packaged = self.libraries + '/' + name
+            if name not in self.packaged:
                 output = self.files.command(shlex.join(['sha256sum', packaged]))['output']
-                self.packaged[source.name] = output.split()[0]
-            if self.packaged[source.name] != digest:
-                raise RuntimeError('Install a fixture APK containing the exact build of ' + source.name)
+                self.packaged[name] = output.split()[0]
+            if self.packaged[name] != digest:
+                raise RuntimeError('Install a fixture APK containing the exact build of ' + name)
             # Guest mounts need a regular file, not a symlink escaping their
             # root. Native execution separately selects the immutable APK ELF.
             self.files.command(shlex.join(['cp', packaged, target]))

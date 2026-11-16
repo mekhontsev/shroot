@@ -25,7 +25,7 @@ int main(void) {
     assert(!stat("/tmp/metadata/value", &st) && (st.st_mode & 0777) == 0600);
     assert(!chown("/tmp/metadata/value", getuid(), getgid()));
     assert(chown("/tmp/metadata/value", 0, 0) == -1 && (errno == EPERM || errno == EACCES));
-    assert(!stat("/tmp/metadata/value", &st) && st.st_uid == 2000);
+    assert(!stat("/tmp/metadata/value", &st) && st.st_uid == getuid());
     assert(!truncate("/tmp/metadata/value", 3));
     assert(!fstat(fd, &st) && st.st_size == 3);
     struct timespec times[2] = {{1700000000, 123456789}, {1700000001, 987654321}};
@@ -42,7 +42,7 @@ int main(void) {
     struct statfs by_path, by_fd;
     assert(!statfs("/tmp/metadata/value", &by_path) && !fstatfs(fd, &by_fd));
     assert(by_path.f_type == by_fd.f_type && by_path.f_bsize == by_fd.f_bsize);
-    puts("PASS modes, timestamps, truncate, statfs and actual shell ownership (not fake root)");
+    puts("PASS modes, timestamps, truncate, statfs and actual host ownership (not fake root)");
 
     int control = fsetxattr(fd, "user.md-fixture", "fd", 2, 0), control_errno = errno;
     int via_path = setxattr("/tmp/metadata/link", "user.md-fixture", "path", 4, 0);
