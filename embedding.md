@@ -52,6 +52,54 @@ and, when building the runtime, native fixtures. See the standalone consumer in
 The library and runtime use the repository's [GPLv3 license](LICENSE). Linking
 the library does not introduce an additional licensing exception.
 
+### SQLite Provider
+
+`SHROOT_SQLITE` selects `bundled` (the default), `system`, or an existing CMake
+target. The bundled source is pinned and hash-verified. System mode uses
+`find_package(SQLite3)`. A parent project can share its own dependency:
+
+```cmake
+add_library(common_sqlite STATIC vendor/sqlite/sqlite3.c)
+target_include_directories(common_sqlite PUBLIC vendor/sqlite)
+target_compile_definitions(common_sqlite PRIVATE
+    SQLITE_THREADSAFE=2 SQLITE_ENABLE_PREUPDATE_HOOK)
+set(SHROOT_SQLITE common_sqlite)
+add_subdirectory(shroot)
+```
+
+Shroot does not modify the supplied target or fetch another SQLite copy. Its
+directory-anchored VFS remains a separate adapter using public SQLite APIs.
+The required contract is SQLite >= 3.37, `THREADSAFE=1` or `2`, preupdate hooks,
+compile-option diagnostics, Unix VFS, WAL, foreign keys, triggers, CHECK constraints,
+integrity checks and authorizer support. Headers and required symbols are checked
+by compilation/linking; runtime admission checks the loaded provider once, before opening persistent
+databases. Incompatible providers fail explicitly, without a silent fallback or
+a changed storage format. Each connection remains owned by one runtime thread.
+For performance-sensitive builds, the bundled settings also disable SQLite's
+global allocation statistics (`SQLITE_DEFAULT_MEMSTATUS=0`). An external provider
+retains its own defaults; qualifying its semantics does not prove identical speed.
+
+`SHROOT_STATIC_RUNTIME=ON` retains the self-contained executable bundle. Use
+`OFF` for dynamic native runtime executables when supplying a shared SQLite:
+
+```sh
+cmake -S . -B build -DSHROOT_SQLITE=system -DSHROOT_STATIC_RUNTIME=OFF
+```
+
+Freestanding guest-entry images retain static linking in either mode. A shared
+SQLite is reused as a library file, not as an embedding application's database
+connection. The integrator owns its ABI, runtime lookup and distribution; Shroot
+does not copy system libraries into the installation. Android's private framework
+SQLite is not an application dependency. A static provider shares the build but
+still contributes code to each executable that links it. `libshroot` itself has
+no SQLite dependency in either configuration.
+
+Run the same `database` and `client_runtime` tests for each shipped provider.
+The standalone `tests/sqlite` project also accepts `SQLITE_AMALGAMATION`,
+`SQLITE_KIND` and `SQLITE_FEATURES` to test a supplied target. `TEST_RUNTIME=ON`
+embeds the complete Shroot project; otherwise it runs only the shared storage
+contract fixture. `TEST_REJECTION=ON` verifies rejection before storage mutation.
+
 ## Objects And Ownership
 
 - A context captures the explicit runtime directory. Keep that bundle immutable

@@ -12,8 +12,11 @@
 static sqlite3_vfs anchored;
 static pthread_once_t initialized=PTHREAD_ONCE_INIT;
 static int status=SQLITE_ERROR;
+static void initialize(void);
 int md_database_temporary_directory(const char *path) {
     if (path && path[0]!='/') return -EINVAL;
+    pthread_once(&initialized,initialize);
+    if (status!=SQLITE_OK) return md_database_result(status);
     char *copy=path ? sqlite3_mprintf("%s",path) : NULL;
     if (path && !copy) return -ENOMEM;
     sqlite3_free(sqlite3_temp_directory);
@@ -66,8 +69,25 @@ static int full_path(sqlite3_vfs *vfs, const char *path, int capacity, char *out
     memcpy(out,path,n+1); return SQLITE_OK;
 }
 static void initialize(void) {
+    /* Admission runs once per native owner, before touching a persistent DB.
+     * An integrator may supply SQLite, but not silently remove its semantics. */
+    const char *requirement=NULL;
+    if (sqlite3_libversion_number()<3037000) requirement="version >= 3.37";
+    else if (!sqlite3_threadsafe()) requirement="THREADSAFE=1 or 2";
+    else if (!sqlite3_compileoption_used("ENABLE_PREUPDATE_HOOK")) requirement="ENABLE_PREUPDATE_HOOK";
+    const char *omissions[]={"OMIT_FOREIGN_KEY","OMIT_TRIGGER","OMIT_WAL","OMIT_AUTHORIZATION",
+        "OMIT_CHECK","OMIT_INTEGRITY_CHECK"};
+    for (size_t i=0;!requirement && i<sizeof(omissions)/sizeof(*omissions);++i)
+        if (sqlite3_compileoption_used(omissions[i])) requirement=omissions[i];
+    if (requirement) {
+        fprintf(stderr,"shroot: incompatible SQLite %s: %s\n",sqlite3_libversion(),requirement);
+        status=-ENOTSUP; return;
+    }
     sqlite3_vfs *base=sqlite3_vfs_find("unix");
-    if (!base) return;
+    if (!base) {
+        fprintf(stderr,"shroot: SQLite Unix VFS is unavailable\n");
+        status=-ENOTSUP; return;
+    }
     anchored=*base;
     anchored.zName="shroot-retained-directory";
     anchored.pNext=NULL; anchored.xFullPathname=full_path;

@@ -1,11 +1,22 @@
-execute_process(COMMAND "${NM}" --defined-only --format=posix "${ARCHIVE}"
+execute_process(COMMAND "${NM}" --defined-only --format=sysv "${ARCHIVE}"
     RESULT_VARIABLE result OUTPUT_VARIABLE symbols ERROR_VARIABLE error)
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "lwIP state audit: ${error}")
 endif()
 string(REPLACE "\n" ";" lines "${symbols}")
 foreach(line IN LISTS lines)
-    if(line MATCHES "^([^ ]+) [BbCcDdGgSs] " AND NOT CMAKE_MATCH_1 STREQUAL "md_lwip_current")
+    if(line MATCHES "^([^|]+)\\|[^|]*\\|[ \t]*([BbCcDdGgSsVv])[ \t]*\\|([^|]*)\\|[^|]*\\|[^|]*\\|(.+)$")
+        string(STRIP "${CMAKE_MATCH_1}" name)
+        string(STRIP "${CMAKE_MATCH_3}" kind)
+        string(STRIP "${CMAKE_MATCH_4}" section)
+        if(name STREQUAL "md_lwip_current" AND kind STREQUAL "TLS")
+            continue()
+        endif()
+        # PIE const pointers need loader relocations, then GNU_RELRO protects
+        # them. Runtime consumers explicitly link with -z relro -z now.
+        if(section MATCHES "^\\.(data\\.rel\\.ro|rodata)(\\.|$)")
+            continue()
+        endif()
         message(FATAL_ERROR "lwIP has shared mutable state: ${line}")
     endif()
 endforeach()

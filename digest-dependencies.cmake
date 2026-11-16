@@ -14,4 +14,4 @@ target_include_directories(guest-sha256 PUBLIC ${guest_digest_SOURCE_DIR}/includ
     PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
 target_compile_definitions(guest-sha256 PUBLIC MBEDTLS_CONFIG_FILE="image_digest_config.h")
 target_compile_options(guest-sha256 INTERFACE -iquote ${CMAKE_CURRENT_LIST_DIR}/src)
-configure_file(${guest_digest_SOURCE_DIR}/LICENSE ${CMAKE_BINARY_DIR}/licenses/mbedtls.txt COPYONLY)
+configure_file(${guest_digest_SOURCE_DIR}/LICENSE ${shroot_license_directory}/mbedtls.txt COPYONLY)

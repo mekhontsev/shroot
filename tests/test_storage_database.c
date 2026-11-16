@@ -154,8 +154,50 @@ static void exhausted(void) {
     assert(sqlite3_close(db)==SQLITE_OK); close(root);
     assert(!md_private_tree_discard(AT_FDCWD,path));
 }
+static void preupdate(void *context,sqlite3 *db,int operation,const char *schema,
+        const char *table,sqlite3_int64 before,sqlite3_int64 after) {
+    (void)schema; (void)before; (void)after;
+    if (strcmp(table,"parent")) return;
+    assert(operation==SQLITE_INSERT || operation==SQLITE_UPDATE);
+    sqlite3_value *value=NULL;
+    assert(sqlite3_preupdate_new(db,0,&value)==SQLITE_OK && sqlite3_value_int(value)==1);
+    if (operation==SQLITE_UPDATE) {
+        assert(sqlite3_preupdate_old(db,0,&value)==SQLITE_OK && sqlite3_value_int(value)==1);
+    }
+    ++*(unsigned *)context;
+}
+static void contract(void) {
+    char path[]="database-contract-XXXXXX"; assert(mkdtemp(path));
+    int root=open(path,O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(root>=0);
+    sqlite3 *db=NULL; assert(!md_database_open(root,"state.db",1,&db));
+    sqlite3_stmt *q=NULL;
+    assert(sqlite3_prepare_v2(db,"PRAGMA journal_mode=WAL",-1,&q,NULL)==SQLITE_OK);
+    assert(sqlite3_step(q)==SQLITE_ROW && !strcmp((const char *)sqlite3_column_text(q,0),"wal"));
+    assert(sqlite3_finalize(q)==SQLITE_OK);
+    execute(db,"PRAGMA foreign_keys=ON;"
+        "CREATE TABLE parent(id INTEGER PRIMARY KEY,value INTEGER CHECK(value>=0)) STRICT;"
+        "CREATE TABLE child(parent INTEGER REFERENCES parent(id)) STRICT;"
+        "CREATE TRIGGER remove_child BEFORE DELETE ON parent BEGIN DELETE FROM child WHERE parent=old.id; END;");
+    unsigned updates=0; sqlite3_preupdate_hook(db,preupdate,&updates);
+    execute(db,"INSERT INTO parent VALUES(1,2);INSERT INTO child VALUES(1)");
+    assert(updates==1);
+    assert(sqlite3_prepare_v2(db,"INSERT INTO parent VALUES(1,3) ON CONFLICT(id) DO UPDATE SET value=excluded.value RETURNING value",-1,&q,NULL)==SQLITE_OK);
+    assert(sqlite3_step(q)==SQLITE_ROW && sqlite3_column_int(q,0)==3);
+    assert(sqlite3_step(q)==SQLITE_DONE && updates==2);
+    assert(sqlite3_finalize(q)==SQLITE_OK);
+    assert(sqlite3_exec(db,"INSERT INTO child VALUES(2)",NULL,NULL,NULL)==SQLITE_CONSTRAINT);
+    assert(sqlite3_exec(db,"INSERT INTO child VALUES('bad')",NULL,NULL,NULL)==SQLITE_CONSTRAINT);
+    assert(sqlite3_exec(db,"UPDATE parent SET value=-1",NULL,NULL,NULL)==SQLITE_CONSTRAINT);
+    sqlite3_preupdate_hook(db,NULL,NULL);
+    execute(db,"DELETE FROM parent");
+    assert(sqlite3_prepare_v2(db,"SELECT count(*) FROM child",-1,&q,NULL)==SQLITE_OK);
+    assert(sqlite3_step(q)==SQLITE_ROW && !sqlite3_column_int(q,0));
+    assert(sqlite3_finalize(q)==SQLITE_OK && sqlite3_close(db)==SQLITE_OK);
+    close(root); assert(!md_private_tree_discard(AT_FDCWD,path));
+}
 void test_storage_database(void) {
     assert(sqlite3_threadsafe()!=0);
+    contract();
     temporary();
     concurrent();
     retained("PRAGMA journal_mode=WAL");

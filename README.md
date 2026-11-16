@@ -422,8 +422,10 @@ The internal resume entry is not an authorization boundary.
 ## Build And Verification
 
 `CMakeLists.txt` builds native executables with pinned, hash-verified native
-dependencies. SQLite belongs to the namespace owners, not ART or the freestanding
-adapter. Image archive/compression dependencies are declared in
+dependencies by default. SQLite may instead be supplied by the system or a
+parent project's CMake target; see [provider requirements](embedding.md#sqlite-provider).
+It belongs to the namespace owners, not ART or the freestanding adapter.
+Image archive/compression dependencies are declared in
 [image-dependencies.cmake](image-dependencies.cmake). Integrators package helpers
 and license notices; guest libc, desktop packages and GPU drivers remain guest-owned.
 

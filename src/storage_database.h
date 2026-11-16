@@ -1,6 +1,9 @@
 #ifndef MD_STORAGE_DATABASE_H
 #define MD_STORAGE_DATABASE_H
 #include <sqlite3.h>
+#if SQLITE_VERSION_NUMBER < 3037000
+#error Shroot requires SQLite 3.37 or newer (STRICT tables).
+#endif
 
 /* Native-owner startup only, before connections or worker threads. The guest
  * environment is not a host filesystem location. NULL restores SQLite defaults. */

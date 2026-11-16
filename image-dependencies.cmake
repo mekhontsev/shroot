@@ -47,6 +47,6 @@ set(HAVE_ZSTD_compressStream 1 CACHE INTERNAL "Bundled zstd streaming compressor
 set(HAVE_ZSTD_minCLevel 1 CACHE INTERNAL "Bundled zstd compression bounds" FORCE)
 FetchContent_MakeAvailable(guest_archive)
 
-configure_file(${guest_zlib_SOURCE_DIR}/LICENSE ${CMAKE_CURRENT_BINARY_DIR}/licenses/zlib.txt COPYONLY)
-configure_file(${guest_zstd_SOURCE_DIR}/LICENSE ${CMAKE_CURRENT_BINARY_DIR}/licenses/zstd.txt COPYONLY)
-configure_file(${guest_archive_SOURCE_DIR}/COPYING ${CMAKE_CURRENT_BINARY_DIR}/licenses/libarchive.txt COPYONLY)
+configure_file(${guest_zlib_SOURCE_DIR}/LICENSE ${shroot_license_directory}/zlib.txt COPYONLY)
+configure_file(${guest_zstd_SOURCE_DIR}/LICENSE ${shroot_license_directory}/zstd.txt COPYONLY)
+configure_file(${guest_archive_SOURCE_DIR}/COPYING ${shroot_license_directory}/libarchive.txt COPYONLY)

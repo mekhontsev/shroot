@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     project(guest_packet_stack C)
+    set(shroot_native_code -fno-pie)
+    set(shroot_license_directory "${CMAKE_CURRENT_BINARY_DIR}/licenses")
 endif()
 include(FetchContent)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../digest-dependencies.cmake)
@@ -37,14 +39,16 @@ add_library(guest-lwip STATIC context.c
     ${core}/ipv6/mld6.c ${core}/ipv6/nd6.c ${context_source}/src/netif/ethernet.c)
 target_include_directories(guest-lwip PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${context_source}/src/include)
 target_link_libraries(guest-lwip PRIVATE guest-sha256)
-target_compile_options(guest-lwip PRIVATE -std=c17 -O2 -Wall -Wextra -Werror -fno-pie)
+# The state audit admits immutable relocated tables only with RELRO protection.
+target_link_options(guest-lwip INTERFACE -Wl,-z,relro,-z,now)
+target_compile_options(guest-lwip PRIVATE -std=c17 -O2 -Wall -Wextra -Werror ${shroot_native_code})
 add_custom_command(TARGET guest-lwip POST_BUILD
     COMMAND ${CMAKE_COMMAND} -DNM=${CMAKE_NM} -DARCHIVE=$<TARGET_FILE:guest-lwip>
         -P ${CMAKE_CURRENT_SOURCE_DIR}/audit.cmake VERBATIM)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     target_compile_options(guest-lwip PRIVATE -Wno-tautological-constant-out-of-range-compare)
 endif()
-configure_file(${guest_lwip_SOURCE_DIR}/COPYING ${CMAKE_CURRENT_BINARY_DIR}/../licenses/lwip.txt COPYONLY)
+configure_file(${guest_lwip_SOURCE_DIR}/COPYING ${shroot_license_directory}/lwip.txt COPYONLY)
 if(SHROOT_BUILD_TESTS OR CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     add_executable(test_lwip_context ../tests/test_lwip_context.c)
     target_link_libraries(test_lwip_context PRIVATE guest-lwip)

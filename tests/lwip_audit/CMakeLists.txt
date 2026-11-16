@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.24)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project(ShrootStateAudit C)
+    enable_testing()
+endif()
+foreach(kind const mutable weak tls current)
+    add_library(audit_${kind} STATIC symbols.c)
+    set_target_properties(audit_${kind} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(audit_${kind} PRIVATE AUDIT_${kind})
+    add_test(NAME lwip_audit_${kind}
+        COMMAND "${CMAKE_COMMAND}" -DNM=${CMAKE_NM} -DARCHIVE=$<TARGET_FILE:audit_${kind}>
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/../../lwip/audit.cmake")
+    if(NOT kind STREQUAL "const")
+        set_tests_properties(lwip_audit_${kind} PROPERTIES WILL_FAIL TRUE)
+    endif()
+endforeach()
