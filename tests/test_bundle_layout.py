@@ -81,7 +81,7 @@ class BundleLayout(unittest.TestCase):
                  'lib/cmake/Shroot/ShrootConfig.cmake', 'share/doc/shroot/LICENSE']
         paths += [f'libexec/shroot/{name}' for name in self.metadata['helpers'].values()]
         paths += [f'share/doc/shroot/licenses/{name}.txt'
-                  for name in ('curl', 'mbedtls', 'lwip', 'zlib', 'zstd', 'libarchive')]
+                  for name in ('sqlite', 'curl', 'mbedtls', 'lwip', 'zlib', 'zstd', 'libarchive')]
         for name in paths:
             path = self.prefix / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,9 +118,12 @@ class BundleLayout(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.audit()
         extra.unlink()
-        (self.prefix / 'share/doc/shroot/licenses/lwip.txt').unlink()
-        with self.assertRaises(AssertionError):
-            self.audit()
+        for name in ('sqlite', 'curl', 'mbedtls', 'lwip', 'zlib', 'zstd', 'libarchive'):
+            notice = self.prefix / f'share/doc/shroot/licenses/{name}.txt'
+            notice.unlink()
+            with self.subTest(notice=name), self.assertRaisesRegex(AssertionError,name):
+                self.audit()
+            notice.touch()
 
     def test_reject_duplicate_or_escaping_helpers(self):
         for name in (self.metadata['helpers']['run'], '../outside'):
