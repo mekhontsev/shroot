@@ -1671,6 +1671,10 @@ static void native_birth_recovery(void) {
 static void native_birth_acl(void) {
     struct md_inode_store *s=store("native-birth-acl",1);
     struct md_identity ids=md_identity_new(0,0); s->identity=&ids;
+    char prepared[NAME_MAX+1],ordinary[NAME_MAX+1],oversized[NAME_MAX+2];
+    memset(prepared,'p',NAME_MAX); prepared[NAME_MAX]=0;
+    memset(ordinary,'o',NAME_MAX); ordinary[NAME_MAX]=0;
+    memset(oversized,'x',NAME_MAX+1); oversized[NAME_MAX+1]=0;
     CHECK(!md_inode_mkdir(s,-1,"work",0755));
     int directory=md_inode_open(s,-1,"work",O_RDONLY|O_DIRECTORY,0); CHECK(directory>=0);
     struct { uint32_t version; struct md_acl_entry entries[5]; } acl={.version=2,.entries={
@@ -1682,14 +1686,17 @@ static void native_birth_acl(void) {
     md_inode_acl(s,&q,&result,NULL); CHECK(!result.error);
     s->creation_mask=0077;
     struct md_inode_birth *birth=NULL;
-    int pin=md_inode_plan_open(s,directory,"prepared",O_CREAT|O_RDWR,0666,0,&(struct md_open_completion){0},1,&birth);
+    CHECK(md_inode_open(s,directory,oversized,O_CREAT|O_RDWR,0666)==-ENAMETOOLONG);
+    CHECK(md_inode_plan_open(s,directory,oversized,O_CREAT|O_RDWR,0666,0,&(struct md_open_completion){0},1,&birth)==-ENAMETOOLONG);
+    CHECK(!birth);
+    int pin=md_inode_plan_open(s,directory,prepared,O_CREAT|O_RDWR,0666,0,&(struct md_open_completion){0},1,&birth);
     CHECK(pin>=0 && birth);
     struct stat st;
-    CHECK(md_inode_stat(s,directory,"prepared",0,&st)==-ENOENT);
+    CHECK(md_inode_stat(s,directory,prepared,0,&st)==-ENOENT);
     CHECK(!md_inode_birth_commit(&birth) && !birth);
     close(pin);
     for (unsigned staged=0;staged<2;++staged) {
-        int fd=md_inode_open(s,directory,staged ? "prepared" : "ordinary",O_CREAT|O_RDWR,0666);
+        int fd=md_inode_open(s,directory,staged ? prepared : ordinary,O_CREAT|O_RDWR,0666);
         CHECK(fd>=0 && !md_inode_fstat(s,fd,&st) && (st.st_mode&0777)==0640);
         CHECK(!mdi_begin(s,0));
         struct mdi_node node;
@@ -1705,7 +1712,7 @@ static void native_birth_acl(void) {
         CHECK(md_acl_mode(actual,sizeof(bytes),0)==0640 && actual->entries[1].id==1000
             && actual->entries[1].permissions==4);
         struct md_identity reader=md_identity_new(1000,1000);
-        const char *name=staged ? "prepared" : "ordinary";
+        const char *name=staged ? prepared : ordinary;
         s->identity=&reader;
         struct md_open_completion plan;
         pin=md_inode_plan_open(s,directory,name,O_RDONLY,0,0,&plan,1,NULL);
@@ -1716,7 +1723,7 @@ static void native_birth_acl(void) {
         pin=md_inode_plan_open(s,directory,name,O_RDONLY|O_NOATIME,0,0,&plan,1,NULL);
         CHECK(pin>=0 && !close(pin));
         if (staged) {
-            CHECK(!md_inode_link(s,directory,"prepared",directory,"alias",0));
+            CHECK(!md_inode_link(s,directory,prepared,directory,"alias",0));
             md_inode_acl(s,&q,&result,&output);
             CHECK(!result.error && result.size==sizeof(acl) && actual->entries[1].permissions==4);
         }
@@ -1726,7 +1733,7 @@ static void native_birth_acl(void) {
     CHECK(pin>=0 && birth && !md_inode_birth_discard(&birth)); close(pin);
     CHECK(md_inode_stat(s,directory,"cancelled",0,&st)==-ENOENT);
     close(directory); md_inode_store_close(s); md_identity_release(&ids);
-    puts("PASS native birth ACL: default inheritance ignores umask, staged/ordinary creation, cancellation and hardlink promotion");
+    puts("PASS native birth ACL: default inheritance ignores umask, NAME_MAX staged/ordinary creation, cancellation and hardlink promotion");
 }
 static void native_plans(void) {
     struct md_inode_store *s=store("native-plans",1);
@@ -1781,7 +1788,7 @@ static void native_plans(void) {
         CHECK(pin>=0 && completion.kind==MD_OPEN_PLAN && (fcntl(pin,F_GETFL)&O_PATH));
         CHECK(!md_inode_stat(s,-1,"value",0,&st) && st.st_size==11+(i==2));
         snprintf(proc,sizeof(proc),"/proc/self/fd/%d",pin);
-        fd=open(proc,writable[i]|O_CLOEXEC); CHECK(fd>=0);
+        fd=open(proc,writable[i]|O_CLOEXEC,0600); CHECK(fd>=0);
         if (i==2) CHECK(!fstat(fd,&st) && st.st_size==0);
         CHECK(write(fd,"x",1)==1); close(fd); close(pin);
     }

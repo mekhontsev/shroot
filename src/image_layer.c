@@ -219,8 +219,8 @@ static int entry_file(struct md_inode_store *s, struct archive *ar, struct archi
     if (!r) r = record_metadata(s, entry, &node, mode);
     if (!r && capability) r = mdi_file_capability(s,&node,capability,capability_size);
     if (!r) {
-        char native[128];
-        snprintf(native, sizeof(native), "/proc/self/fd/%d/%s", s->objects, node.backing);
+        char native[NAME_MAX+96];
+        r = mdi_backing_path(s, &node, native, sizeof(native));
         archive_entry_xattr_reset(entry);
         while (!r && !archive_entry_xattr_next(entry, &name, &value, &length)) {
             if (mdi_xattr_virtual(name)) {

@@ -54,6 +54,12 @@ static int prepare_backing(struct md_inode_store *s,const struct mdi_node *paren
     }
     return fd;
 }
+static int leaf_path(char out[NAME_MAX+34],const char *parent,const char *name) {
+    size_t prefix=strlen(parent),length=strlen(name);
+    if (prefix+length+1>=NAME_MAX+34) return -ENAMETOOLONG;
+    memcpy(out,parent,prefix); out[prefix]='/'; memcpy(out+prefix+1,name,length+1);
+    return 0;
+}
 int mdi_leaf_create(struct md_inode_store *s,const struct mdi_node *parent,const char *name,int flags,mode_t mode) {
     if (parent->mode<0) return -EOPNOTSUPP;
     uint32_t uid,gid;
@@ -64,11 +70,11 @@ int mdi_leaf_create(struct md_inode_store *s,const struct mdi_node *parent,const
         return mdi_native_create_in(s->objects,parent->backing,name,flags,uid,gid,mode);
     char stage[33],target[NAME_MAX+34];
     r=mdi_name_valid(name);
+    if (!r) r=leaf_path(target,parent->backing,name);
     if (!r) r=mdi_random_id(stage);
     if (r) return r;
     int fd=prepare_backing(s,parent,stage,flags,uid,gid,mode);
     if (fd<0) return fd;
-    snprintf(target,sizeof(target),"%s/%s",parent->backing,name);
     /* Only unpublished native births move out of the backing root. The watch
      * owner uses this exact kernel move cookie to publish CREATE then OPEN. */
     if (renameat2(s->objects,stage,s->objects,target,RENAME_NOREPLACE)) r=-errno;
@@ -177,8 +183,8 @@ int md_inode_birth_commit(struct md_inode_birth **owner) {
     if (!r && birth->catalogue) return catalogue_birth(owner);
     char target[NAME_MAX+34];
     int committed=0;
+    if (!r) r=leaf_path(target,birth->backing,birth->name);
     if (!r) {
-        snprintf(target,sizeof(target),"%s/%s",birth->backing,birth->name);
         if (renameat2(s->objects,birth->stage,s->objects,target,RENAME_NOREPLACE)) r=-errno;
         else committed=1;
     }
@@ -238,9 +244,8 @@ static int leaf(struct md_inode_store *s,const struct mdi_node *parent,
 int mdi_leaf_lookup(struct md_inode_store *s,const struct mdi_node *parent,const char *name,struct mdi_node *out,struct stat *attributes,struct mdi_path_pin *pin) {
     if (parent->kind!=S_IFDIR || parent->source || !parent->attached) return -ENOENT;
     char path[NAME_MAX+34];
-    size_t prefix=strlen(parent->backing),length=strlen(name);
-    if (prefix+length+1>=sizeof(path)) return -ENAMETOOLONG;
-    memcpy(path,parent->backing,prefix); path[prefix]='/'; memcpy(path+prefix+1,name,length+1);
+    int result=leaf_path(path,parent->backing,name);
+    if (result) return result;
     int directory=mdi_directory_pin(s,parent);
     const char *selected=directory<0 ? path : name;
     if (directory<0) directory=s->objects;
@@ -306,7 +311,9 @@ selected:
     struct stat actual;
     r=mdi_backing_stat(s,&directory,&actual);
     if (r) return r;
-    char selected[NAME_MAX+34]; snprintf(selected,sizeof(selected),"%s/%s",parent,name);
+    char selected[NAME_MAX+34];
+    r=leaf_path(selected,parent,name);
+    if (r) return r;
     if (st->st_nlink) {
         if (fstatat(s->objects,selected,&actual,AT_SYMLINK_NOFOLLOW)) return -errno;
         if (st->st_dev!=actual.st_dev || st->st_ino!=actual.st_ino) return -ESTALE;

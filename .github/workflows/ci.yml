@@ -54,9 +54,11 @@ jobs:
           - compiler: clang
             sqlite: bundled
             static: 'ON'
+            cflags: ''
           - compiler: gcc
             sqlite: system
             static: 'OFF'
+            cflags: '-D_FORTIFY_SOURCE=3'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - name: Install build tools
@@ -66,6 +68,7 @@ jobs:
           cmake -S . -B build/test -G Ninja
           -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=${{ matrix.compiler }}
           -DCMAKE_ASM_COMPILER=${{ matrix.compiler }} -DSHROOT_BUILD_TESTS=ON
+          -DCMAKE_C_FLAGS="${{ matrix.cflags }}"
           -DSHROOT_SQLITE=${{ matrix.sqlite }} -DSHROOT_STATIC_RUNTIME=${{ matrix.static }}
       - name: Record actual unprivileged execution host
         run: |
