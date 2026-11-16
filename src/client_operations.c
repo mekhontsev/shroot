@@ -182,15 +182,19 @@ ENVIRONMENT_OPERATION(shroot_environment_remove,"remove")
 #undef ENVIRONMENT_OPERATION
 int shroot_environment_install(shroot_library *lib,const struct shroot_install_options *options,
         const struct shroot_io *io,shroot_job **out) {
-    if (!options || options->kind<SHROOT_SOURCE_ROOTFS || options->kind>SHROOT_SOURCE_OCI) {
+    if (!options || options->kind<SHROOT_SOURCE_ROOTFS || options->kind>SHROOT_SOURCE_REGISTRY
+            || (options->kind!=SHROOT_SOURCE_REGISTRY && (options->ca_file || options->ca_directory))) {
         if (out) *out=NULL;
         return -EINVAL;
     }
     struct shroot_arguments args={0};
     library_arguments(&args,lib,"install");
-    shroot_argument(&args,options->kind==SHROOT_SOURCE_ROOTFS ? "rootfs" : "oci");
+    const char *kinds[]={"rootfs","oci","registry"};
+    shroot_argument(&args,kinds[options->kind]);
     shroot_argument(&args,options->source); shroot_argument(&args,options->name);
     shroot_option(&args,"--resolver",options->resolver);
+    shroot_option(&args,"--ca-file",options->ca_file);
+    shroot_option(&args,"--ca-directory",options->ca_directory);
     return shroot_client_start(lib ? lib->context : NULL,&args,io,out);
 }
 int shroot_environment_restore(shroot_library *lib,const char *archive,const char *name,const struct shroot_io *io,shroot_job **out) {

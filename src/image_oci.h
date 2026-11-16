@@ -10,6 +10,10 @@ struct md_image_oci {
 int md_image_oci_read(sqlite3 *, int layout, int blobs, int scratch, const char *reference,
     struct md_image_oci *);
 int md_image_descriptor_read(sqlite3 *, const char *, struct md_image_descriptor *);
+int md_image_schema(sqlite3 *, const char *);
+int md_image_index_descriptor(sqlite3 *, const char *, const char *reference, struct md_image_descriptor *);
+int md_image_config_descriptor(sqlite3 *, const char *, struct md_image_descriptor *);
+int md_image_config_validate(sqlite3 *, const char *);
 void md_image_descriptor_free(struct md_image_descriptor *);
 void md_image_oci_free(struct md_image_oci *);
 /* Returns a verified, uncompressed anonymous tar descriptor. */

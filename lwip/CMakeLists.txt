@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     project(guest_packet_stack C)
-    set(shroot_native_code -fno-pie)
+    set(shroot_archive_code -fPIE)
     set(shroot_license_directory "${CMAKE_CURRENT_BINARY_DIR}/licenses")
 endif()
 include(FetchContent)
@@ -41,7 +41,7 @@ target_include_directories(guest-lwip PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${conte
 target_link_libraries(guest-lwip PRIVATE guest-sha256)
 # The state audit admits immutable relocated tables only with RELRO protection.
 target_link_options(guest-lwip INTERFACE -Wl,-z,relro,-z,now)
-target_compile_options(guest-lwip PRIVATE -std=c17 -O2 -Wall -Wextra -Werror ${shroot_native_code})
+target_compile_options(guest-lwip PRIVATE -std=c17 -O2 -Wall -Wextra -Werror ${shroot_archive_code})
 add_custom_command(TARGET guest-lwip POST_BUILD
     COMMAND ${CMAKE_COMMAND} -DNM=${CMAKE_NM} -DARCHIVE=$<TARGET_FILE:guest-lwip>
         -P ${CMAKE_CURRENT_SOURCE_DIR}/audit.cmake VERBATIM)

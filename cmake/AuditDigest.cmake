@@ -1,0 +1,11 @@
+execute_process(COMMAND "${NM}" -g --defined-only --format=posix "${ARCHIVE}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE symbols ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "Digest symbol audit failed: ${error}")
+endif()
+string(REPLACE "\n" ";" lines "${symbols}")
+foreach(line IN LISTS lines)
+    if(line MATCHES "^([^ ]+) [A-Za-z] " AND NOT CMAKE_MATCH_1 MATCHES "^shroot_digest_")
+        message(FATAL_ERROR "Digest exports an unnamespaced symbol: ${line}")
+    endif()
+endforeach()

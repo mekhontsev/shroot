@@ -6,6 +6,7 @@ same implementation. Names are local to that library, not global distributions.
 
 ```sh
 shroot library "$HOME/linux" install rootfs alpine-rootfs.tar.gz alpine
+shroot library "$HOME/linux" install registry docker.io/library/debian:stable debian
 shroot library "$HOME/linux" list
 shroot library "$HOME/linux" login alpine
 shroot library "$HOME/linux" exec alpine -- /bin/sh -c 'id; uname -a'
@@ -16,8 +17,9 @@ shroot library "$HOME/linux" prune
 ```
 
 `install oci LAYOUT NAME` imports a local OCI layout, selecting Linux ARM64 and
-preserving guest ownership. Registry acquisition is not yet provided by this
-native catalog. `--resolver CONTENTS` on installation seeds an absent or empty
+preserving guest ownership. `install registry REFERENCE NAME` pulls a public OCI
+image over HTTPS, including registries requiring anonymous Bearer authorization.
+`--resolver CONTENTS` on installation seeds an absent or empty
 resolver file; `resolver NAME CONTENTS --replace` explicitly replaces it while
 the environment is idle. No host DNS choice or network privilege is implicit.
 
@@ -45,6 +47,39 @@ import. Identical archives share a sealed base image but retain separate
 environment IDs and writable stores. Local OCI layouts use shared verified
 layers. The importer owns archive validation and metadata; the catalog never
 extracts files itself or creates another filesystem implementation.
+
+## Registry Downloads
+
+References accept a registry/repository with a tag or `@sha256:...` digest.
+Unqualified names use Docker Hub and an omitted tag means `latest`. Multi-platform
+indexes select Linux ARM64/v8; ambiguous matches, unsupported media, incorrect
+sizes and digests fail before name publication. Downloaded layouts use the same
+native importer and shared layers as local layouts. Identical selected manifests
+share a sealed base, not writable state or environment identity.
+
+TLS verifies the certificate chain and hostname. Android uses its system CA
+directory; ordinary Linux uses its host certificate bundle or directory.
+`--ca-file FILE` and `--ca-directory DIRECTORY` explicitly select custom trust.
+There is no insecure mode. Both initial URLs and redirects require HTTPS and
+reject embedded credentials. Registry tokens are sent only to that registry's
+origin, never to a different-port/host CDN or to the token endpoint. Private
+registry login credentials are not yet supported.
+
+The library's `cache` retains verified digest-addressed blobs. Each reuse checks
+size and hash. Downloads publish by synced no-replace rename, without a second
+copy of large layers or a host hardlink requirement. Cancellation preserves
+completed blobs; the next pull recovers abandoned download files under the
+catalog lock. `prune` can discard the download cache without affecting imported
+stores. Corrupt completed cache entries fail explicitly; prune before retrying.
+
+JSON responses are bounded to 8 MiB, index nesting to five documents, layers to
+256 per image and aggregate compressed layer data to 64 GiB. Descriptor admission
+also limits each blob to 8 GiB. Connect and stalled-transfer deadlines bound
+network failure, not total installation time. Curl and Mbed TLS are linked
+statically into the image worker only; no network library runs in a guest syscall
+path or is loaded into the embedding application. The image worker uses the
+host's dynamic libc so name resolution follows the host network, including
+Android's system resolver; this does not change guest execution helpers.
 
 ## Lifetime And Recovery
 
@@ -89,3 +124,10 @@ cancellation, backup/restore, catalog locking, format admission, identity/store
 separation, aliases, busy stores, corrupted metadata, relocation, recovery,
 dependency cycles and long chains. It reuses the native client guest fixture.
 Every run creates and removes its own temporary library.
+
+`tests/test_registry.py` uses local HTTPS servers with explicit test trust and
+the actual CLI, image worker and importer. It covers anonymous Bearer exchange,
+multi-platform selection, cross-origin redirects, certificate verification,
+corrupt input/cache, cancellation and retry, then executes the imported guest.
+It requires Python and the OpenSSL command-line tool to generate ephemeral
+certificates; no public network or preinstalled distribution is required.

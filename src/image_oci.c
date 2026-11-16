@@ -34,7 +34,7 @@ int md_image_descriptor_read(sqlite3 *db, const char *json, struct md_image_desc
     return r;
 }
 static int file_json(sqlite3 *db, int directory, const char *name, char **out) {
-    int fd = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    int fd = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -errno;
     int r = md_image_read(fd, 8*1024*1024, out);
     close(fd);
@@ -56,18 +56,22 @@ static int expect(sqlite3 *db, const char *json, const char *path, const char *v
     if (!r && strcmp(text, value)) r = -ENOTSUP;
     free(text); return r;
 }
-static int schema(sqlite3 *db, const char *json) {
+int md_image_schema(sqlite3 *db, const char *json) {
     sqlite3_stmt *q = NULL;
     int r = md_json_query(db, json, "SELECT json_extract(?1,'$.schemaVersion')", &q);
     if (!r && (sqlite3_step(q) != SQLITE_ROW || sqlite3_column_type(q, 0) != SQLITE_INTEGER
-            || sqlite3_column_int(q, 0) != 2)) r = -EINVAL;
+            || sqlite3_column_int64(q, 0) != 2)) r = -EINVAL;
     sqlite3_finalize(q); return r;
 }
-static int select_manifest(sqlite3 *db, int blobs, int scratch, const char *json, const char *reference,
-        unsigned depth, struct md_image_oci *out) {
-    if (depth > 4) return -ELOOP;
-    int r = schema(db, json);
+int md_image_index_descriptor(sqlite3 *db, const char *json, const char *reference,
+        struct md_image_descriptor *out) {
+    memset(out,0,sizeof(*out));
+    int r = md_image_schema(db, json);
     sqlite3_stmt *q = NULL;
+    if (!r) r=md_json_query(db,json,"SELECT json_type(?1,'$.manifests')",&q);
+    if (!r && (sqlite3_step(q)!=SQLITE_ROW || sqlite3_column_type(q,0)!=SQLITE_TEXT
+            || strcmp((const char *)sqlite3_column_text(q,0),"array"))) r=-EINVAL;
+    sqlite3_finalize(q); q=NULL;
     /* An index can also contain attestations and other architectures. Missing
      * platform is allowed here; the selected config is always checked below. */
     if (!r) r = md_json_query(db, json,
@@ -85,9 +89,15 @@ static int select_manifest(sqlite3 *db, int blobs, int scratch, const char *json
         if (!r && sqlite3_step(q) != SQLITE_DONE) r = -ENOTUNIQ;
     }
     sqlite3_finalize(q);
-    struct md_image_descriptor d = {0};
-    if (!r) r = md_image_descriptor_read(db, selected, &d);
+    if (!r) r = md_image_descriptor_read(db, selected, out);
     free(selected);
+    return r;
+}
+static int select_manifest(sqlite3 *db, int blobs, int scratch, const char *json, const char *reference,
+        unsigned depth, struct md_image_oci *out) {
+    if (depth > 4) return -ELOOP;
+    struct md_image_descriptor d = {0};
+    int r=md_image_index_descriptor(db,json,reference,&d);
     int index = !r && (!strcmp(d.media, "application/vnd.oci.image.index.v1+json")
         || !strcmp(d.media, "application/vnd.docker.distribution.manifest.list.v2+json"));
     if (!r && !index && strcmp(d.media, "application/vnd.oci.image.manifest.v1+json")
@@ -111,23 +121,33 @@ int md_image_oci_read(sqlite3 *db, int layout, int blobs, int scratch, const cha
     if (!r) r = file_json(db, layout, "index.json", &json);
     if (!r) r = select_manifest(db, blobs, scratch, json, reference, 0, out);
     free(json);
-    if (!r) r = schema(db, out->manifest);
-    sqlite3_stmt *q = NULL;
     struct md_image_descriptor config = {0};
-    if (!r) r = md_json_query(db, out->manifest, "SELECT json_extract(?1,'$.config')", &q);
-    if (!r) {
-        if (sqlite3_step(q) != SQLITE_ROW || sqlite3_column_type(q, 0) != SQLITE_TEXT) r = -EINVAL;
-        else r = md_image_descriptor_read(db, (const char *)sqlite3_column_text(q, 0), &config);
-    }
-    sqlite3_finalize(q);
-    if (!r && strcmp(config.media, "application/vnd.oci.image.config.v1+json")
-            && strcmp(config.media, "application/vnd.docker.container.image.v1+json")) r = -ENOTSUP;
+    if (!r) r = md_image_config_descriptor(db,out->manifest,&config);
     if (!r) r = blob_json(db, blobs, scratch, &config, &out->config);
-    if (!r) r = expect(db, out->config, "$.os", "linux");
-    if (!r) r = expect(db, out->config, "$.architecture", "arm64");
-    if (!r) r = expect(db, out->config, "$.rootfs.type", "layers");
+    if (!r) r = md_image_config_validate(db,out->config);
     md_image_descriptor_free(&config);
     if (r) md_image_oci_free(out);
+    return r;
+}
+int md_image_config_descriptor(sqlite3 *db,const char *manifest,struct md_image_descriptor *config) {
+    memset(config,0,sizeof(*config));
+    int r=md_image_schema(db,manifest);
+    sqlite3_stmt *q = NULL;
+    if (!r) r = md_json_query(db, manifest, "SELECT json_extract(?1,'$.config')", &q);
+    if (!r) {
+        if (sqlite3_step(q) != SQLITE_ROW || sqlite3_column_type(q, 0) != SQLITE_TEXT) r = -EINVAL;
+        else r = md_image_descriptor_read(db, (const char *)sqlite3_column_text(q, 0), config);
+    }
+    sqlite3_finalize(q);
+    if (!r && strcmp(config->media, "application/vnd.oci.image.config.v1+json")
+            && strcmp(config->media, "application/vnd.docker.container.image.v1+json")) r = -ENOTSUP;
+    if (r) md_image_descriptor_free(config);
+    return r;
+}
+int md_image_config_validate(sqlite3 *db,const char *config) {
+    int r=expect(db, config, "$.os", "linux");
+    if (!r) r=expect(db, config, "$.architecture", "arm64");
+    if (!r) r=expect(db, config, "$.rootfs.type", "layers");
     return r;
 }
 int md_image_unpack(int blobs, int scratch, const struct md_image_descriptor *d, const char *diff, int *out) {

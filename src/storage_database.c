@@ -75,8 +75,9 @@ static void initialize(void) {
     if (sqlite3_libversion_number()<3037000) requirement="version >= 3.37";
     else if (!sqlite3_threadsafe()) requirement="THREADSAFE=1 or 2";
     else if (!sqlite3_compileoption_used("ENABLE_PREUPDATE_HOOK")) requirement="ENABLE_PREUPDATE_HOOK";
+    else if (sqlite3_libversion_number()<3038000 && !sqlite3_compileoption_used("ENABLE_JSON1")) requirement="JSON functions";
     const char *omissions[]={"OMIT_FOREIGN_KEY","OMIT_TRIGGER","OMIT_WAL","OMIT_AUTHORIZATION",
-        "OMIT_CHECK","OMIT_INTEGRITY_CHECK"};
+        "OMIT_CHECK","OMIT_INTEGRITY_CHECK","OMIT_JSON"};
     for (size_t i=0;!requirement && i<sizeof(omissions)/sizeof(*omissions);++i)
         if (sqlite3_compileoption_used(omissions[i])) requirement=omissions[i];
     if (requirement) {

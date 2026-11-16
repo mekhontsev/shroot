@@ -83,8 +83,8 @@ Android kernel: actual task lifetime, descriptors, data IO and native checks
 | Owner | Responsibility | Does not own |
 | --- | --- | --- |
 | `libshroot`, CLI | Explicit runtime/store selection, typed requests, IO, exact-child lifetime and completion | In-process guest execution, Android authorization or guest syscall policy |
-| Native library/image owners | Named environments, imports, shared-source dependencies, backup/restore and cleanup | Android authorization, presentation or guest syscall scheduling |
-| Application services | Authorization, registry downloads, launch recipes, immutable helper staging, PTY, graphics/audio/input connections | Guest syscall policy or native resource lifetime |
+| Native library/image owners | Named environments, HTTPS OCI pulls, imports, shared-source dependencies, backup/restore and cleanup | Android authorization, presentation or guest syscall scheduling |
+| Application services | Authorization, launch recipes, immutable helper staging, PTY, graphics/audio/input connections | Guest syscall policy or native resource lifetime |
 | `namespace_run.c` | Explicit launch configuration and native process owner | Global current distribution or automatic privilege switching |
 | `bootstrap.c`, `elf.c`, `exec.c` | ELF admission/mapping, stack and exec reentry | Distribution-specific loader or libc policy |
 | `supervisor.c` | Launch services, event-loop ordering, progress and cancellation | Operation-specific syscall implementations |
@@ -120,10 +120,10 @@ The native image worker owns validated import, snapshots, backup, maintenance
 and launch data. `libshroot` and its CLI use this owner through a private,
 same-bundle management contract. Standalone `service` and offline clients reuse
 the filesystem engine rather than a separate filesystem implementation.
-The [native named catalog](library.md) supplies local OCI/rootfs installation and
-dependency-aware cleanup through the public library and CLI. Registry downloads
-and MagicDesk's migration to this catalog remain integration work; runtime and
-local catalog operations already run independently.
+The [native named catalog](library.md) supplies local OCI/rootfs installation,
+authenticated anonymous HTTPS OCI pulls and dependency-aware cleanup through
+the public library and CLI. MagicDesk's migration to this catalog remains
+integration work; runtime and catalog operations run independently.
 
 Named environments use the inode backend. A direct-rootfs backend remains a
 low-level fixture/control path, never a fallback after a namespace error.
@@ -435,7 +435,9 @@ dependencies by default. SQLite may instead be supplied by the system or a
 parent project's CMake target; see [provider requirements](embedding.md#sqlite-provider).
 It belongs to the namespace owners, not ART or the freestanding adapter.
 Image archive/compression dependencies are declared in
-[image-dependencies.cmake](image-dependencies.cmake). Integrators package helpers
+[image-dependencies.cmake](image-dependencies.cmake); static curl/Mbed TLS in
+[cmake/ImageHttp.cmake](cmake/ImageHttp.cmake) belong only to the image worker.
+Neither `libshroot` nor the supervisor links HTTP/TLS. Integrators package helpers
 and license notices; guest libc, desktop packages and GPU drivers remain guest-owned.
 
 ```sh

@@ -69,9 +69,12 @@ add_subdirectory(shroot)
 
 Shroot does not modify the supplied target or fetch another SQLite copy. Its
 directory-anchored VFS remains a separate adapter using public SQLite APIs.
+Static providers must also be suitable for linking into the PIE image worker.
 The required contract is SQLite >= 3.37, `THREADSAFE=1` or `2`, preupdate hooks,
 compile-option diagnostics, Unix VFS, WAL, foreign keys, triggers, CHECK constraints,
-integrity checks and authorizer support. Headers and required symbols are checked
+integrity checks, JSON functions and authorizer support. SQLite 3.37 requires
+`SQLITE_ENABLE_JSON1`; newer versions must not use `SQLITE_OMIT_JSON`.
+Headers and required symbols are checked
 by compilation/linking; runtime admission checks the loaded provider once, before opening persistent
 databases. Incompatible providers fail explicitly, without a silent fallback or
 a changed storage format. Each connection remains owned by one runtime thread.
@@ -93,6 +96,15 @@ does not copy system libraries into the installation. Android's private framewor
 SQLite is not an application dependency. A static provider shares the build but
 still contributes code to each executable that links it. `libshroot` itself has
 no SQLite dependency in either configuration.
+
+Other bundled third-party dependencies are static. Curl and Mbed TLS serve only
+the image worker's registry operations; lwIP and minimal SHA/HMAC retain their
+existing runtime owners. Full TLS and minimal cryptography have separate symbol
+namespaces. The embedding library loads none of these dependencies. Updating a
+bundled dependency requires rebuilding the matching native bundle.
+The image management worker always uses the host's dynamic libc for platform
+DNS integration. `SHROOT_STATIC_RUNTIME` controls execution helpers, not that
+host utility; its curl, TLS and compression code remain statically linked.
 
 Run the same `database` and `client_runtime` tests for each shipped provider.
 The standalone `tests/sqlite` project also accepts `SQLITE_AMALGAMATION`,

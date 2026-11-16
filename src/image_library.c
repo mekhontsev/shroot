@@ -3,6 +3,8 @@
 #include "image_io.h"
 #include "image_json.h"
 #include "image_import.h"
+#include "image_registry.h"
+#include "image_publish.h"
 #include "image_backup.h"
 #include "image_maintenance.h"
 #include "image_prepare.h"
@@ -228,14 +230,17 @@ static int prepare_base(const char *path) {
     if (!r && !md_inode_store_readonly(store)) r=-EINVAL;
     md_inode_store_close(store); return r;
 }
-static int install(struct md_library *lib, const char *kind, const char *source, const char *name, const char *resolver) {
+static int install(struct md_library *lib, const char *kind, const char *source, const char *name,
+        const char *resolver,const struct md_http_trust *trust) {
     int r=require_new(lib,name);
     struct md_environment item={0};
     if (!r) { strcpy(item.name,name); item.source=(char *)source; r=uuid(item.id); }
     if (!r) r=uuid(item.key);
     char store[PATH_MAX],base[PATH_MAX],layers[PATH_MAX],input[PATH_MAX];
     if (!r) r=md_library_path(lib,"instances",item.key,store);
-    int work=-1,snapshot=-1;
+    int work=-1,snapshot=-1,cache=-1,layout=-1;
+    char cache_path[PATH_MAX];
+    struct md_image_publish staging={.stage=-1,.parent=-1};
     if (!r && !strcmp(kind,"rootfs")) {
         work=openat(lib->root,"work",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
         if (work<0) r=-errno;
@@ -257,6 +262,19 @@ static int install(struct md_library *lib, const char *kind, const char *source,
         if (!r && lstat(source,&st)) r=-errno;
         if (!r && !S_ISDIR(st.st_mode)) r=-ENOTDIR;
         if (!r && !realpath(source,input)) r=-errno;
+    } else if (!r && !strcmp(kind,"registry")) {
+        r=md_library_path(lib,"work","registry",input);
+        if (!r) r=md_image_publish_begin(input,&staging);
+        if (!r && mkdirat(staging.stage,"store",0700)) r=-errno;
+        if (!r && (layout=openat(staging.stage,"store",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC))<0) r=-errno;
+        if (!r && (cache=openat(lib->root,"cache",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC))<0) r=-errno;
+        char digest[72];
+        if (!r) r=md_registry_pull(lib->json,source,cache,layout,trust,digest);
+        if (!r) {
+            strcpy(input,staging.path);
+            snprintf(item.image,sizeof(item.image),"import-v%d-oci-%s",MD_IMAGE_IMPORT_VERSION,digest+7);
+            r=md_library_path(lib,"cache",NULL,cache_path);
+        }
     }
     if (!r && strcmp(kind,"restore")) {
         r=md_library_path(lib,"images",item.image,base);
@@ -266,12 +284,15 @@ static int install(struct md_library *lib, const char *kind, const char *source,
         else if (!r && !strcmp(kind,"rootfs")) r=md_image_archive_snapshot(snapshot,base,0);
         else if (!r) {
             r=md_library_path(lib,"layers",NULL,layers);
-            if (!r) r=md_image_import(input,base,NULL,1,layers,NULL);
+            if (!r) r=md_image_import(input,base,NULL,1,layers,cache>=0 ? cache_path : NULL);
         }
         if (!r) r=md_image_create(base,store);
     } else if (!r) r=md_image_archive_import(source,store,1);
     if (snapshot>=0) close(snapshot);
     if (work>=0) close(work);
+    if (cache>=0) close(cache);
+    if (layout>=0) close(layout);
+    md_image_publish_close(&staging);
     if (!r && resolver) r=md_image_resolver(store,resolver,0);
     if (!r) r=publish(lib,&item);
     if (!r) r=output_record(lib,&item);
@@ -293,16 +314,27 @@ int md_library_command(int argc,char **argv) {
     const char *operation=argv[1];
     int install_command=!strcmp(operation,"install"),restore=!strcmp(operation,"restore");
     int r=0;
-    if (install_command && (argc<5 || argc>7 || (strcmp(argv[2],"rootfs") && strcmp(argv[2],"oci"))
-            || (argc!=5 && (argc!=7 || strcmp(argv[5],"--resolver"))))) return -EINVAL;
+    const char *resolver=NULL;
+    struct md_http_trust trust={0};
+    if (install_command) {
+        if (argc<5 || (strcmp(argv[2],"rootfs") && strcmp(argv[2],"oci") && strcmp(argv[2],"registry"))) return -EINVAL;
+        for (int i=5; i<argc; i+=2) {
+            const char **field=!strcmp(argv[i],"--resolver") ? &resolver
+                : !strcmp(argv[i],"--ca-file") ? &trust.file
+                : !strcmp(argv[i],"--ca-directory") ? &trust.directory : NULL;
+            if (!field || *field || i+1>=argc) return -EINVAL;
+            *field=argv[i+1];
+        }
+        if (strcmp(argv[2],"registry") && (trust.file || trust.directory)) return -EINVAL;
+    }
     if (restore && argc!=4) return -EINVAL;
     if (!strcmp(operation,"init") && argc!=2) return -EINVAL;
     struct md_library lib;
     int locked=strcmp(operation,"list") && strcmp(operation,"resolve");
     r=open_library(argv[0],install_command || restore || !strcmp(operation,"init"),locked,&lib);
     if (!r && argc==2 && !strcmp(operation,"init")) { }
-    else if (!r && install_command) r=install(&lib,argv[2],argv[3],argv[4],argc==7 ? argv[6] : NULL);
-    else if (!r && restore) r=install(&lib,"restore",argv[2],argv[3],NULL);
+    else if (!r && install_command) r=install(&lib,argv[2],argv[3],argv[4],resolver,&trust);
+    else if (!r && restore) r=install(&lib,"restore",argv[2],argv[3],NULL,NULL);
     else if (!r && argc==2 && !strcmp(operation,"list")) r=list(&lib);
     else if (!r && argc==2 && !strcmp(operation,"prune")) r=md_library_prune(&lib);
     else if (!r && argc>=3) {

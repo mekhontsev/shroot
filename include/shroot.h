@@ -86,10 +86,12 @@ int shroot_remove_layer(shroot_context *, const char *path, const struct shroot_
 int shroot_storage_format(shroot_context *, const struct shroot_io *, shroot_job **);
 int shroot_import_version(shroot_context *, const struct shroot_io *, shroot_job **);
 
-enum shroot_source_kind { SHROOT_SOURCE_ROOTFS, SHROOT_SOURCE_OCI };
+enum shroot_source_kind { SHROOT_SOURCE_ROOTFS, SHROOT_SOURCE_OCI, SHROOT_SOURCE_REGISTRY };
 struct shroot_install_options {
     enum shroot_source_kind kind;
     const char *source, *name, *resolver;
+    /* Optional HTTPS trust for registry pulls; NULL selects host certificates. */
+    const char *ca_file, *ca_directory;
 };
 int shroot_library_initialize(shroot_library *, const struct shroot_io *, shroot_job **);
 int shroot_library_list(shroot_library *, const struct shroot_io *, shroot_job **);

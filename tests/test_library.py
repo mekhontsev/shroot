@@ -114,6 +114,17 @@ class LibraryTest(unittest.TestCase):
             self.assertEqual(len(json.loads(self.call("list"))), 1)
             self.call("resolve", "a")
 
+    def test_local_oci_rejects_fifo_inputs_without_waiting(self):
+        for name in ("index.json", "blob"):
+            with self.subTest(input=name):
+                layout = self.root / ("fifo-" + name)
+                descriptor = write_layout([self.archive], layout)
+                source = layout / "index.json" if name == "index.json" else layout / "blobs/sha256" / descriptor["digest"][7:]
+                source.unlink()
+                os.mkfifo(source)
+                self.call("install", "oci", layout, "fifo", code=1)
+        self.assertFalse(list((self.library / "names").iterdir()))
+
     def test_relocation_preserves_identity_and_relative_sources(self):
         before = self.install("a")
         destination = self.root / "moved"

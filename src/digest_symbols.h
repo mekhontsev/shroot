@@ -1,0 +1,39 @@
+#ifndef SHROOT_DIGEST_SYMBOLS_H
+#define SHROOT_DIGEST_SYMBOLS_H
+/* The runtime's minimal crypto build must not resolve against a full TLS
+ * library in the image worker. Keep its pinned upstream ABI private. */
+#define mbedtls_internal_sha256_process shroot_digest_internal_sha256_process
+#define mbedtls_sha256 shroot_digest_sha256
+#define mbedtls_sha256_clone shroot_digest_sha256_clone
+#define mbedtls_sha256_finish shroot_digest_sha256_finish
+#define mbedtls_sha256_free shroot_digest_sha256_free
+#define mbedtls_sha256_init shroot_digest_sha256_init
+#define mbedtls_sha256_starts shroot_digest_sha256_starts
+#define mbedtls_sha256_update shroot_digest_sha256_update
+#define mbedtls_md shroot_digest_md
+#define mbedtls_md_clone shroot_digest_md_clone
+#define mbedtls_md_finish shroot_digest_md_finish
+#define mbedtls_md_free shroot_digest_md_free
+#define mbedtls_md_get_name shroot_digest_md_get_name
+#define mbedtls_md_get_size shroot_digest_md_get_size
+#define mbedtls_md_get_type shroot_digest_md_get_type
+#define mbedtls_md_hmac shroot_digest_md_hmac
+#define mbedtls_md_hmac_finish shroot_digest_md_hmac_finish
+#define mbedtls_md_hmac_reset shroot_digest_md_hmac_reset
+#define mbedtls_md_hmac_starts shroot_digest_md_hmac_starts
+#define mbedtls_md_hmac_update shroot_digest_md_hmac_update
+#define mbedtls_md_info_from_ctx shroot_digest_md_info_from_ctx
+#define mbedtls_md_info_from_string shroot_digest_md_info_from_string
+#define mbedtls_md_info_from_type shroot_digest_md_info_from_type
+#define mbedtls_md_init shroot_digest_md_init
+#define mbedtls_md_list shroot_digest_md_list
+#define mbedtls_md_setup shroot_digest_md_setup
+#define mbedtls_md_starts shroot_digest_md_starts
+#define mbedtls_md_update shroot_digest_md_update
+#define mbedtls_ct_memcmp shroot_digest_ct_memcmp
+#define mbedtls_ct_memcpy_if shroot_digest_ct_memcpy_if
+#define mbedtls_ct_memcpy_offset shroot_digest_ct_memcpy_offset
+#define mbedtls_ct_zero shroot_digest_ct_zero
+#define mbedtls_platform_zeroize shroot_digest_platform_zeroize
+#define mbedtls_zeroize_and_free shroot_digest_zeroize_and_free
+#endif

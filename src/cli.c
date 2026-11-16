@@ -80,12 +80,18 @@ static int library_submit(shroot_context *context,int argc,char **argv,shroot_jo
     else if (argc==3 && !strcmp(operation,"remove")) r=shroot_environment_remove(library,argv[2],NULL,out);
     else if (argc==4 && !strcmp(operation,"backup")) r=shroot_environment_backup(library,argv[2],argv[3],NULL,out);
     else if (argc==4 && !strcmp(operation,"restore")) r=shroot_environment_restore(library,argv[2],argv[3],NULL,out);
-    else if ((argc==5 || (argc==7 && !strcmp(argv[5],"--resolver"))) && !strcmp(operation,"install")) {
-        struct shroot_install_options options={.source=argv[3],.name=argv[4],.resolver=argc==7 ? argv[6] : NULL};
-        if (!strcmp(argv[2],"rootfs") || !strcmp(argv[2],"oci")) {
-            options.kind=!strcmp(argv[2],"rootfs") ? SHROOT_SOURCE_ROOTFS : SHROOT_SOURCE_OCI;
-            r=shroot_environment_install(library,&options,NULL,out);
+    else if (argc>=5 && !strcmp(operation,"install")) {
+        struct shroot_install_options options={.source=argv[3],.name=argv[4]};
+        const char *kinds[]={"rootfs","oci","registry"};
+        for (size_t i=0; i<3; ++i) if (!strcmp(argv[2],kinds[i])) { options.kind=(enum shroot_source_kind)i; r=0; break; }
+        for (int i=5; !r && i<argc; i+=2) {
+            const char **field=!strcmp(argv[i],"--resolver") ? &options.resolver
+                : !strcmp(argv[i],"--ca-file") ? &options.ca_file
+                : !strcmp(argv[i],"--ca-directory") ? &options.ca_directory : NULL;
+            if (!field || *field || i+1>=argc) r=-EINVAL;
+            else *field=argv[i+1];
         }
+        if (!r) r=shroot_environment_install(library,&options,NULL,out);
     } else if ((argc==4 || (argc==5 && !strcmp(argv[4],"--replace"))) && !strcmp(operation,"resolver"))
         r=shroot_environment_resolver(library,argv[2],argv[3],argc==5,NULL,out);
     else if (argc>=3 && (!strcmp(operation,"run") || !strcmp(operation,"exec") || !strcmp(operation,"login")))
@@ -156,7 +162,8 @@ static int runtime_directory(char path[PATH_MAX]) {
 static void usage(void) {
     puts("Usage: shroot [--runtime DIRECTORY] COMMAND [ARGS]\n"
         "  library DIRECTORY init | list | prune | resolve NAME | remove NAME\n"
-        "  library DIRECTORY install rootfs|oci SOURCE NAME [--resolver CONTENTS]\n"
+        "  library DIRECTORY install rootfs|oci|registry SOURCE NAME [--resolver CONTENTS]\n"
+        "      [--ca-file FILE] [--ca-directory DIRECTORY] (registry only)\n"
         "  library DIRECTORY backup NAME ARCHIVE | restore ARCHIVE NAME\n"
         "  library DIRECTORY exec|run|login NAME [OPTIONS] [-- COMMAND...]\n"
         "  rootfs ARCHIVE NEW_IMAGE | import OCI_LAYOUT NEW_IMAGE --preserve-ownership\n"

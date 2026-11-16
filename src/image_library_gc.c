@@ -205,6 +205,9 @@ int md_library_prune(struct md_library *lib) {
     if (!r && step!=SQLITE_DONE) r=-EIO;
     sqlite3_finalize(q);
     if (!r) r=directory(lib,"layers",remove_layer,lib);
+    char work[PATH_MAX];
+    if (!r) r=md_library_path(lib,"work",NULL,work);
+    if (!r) r=md_image_publish_recover(work);
     const char *inputs[]={"names","work","cache"};
     for (size_t i=0; !r && i<3; ++i) r=directory(lib,inputs[i],clean_input,(void *)inputs[i]);
     return r;
