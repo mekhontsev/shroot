@@ -37,7 +37,8 @@ static long socket_input(long nr, long a0, long a1, long a2, long a3, long a4, l
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%s:%d: %s errno=%d\n", __FILE__, __LINE__, #x, errno); exit(1); } } while (0)
 static unsigned descriptors(void) {
     DIR *d = opendir("/proc/self/fd"); CHECK(d);
-    unsigned n = 0; while (readdir(d)) ++n;
+    unsigned n = 0;
+    while (readdir(d)) ++n;
     closedir(d); return n;
 }
 static void readable(int fd) {
@@ -163,8 +164,16 @@ static void errors(const char *base, int guest) {
     CHECK(syscall(SYS_sendmsg, fd, (void *)1, 0) == -1 && errno == EFAULT);
     CHECK(connect(fd, (struct sockaddr *)&addr, sizeof(addr) + 1) == -1 && errno == EINVAL);
     CHECK(svc_connect(-1, &addr, length) == -EBADF);
+    char private_path[64];
+    if (guest==2) {
+        snprintf(private_path,sizeof(private_path),"/tmp/socket-errors-%d",getpid());
+        CHECK(!mkdir(private_path,0700));
+        int directory=open(private_path,O_PATH|O_DIRECTORY|O_CLOEXEC); CHECK(directory>=0);
+        CHECK(!mkdirat(directory,"denied",0000)); close(directory);
+        base=private_path;
+    }
     length = address(&addr, base, "new");
-    if (guest) {
+    if (guest==1) {
         CHECK(bind(fd, (struct sockaddr *)&addr, length) == -1 && errno == ENOTSUP);
         struct stat st; CHECK(lstat(addr.sun_path, &st) == -1 && errno == ENOENT);
     } else { CHECK(bind(fd, (struct sockaddr *)&addr, length) == 0); CHECK(unlink(addr.sun_path) == 0); }
@@ -175,15 +184,27 @@ static void errors(const char *base, int guest) {
     length = address(&addr, base, "denied/socket");
     CHECK(connect(fd, (struct sockaddr *)&addr, length) == -1 && errno == EACCES);
     address(&addr, base, "denied"); CHECK(chmod(addr.sun_path, 0700) == 0); close(fd);
-    puts("PASS sockets: native permission/type failures, invalid pointers and explicit creation/batch limits");
+    if (guest==2) {
+        CHECK(!rmdir(addr.sun_path)); CHECK(!rmdir(private_path));
+    }
+    puts("PASS sockets: native permission/type failures, invalid pointers and backend socket creation semantics");
 }
 static int client(const char *base, const char *files, int stream, int packet, int datagram, pid_t creator, int guest) {
-    unsigned before = descriptors();
+    /* Namespace rights delivery admits one reusable CLOEXEC table channel.
+     * Qualify that cold admission separately from per-operation FD balance. */
+    unsigned cold=descriptors();
     connection(base, "s", stream, SOCK_STREAM, creator);
-    connection(base, "p", packet, SOCK_SEQPACKET, creator);
-    datagrams(base, datagram, guest);
+    unsigned before = descriptors();
+    CHECK(before==cold+(guest==2));
+    for (unsigned i=0;i<16;++i) {
+        connection(base, "s", stream, SOCK_STREAM, creator);
+        connection(base, "p", packet, SOCK_SEQPACKET, creator);
+        datagrams(base, datagram, guest);
+        CHECK(descriptors()==before);
+    }
     puts("PASS sockets: stream/seqpacket/datagram, SCM_RIGHTS, credentials and shared mmap");
-    native_addresses(); errors(files, guest);
+    native_addresses();
+    errors(files, guest);
     CHECK(descriptors() == before);
     puts("PASS sockets: descriptor counts unchanged after success and failure");
     return 0;
@@ -222,8 +243,9 @@ static int driver(int argc, char **argv) {
     if (probe) {
         struct stat st; CHECK(fstat(dir, &st) == 0 && st.st_uid == getuid() && (st.st_mode & 0777) == 0700);
         int file = openat(dir, "file", O_CREAT | O_EXCL | O_WRONLY, 0600); CHECK(file >= 0); close(file);
+        CHECK(fchdir(dir) == 0);
         for (unsigned i = 0; i < 2; ++i) {
-            struct sockaddr_un addr; socklen_t size = address(&addr, i ? host : directory, i ? "alias" : "plain");
+            struct sockaddr_un addr; socklen_t size = address(&addr, i ? host : ".", i ? "alias" : "plain");
             int fd = socket(AF_UNIX, SOCK_STREAM, 0); CHECK(fd >= 0);
             CHECK(bind(fd, (struct sockaddr *)&addr, size) == -1 && errno == EACCES); close(fd);
         }
@@ -273,16 +295,20 @@ static int driver(int argc, char **argv) {
     }
     args[n++] = "/usr/bin/md-socket-fixture"; args[n++] = "client"; args[n++] = base; args[n++] = host;
     for (unsigned i = 0; i < 4; ++i) args[n++] = numbers[i];
+    args[n++] = !strcmp(mode,"namespace") ? "2" : "1";
     args[n] = NULL; execv(launcher, args); CHECK(0); return 1;
 }
 #endif
 int main(int argc, char **argv) {
     if (argc == 4 && !strcmp(argv[1], "routed-client")) {
-        unsigned before = descriptors();
         int listener = atoi(argv[2]); pid_t creator = (pid_t)atoi(argv[3]);
-        for (unsigned i = 0; i < 2; i++) {
+        unsigned cold=descriptors();
+        connection("/tmp/virtual-display", "s", listener, SOCK_STREAM, creator);
+        unsigned before=descriptors(); CHECK(before==cold+1);
+        for (unsigned i = 0; i < 16; i++) {
             connection("/tmp/virtual-display", "s", listener, SOCK_STREAM, creator);
             connection("@/tmp/virtual-display", "s", listener, SOCK_STREAM, creator);
+            CHECK(descriptors()==before);
         }
         struct stat st;
         CHECK(stat("/tmp/virtual-display/s", &st) == -1 && errno == ENOENT);
@@ -290,8 +316,8 @@ int main(int argc, char **argv) {
         puts("PASS socket routes: independent connections, shell/exec/env-i, credentials, SCM_RIGHTS and shared mmap");
         return 0;
     }
-    if (argc == 8 && !strcmp(argv[1], "client"))
-        return client(argv[2], argv[3], atoi(argv[4]), atoi(argv[5]), atoi(argv[6]), (pid_t)atoi(argv[7]), 1);
+    if (argc == 9 && !strcmp(argv[1], "client"))
+        return client(argv[2], argv[3], atoi(argv[4]), atoi(argv[5]), atoi(argv[6]), (pid_t)atoi(argv[7]), atoi(argv[8]));
 #ifdef MD_SOCKET_DRIVER
     return driver(argc, argv);
 #else

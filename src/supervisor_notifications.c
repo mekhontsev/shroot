@@ -186,8 +186,9 @@ void handle_notification(const struct seccomp_notif *request) {
     signal_execution_checkpoint(t);
     int replay=t->ready && q.data.instruction_pointer==abi.buffer_admit
         && (q.data.nr==SYS_epoll_pwait || q.data.nr==SYS_epoll_pwait2 || q.data.nr==SYS_epoll_ctl);
-    CHECK(md_broker_filesystem_call(q.data.nr) || q.data.nr==SYS_prctl || q.data.nr==SYS_gettid
-        || q.data.nr==SYS_rt_sigprocmask || replay);
+    if (!(md_broker_filesystem_call(q.data.nr) || q.data.nr==SYS_prctl || q.data.nr==SYS_gettid
+            || q.data.nr==SYS_rt_sigprocmask || replay))
+        notification_conflict(t,"unexpected-notification-call",&q,NULL,__LINE__);
     unsigned purpose=replay ? readiness_admission_purpose(t,&q.data) : q.data.args[0];
     int buffer_admission=replay || (q.data.nr==SYS_gettid && t->ready
         && q.data.instruction_pointer==abi.buffer_admit

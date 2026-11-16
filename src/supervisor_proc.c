@@ -878,7 +878,7 @@ void proc_lookup_start(struct thread *t) {
             || (nr==SYS_ioctl && md_filesystem_ioctl_command((unsigned)args[1])))) {
         md_proc_file_release(file); file=NULL;
     }
-    int filesystem=!file && (nr==SYS_lseek || nr==SYS_getdents64 || nr==SYS_fstatfs
+    int filesystem_call=!file && (nr==SYS_lseek || nr==SYS_getdents64 || nr==SYS_fstatfs
         || nr==SYS_fsync || nr==SYS_fdatasync || nr==SYS_syncfs
         || (nr==SYS_ioctl && md_filesystem_ioctl_command((unsigned)args[1])));
     if (nr==SYS_mmap) {
@@ -916,12 +916,12 @@ void proc_lookup_start(struct thread *t) {
                 : spec.writing ? MD_PROC_FILE_WRITE : MD_PROC_FILE_READ);
         if (error) { md_proc_file_release(file); return_value(t,regs,error); return; }
         t->proc.file=file;
-    } else if (!filesystem && nr!=SYS_read && nr!=SYS_readv
+    } else if (!filesystem_call && (!filesystem || (nr!=SYS_read && nr!=SYS_readv
             && (nr!=SYS_ioctl || md_watch_ioctl_native(nr,args[1]))
-            && nr!=SYS_splice && nr!=SYS_tee && nr!=SYS_sendfile) {
-        /* Without a typed control, only FIONREAD can require watch adaptation.
-         * Other ioctls already passed their domain owners; execute at the
-         * original PC/mask, without a cancel/replay trip through WATCH_ENTRY. */
+            && nr!=SYS_splice && nr!=SYS_tee && nr!=SYS_sendfile))) {
+        /* Selector collisions do not create watch ownership. Without an inode
+         * worker, unowned descriptors are native, including read/readv and
+         * FIONREAD. Preserve the original PC/mask and avoid WATCH_ENTRY. */
         native_continue(t); return;
     }
     if (entry_pending(t)) {
@@ -934,7 +934,7 @@ void proc_lookup_start(struct thread *t) {
     t->watch_wait=0;
     if (!save_signal_mask(t,&t->execution.mask,"proc-lookup-mask")
             || !shield(t) || !skip(t->pid)) return;
-    if (file || filesystem) {
+    if (file || filesystem_call) {
         calls++; t->calls++; t->debug.step_call=md_debugger_step(debugger,t->pid);
         dispatch_with_stack(t);
     } else { t->phase=WATCH_CANCEL; resume(t->pid,0); }

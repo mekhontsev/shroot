@@ -4273,23 +4273,29 @@ static long watch_mask_trace(int request,pid_t pid,void *address,void *data) {
     ++fd_resume_calls; errno=ESRCH; return -1;
 }
 static void native_ioctl_route(void) {
-    const unsigned commands[]={FIONBIO,0x12345678,FIONREAD};
-    for (unsigned i=0;i<sizeof(commands)/sizeof(*commands);++i) {
+    const struct { int nr; unsigned command; int watch; } calls[]={
+        {SYS_ioctl,FIONBIO,0},{SYS_ioctl,0x12345678,0},{SYS_ioctl,FIONREAD,1},
+        {SYS_read,0,1},{SYS_readv,0,1},{SYS_splice,0,1},{SYS_tee,0,1},{SYS_sendfile,0,1}};
+    assert(!filesystem);
+    for (unsigned worker=0;worker<2;++worker) for (unsigned i=0;i<sizeof(calls)/sizeof(*calls);++i) {
+        filesystem=worker ? (struct md_fs_worker *)(uintptr_t)1 : NULL;
+        int watch=worker && calls[i].watch;
         struct thread t={.pid=123,.phase=IDLE,.ready=1,.seccomp.application_filter=1};
         t.resources.files=md_fd_origins_new(); assert(t.resources.files);
-        struct user_pt_regs regs={0}; regs.regs[8]=SYS_ioctl; regs.regs[0]=5;
-        regs.regs[1]=commands[i]; regs.regs[2]=1;
+        struct user_pt_regs regs={0}; regs.regs[8]=calls[i].nr; regs.regs[0]=5;
+        regs.regs[1]=calls[i].command; regs.regs[2]=1;
         fd_expected_resume=PTRACE_CONT; fd_resume_calls=0;
-        checkpoints.trace=i==2 ? watch_mask_trace : fd_resume_trace;
+        checkpoints.trace=watch ? watch_mask_trace : fd_resume_trace;
         thread_index[t.pid%THREAD_BUCKETS]=&t;
         struct seccomp_data call=syscall_description(&regs);
         proc_lookup_begin(&t,&call,&regs);
         assert(fd_resume_calls==1 && !t.proc.lookup.table && t.phase==IDLE);
-        assert(t.resume_lost==(i==2));
+        assert(t.resume_lost==watch);
         checkpoints.trace=checkpoint_native_trace; thread_index[t.pid%THREAD_BUCKETS]=NULL;
         md_fd_origins_release(t.resources.files);
     }
-    puts("PASS ioctl routing: original native continuation, FIONREAD retains watch admission");
+    filesystem=NULL;
+    puts("PASS unowned FD routing: direct native IO and ioctl, namespace watch admission, original continuation");
 }
 static void readiness_admission_identity(void) {
     struct md_fd_origins *files=md_fd_origins_new(); assert(files);

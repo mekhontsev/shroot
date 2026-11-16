@@ -214,10 +214,15 @@ long md_socket_address_call(const struct md_fs *fs, const char *exe, long nr, co
     if (nr == SYS_bind)
         return fs->endpoint[0] ? md_namespace_socket_bind(fs, (int)a[0], path) : -ENOTSUP;
     long fd = -1;
+    int namespace_address=0;
     if (fs->endpoint[0] && (!md_fs_host_path(fs, path) || md_proc_path(path).kind)) {
         r = md_namespace_socket_address(fs, path, &address, &length);
-        if (r < 0) return r;
-    } else {
+        /* An inherited native directory has no inode-store address. The file
+         * owner still validates the proc alias and pins its selected target. */
+        if (r<0 && (r!=-EXDEV || !md_proc_path(path).kind)) return r;
+        namespace_address=!r;
+    }
+    if (!namespace_address) {
     unsigned long open_args[6] = {(unsigned long)AT_FDCWD, (unsigned long)path,
                                   O_PATH | O_CLOEXEC, 0, 0, 0};
     fd = md_file_call(fs, exe, SYS_openat, open_args);
