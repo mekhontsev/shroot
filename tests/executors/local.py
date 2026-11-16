@@ -165,3 +165,9 @@ class LocalExecutor:
 
     def native_path(self, target):
         return str(target)
+
+    def host_tool(self, name):
+        path = shutil.which(name)
+        if path is None:
+            raise RuntimeError('Native fixture requires host utility: ' + name)
+        return path

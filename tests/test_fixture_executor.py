@@ -14,6 +14,14 @@ from fixture_executor import FixtureExecutor, bounded_shell
 
 
 class CapturedCommands(unittest.TestCase):
+    def test_android_host_tools_remain_on_the_selected_device(self):
+        executor = self.executor(Path('/unused'))
+        for mode in ('shell', 'app'):
+            executor.mode = mode
+            self.assertEqual(executor.host_tool('time'), '/system/bin/time')
+            self.assertEqual(executor.host_tool('taskset'), '/system/bin/taskset')
+        executor.client.call.assert_not_called()
+
     def test_capture_survives_removing_the_workload_root(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'evidence'

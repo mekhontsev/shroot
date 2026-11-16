@@ -139,4 +139,4 @@ def observe_cpu(run_shell):
 
 
 def observe_suite_cpu(suite):
-    return observe_cpu(lambda command: suite.command(['/system/bin/sh', '-c', command], quiet=True))
+    return observe_cpu(lambda command: suite.command([suite.executor.shell, '-c', command], quiet=True))

@@ -15,11 +15,13 @@ import subprocess
 from docker_network_fixture import Observer
 from test_oci_services import Suite
 from benchmark_cpu import observe_suite_cpu
+from fixture_executor import FixtureExecutor
 
 
 def main():
     profiles = ('host', 'routed', 'filtered', 'nat')
     parser = argparse.ArgumentParser(description=__doc__)
+    FixtureExecutor.add_argument(parser)
     parser.add_argument('build', type=Path)
     parser.add_argument('store')
     parser.add_argument('--sysroot', type=Path, required=True)
@@ -43,7 +45,7 @@ def main():
         str(Path(__file__).with_suffix('.c')), '-L' + str(lib), '-L' + str(gcc),
         '-Wl,--start-group', '-lc', '-lgcc', '-lgcc_eh', '-Wl,--end-group',
         str(gcc / 'crtend.o'), str(lib / 'crtn.o'), '-o', str(binary)], check=True)
-    suite = Suite(args.output, args.build)
+    suite = Suite(args.output, args.build, executor=args.executor)
     observer = Observer()
     guest = ['--store', args.store, '--user', '0:0']
     prefix = [suite.runner, *guest]

@@ -8,12 +8,14 @@ import statistics
 
 from test_oci_services import Suite
 from benchmark_cpu import observe_suite_cpu
+from fixture_executor import FixtureExecutor
 
 CONTROL_WORKLOADS = ('fd-dup', 'fd-stat', 'fd-flags', 'fd-ioctl', 'fd-bytes',
                      'identity', 'process-identity', 'uname', 'ipc-nowait', 'socket-nowait', 'socket-rights')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    FixtureExecutor.add_argument(parser)
     parser.add_argument('--build', required=True, type=Path)
     parser.add_argument('--reference', type=Path,
                         help='Optional second runtime; it must be executable by the selected identity')
@@ -43,7 +45,7 @@ def main():
         parser.error('--file-blocks must be between 1 and 64')
     if args.cpu_mask is not None and args.cpu_mask <= 0:
         parser.error('--cpu-mask must be a positive hexadecimal mask')
-    suite = Suite(args.output, args.build)
+    suite = Suite(args.output, args.build, executor=args.executor)
     target = '/opt/md-readiness-' + suite.report['id']
     base = ['--store', args.store, '--user', '0:0', '--bind', suite.base, target,
             '--deadline-seconds', '60']
@@ -70,7 +72,8 @@ def main():
             blockScope='first block follows fixture setup, not a dropped filesystem cache; tail is the last half',
             cpuScope='block CPUs are caller endpoints, not worker placement; frequencies cover the command envelope')
         suite.report['fixtureHash'] = suite.command(['sha256sum', suite.base + '/benchmark'], quiet=True)
-        placement = [] if args.cpu_mask is None else ['/system/bin/taskset', format(args.cpu_mask, 'x')]
+        placement = [] if args.cpu_mask is None else [suite.executor.host_tool('taskset'), format(args.cpu_mask, 'x')]
+        timer = suite.executor.host_tool('time')
         modes = {}
         for name, runner in candidates:
             for mode, enabled in (('base', '0'), ('lazy', '1')):
@@ -125,7 +128,7 @@ def main():
             for workload, command in workloads.items():
                 for name in order[offset:] + order[:offset]:
                     with observe_suite_cpu(suite) as cpu:
-                        output = suite.command(['/system/bin/time', '-p', *placement, *modes[name], '--', *command])
+                        output = suite.command([timer, '-p', *placement, *modes[name], '--', *command])
                     measurement = dict(re.findall(r'^(real|user|sys)\s+(\d+\.\d+)\s*$', output, re.M))
                     assert len(measurement) == 3, output
                     row = dict(mode=name, workload=workload, round=round_number, cpu=cpu,

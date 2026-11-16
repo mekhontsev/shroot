@@ -598,7 +598,12 @@ and native executable; pairs stay adjacent and alternate their order.
 profiles. `--output DIRECTORY` separates comparison receipts.
 `benchmark_readiness.py --build BUILD --reference BASELINE --store STORE`
 interleaves filesystem/readiness workloads across both runtimes and Base/lazy
-entry. It does not pin CPUs by default. `--cpu-mask HEX` applies the same native
+entry. Both benchmark runners select `--executor local|shell|app`; local
+execution resolves host utilities from PATH, while Android adapters use the
+selected device's tools. Readiness timing needs host `time`; explicit CPU
+placement additionally needs `taskset`. The fixture needs a C compiler and Linux
+headers inside its guest (Alpine: `build-base linux-headers`).
+It does not pin CPUs by default. `--cpu-mask HEX` applies the same native
 taskset mask to both runtime process trees for a controlled follow-up; reports
 retain that mask and CPU-frequency observations. This changes neither governor
 nor host frequency limits, and pinned results do not certify unpinned performance.

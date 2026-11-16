@@ -1,10 +1,22 @@
 """Host power observations do not become CPU-policy evidence."""
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
-from benchmark_cpu import observe_cpu, parse_snapshot, snapshot
+from benchmark_cpu import observe_cpu, observe_suite_cpu, parse_snapshot, snapshot
 
 
 class HostConditions(unittest.TestCase):
+    def test_suite_observation_uses_the_selected_executor_shell(self):
+        for shell in ('/bin/sh', '/system/bin/sh', '/native/bin/sh'):
+            suite = SimpleNamespace(executor=SimpleNamespace(shell=shell),
+                                    command=mock.Mock(return_value=''))
+            with observe_suite_cpu(suite):
+                pass
+            self.assertEqual(suite.command.call_count, 2)
+            for call in suite.command.call_args_list:
+                self.assertEqual(call.args[0][:2], [shell, '-c'])
+
     def test_mixed_snapshot(self):
         output = ('policy0\trelated_cpus\t0 1\n'
                   'policy0\tscaling_cur_freq\t883200\n'

@@ -196,6 +196,9 @@ class MagicDeskExecutor:
     def native_path(self, target):
         return self.executables.get(str(target), str(target))
 
+    def host_tool(self, name):
+        return '/system/bin/' + name
+
     def fork(self, prefix='server'):
         from fixture_executor import FixtureExecutor
         return FixtureExecutor.connect(self.output, self.mode, prefix,

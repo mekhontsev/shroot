@@ -33,6 +33,14 @@ class LocalCommands(unittest.TestCase):
         self.assertEqual(self.executor.evidence['pageSize'], os.sysconf('SC_PAGE_SIZE'))
         self.assertIsNone(self.executor.console)
 
+    def test_host_tools_use_the_native_host_not_android_paths(self):
+        with mock.patch('executors.local.shutil.which', return_value='/usr/bin/time') as lookup:
+            self.assertEqual(self.executor.host_tool('time'), '/usr/bin/time')
+            lookup.assert_called_once_with('time')
+        with mock.patch('executors.local.shutil.which', return_value=None):
+            with self.assertRaisesRegex(RuntimeError, 'host utility: taskset'):
+                self.executor.host_tool('taskset')
+
     def test_full_output_and_exit_are_not_replayed(self):
         script = ('from pathlib import Path; import sys; '
                   'p=Path("count"); assert not p.exists(); p.touch(); '
