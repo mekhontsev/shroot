@@ -453,7 +453,7 @@ if(SHROOT_BUILD_TESTS)
     target_compile_options(kernel_baseline PRIVATE -iquote ${src} -UNDEBUG)
     guest_executable(test_task_resources tests/test_task_resources.c tests/test_fd_origins.c tests/test_task_receive.c tests/test_ofd_order.c ${src}/task_registry.c ${src}/task_status.c
         ${src}/task_resources.c ${src}/uts_namespace.c ${src}/ipc_namespace_services.c ${src}/sysv_shm.c ${src}/guest_domain.c ${src}/mount_namespace.c ${origins} ${identity} ${ipc}
-        ${src}/task_receive.c ${src}/event_wait.c ${raw})
+        ${src}/task_receive.c ${src}/event_wait.c ${src}/process_owner.c ${raw})
     target_compile_definitions(test_task_resources PRIVATE MD_NO_START MD_USE_LIBC)
     target_sources(test_task_resources PRIVATE tests/test_user_namespace.c ${src}/fd_selector.c)
     target_sources(test_task_resources PRIVATE tests/test_control_poll.c tests/test_epoll_owner.c tests/test_fd_admission.c ${src}/control_epoll.c ${src}/fd_admission.c)

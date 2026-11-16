@@ -9,6 +9,7 @@
 #include <linux/netfilter/nf_tables_compat.h>
 #include <linux/netfilter/xt_tcpudp.h>
 #include <linux/netfilter/xt_multiport.h>
+#include <linux/netfilter/xt_statistic.h>
 #include <linux/netfilter/xt_limit.h>
 #include <linux/netfilter/xt_NFLOG.h>
 #include <linux/netfilter/xt_physdev.h>
@@ -32,7 +33,8 @@ int md_nft_compat_revision(unsigned family,const char *name,unsigned revision,un
         {"CONNMARK",1,1U<<1},{"connmark",0,1U<<1},{"set",0,(1U<<1)|(1U<<3)|(1U<<4)},
         {"DNAT",1,7},{"SNAT",1,7},{"MASQUERADE",1,1},{"REJECT",1,1},
         {"tcp",0,1},{"udp",0,1},{"comment",0,1},{"pkttype",0,1},{"rpfilter",0,1},
-        {"icmp",0,1},{"icmp6",0,1},{"multiport",0,3},{"limit",0,1},{"NFLOG",1,1},{"physdev",0,1}};
+        {"icmp",0,1},{"icmp6",0,1},{"multiport",0,3},{"limit",0,1},{"NFLOG",1,1},{"physdev",0,1},
+        {"statistic",0,1}};
     if ((family!=NFPROTO_IPV4 && family!=NFPROTO_IPV6) || !name) return -ENOENT;
     if ((!strcmp(name,"icmp") && family!=NFPROTO_IPV4)
             || (!strcmp(name,"icmp6") && family!=NFPROTO_IPV6)) return -ENOENT;
@@ -174,6 +176,17 @@ static int compat_match(struct md_network_filter *f,uint64_t table,const struct 
     if (error) return error;
     if (!md_nft_compat_supported(table_family(f,table),name,revision,0)) return -EOPNOTSUPP;
     const struct attribute *wire=&a[NFTA_MATCH_INFO];
+    if (!strcmp(name,"statistic")) {
+        struct xt_statistic_info info;
+        if (!wire->data || wire->flags || wire->size!=sizeof(info)) return -EINVAL;
+        memcpy(&info,wire->data,sizeof(info));
+        if (info.mode>XT_STATISTIC_MODE_MAX || (info.flags&~XT_STATISTIC_MASK)) return -EINVAL;
+        e->code=MD_FILTER_STATISTIC;
+        e->statistic=(struct md_filter_statistic){.mode=info.mode,.invert=!!(info.flags&XT_STATISTIC_INVERT),
+            .value=info.mode==XT_STATISTIC_MODE_RANDOM ? info.u.random.probability : info.u.nth.every,
+            .count=info.mode==XT_STATISTIC_MODE_NTH ? info.u.nth.count : 0};
+        return 0;
+    }
     if (!strcmp(name,"physdev")) {
         struct xt_physdev_info info;
         if (!wire->data || wire->flags || wire->size!=((sizeof(info)+7)&~(size_t)7)) return -EINVAL;

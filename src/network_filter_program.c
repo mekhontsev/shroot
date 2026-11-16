@@ -7,6 +7,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/netfilter/xt_rpfilter.h>
 #include <linux/netfilter/xt_physdev.h>
+#include <linux/netfilter/xt_statistic.h>
 #include <linux/if_packet.h>
 #include <netinet/in.h>
 #include <stdlib.h>
@@ -132,7 +133,10 @@ int md_filter_validate(const struct md_network_filter *f) {
         for (unsigned j=0;j<r->count;++j) {
             const struct md_filter_expression *e=&r->expressions[j];
             unsigned allowed;
-            if (e->code==MD_FILTER_MASQUERADE) allowed=1U<<NF_INET_POST_ROUTING;
+            /* NAT selects once per flow. Packet-varying filter verdicts cannot
+             * be cached by the native/relay data path. */
+            if (e->code==MD_FILTER_STATISTIC) allowed=(1U<<NF_INET_NUMHOOKS)-1;
+            else if (e->code==MD_FILTER_MASQUERADE) allowed=1U<<NF_INET_POST_ROUTING;
             else if (e->code==MD_FILTER_NAT) allowed=e->operation==NFT_NAT_DNAT
                 ? (1U<<NF_INET_PRE_ROUTING)|(1U<<NF_INET_LOCAL_OUT)
                 : (1U<<NF_INET_POST_ROUTING)|(1U<<NF_INET_LOCAL_IN);
@@ -213,6 +217,17 @@ static int evaluate_chain(struct md_network_filter *f,const struct md_filter_cha
             unsigned char *src=registers+e->src,*dst=registers+e->dst;
             uint32_t value=0;
             switch (e->code) {
+            case MD_FILTER_STATISTIC: {
+                if (p->unmediated) return -EBUSY;
+                struct md_filter_statistic *s=&e->statistic;
+                if (s->mode==XT_STATISTIC_MODE_RANDOM) match=(arc4random()&0x7fffffffU)<s->value;
+                else {
+                    s->count=s->count==s->value ? 0 : s->count+1;
+                    match=s->count==0;
+                }
+                match=match!=!!s->invert;
+                break;
+            }
             case MD_FILTER_PHYSDEV: {
                 const struct md_filter_physdev *v=&e->physdev;
                 unsigned observed=(p->physical[0] ? XT_PHYSDEV_OP_ISIN : 0)

@@ -29,6 +29,7 @@
 #include <linux/netfilter/xt_addrtype.h>
 #include <linux/netfilter/xt_pkttype.h>
 #include <linux/netfilter/xt_rpfilter.h>
+#include <linux/netfilter/xt_statistic.h>
 #include <linux/netfilter_ipv4/ipt_REJECT.h>
 #include <linux/netfilter_ipv6/ip6t_REJECT.h>
 #include <linux/if_packet.h>
@@ -959,6 +960,79 @@ static void compat_multiport(void) {
     }
     puts("PASS xt multiport: source/destination/either, ranges, inversion and NAT-only publication");
 }
+static int parse_statistic(struct md_network_filter *f,struct md_filter_rule *rule,
+        const struct xt_statistic_info *info,size_t size) {
+    struct packet p;
+    struct md_network_message out={.data=p.data,.capacity=sizeof(p.data)};
+    add(&out,(NFNL_SUBSYS_NFTABLES<<8)|NFT_MSG_NEWRULE,0,f->tables[0].family);
+    size_t start=out.size,entry,data;
+    assert(!md_network_message_nest(&out,NFTA_LIST_ELEM,&entry));
+    assert(!md_network_message_attribute(&out,NFTA_EXPR_NAME,"match",6));
+    assert(!md_network_message_nest(&out,NFTA_EXPR_DATA,&data));
+    assert(!md_network_message_attribute(&out,NFTA_MATCH_NAME,"statistic",10));
+    uint32_t revision=0;
+    assert(!md_network_message_attribute(&out,NFTA_MATCH_REV,&revision,4));
+    assert(!md_network_message_attribute(&out,NFTA_MATCH_INFO,info,size));
+    assert(!md_network_message_end_nest(&out,data));
+    assert(!md_network_message_end_nest(&out,entry));
+    return md_nft_expressions(f,1,rule,out.data+start,out.size-start);
+}
+static void compat_statistic(void) {
+    for (unsigned v6=0;v6<2;++v6) for (unsigned mode=0;mode<2;++mode) for (unsigned invert=0;invert<2;++invert) {
+        unsigned family=v6 ? AF_INET6 : AF_INET;
+        struct md_network_filter_table table={.handle=1,.family=v6 ? NFPROTO_IPV6 : NFPROTO_IPV4};
+        struct md_filter_chain chain={.table=1,.handle=2,.hook=NF_INET_PRE_ROUTING,.nat=1,.policy=NF_ACCEPT};
+        struct md_filter_rule rule={.chain=2};
+        struct md_network_filter f={.tables=&table,.count=1,.chains=&chain,.chain_count=1,.rules=&rule,.rule_count=1};
+        struct xt_statistic_info info={.mode=mode,.flags=invert,.u.nth={.every=2,.count=2}};
+        if (!mode) info.u.random.probability=0x40000000;
+        assert(!parse_statistic(&f,&rule,&info,sizeof(info)));
+        rule.expressions[1]=(struct md_filter_expression){.code=MD_FILTER_NAT,.operation=NFT_NAT_DNAT,
+            .constant=1,.family=family,.aux=1,.nat_port=htons(5000)};
+        rule.count=2;
+        assert(!md_filter_validate(&f));
+        unsigned matches=0;
+        for (unsigned i=0;i<256;++i) {
+            struct md_filter_packet packet={.destination=md_ip_any(family),.protocol=IPPROTO_TCP,.state=8};
+            assert(!md_filter_evaluate(&f,NF_INET_PRE_ROUTING,&packet));
+            matches+=!!packet.dnat;
+            if (mode) assert(!!packet.dnat==((i%3==0)!=!!invert));
+        }
+        assert(matches>0 && matches<256);
+        uint32_t count=rule.expressions[0].statistic.count;
+        struct md_network_filter *copy=md_network_filter_copy(&f);
+        assert(copy && copy->rules[0].expressions[0].statistic.count==count);
+        md_network_filter_free(copy);
+        struct md_filter_packet packet={.destination=md_ip_any(family),.state=8,.unmediated=1};
+        assert(md_filter_evaluate(&f,NF_INET_PRE_ROUTING,&packet)==-EBUSY);
+        struct md_filter_rewrite retained={.destination=md_ip_any(family),.destination_port=htons(5000)};
+        assert(!md_filter_evaluate_transition(&f,NF_INET_PRE_ROUTING,&packet,&retained,NULL));
+        assert(packet.destination_port==htons(5000) && rule.expressions[0].statistic.count==count);
+        if (!mode) for (unsigned all=0;all<2;++all) {
+            rule.expressions[0].statistic.value=all ? 0x80000000U : 0;
+            packet=(struct md_filter_packet){.destination=md_ip_any(family),.state=8};
+            assert(!md_filter_evaluate(&f,NF_INET_PRE_ROUTING,&packet) && !!packet.dnat==(all!=invert));
+        }
+        rule.expressions[2]=rule.expressions[1];
+        rule.expressions[1]=rule.expressions[0];
+        rule.expressions[0]=(struct md_filter_expression){.code=MD_FILTER_TRANSPORT,
+            .transport={.protocol=IPPROTO_TCP,.source={0,65535},.destination={8080,8080}}};
+        rule.count=3;
+        struct md_filter_port ports[4]; size_t published=0;
+        assert(!md_filter_ports(&f,md_ip_any(family),ports,4,&published));
+        assert(published==1 && ports[0].port==htons(8080) && ports[0].protocol==IPPROTO_TCP);
+        /* Packet-varying filter policy cannot use the NAT admission cache. */
+        rule.count=2; chain.nat=0;
+        assert(md_filter_validate(&f)==-EOPNOTSUPP);
+        free(rule.wire); rule=(struct md_filter_rule){.chain=2};
+        assert(parse_statistic(&f,&rule,&info,sizeof(info)-1)==-EINVAL);
+        info.flags=2;
+        assert(parse_statistic(&f,&rule,&info,sizeof(info))==-EINVAL);
+        info.flags=0; info.mode=2;
+        assert(parse_statistic(&f,&rule,&info,sizeof(info))==-EINVAL);
+    }
+    puts("PASS xt statistic: IPv4/IPv6 NAT selection, random bounds, nth phase, inversion, retained flows and filter rejection");
+}
 static void compat_nat(void) {
     struct md_network_filter_table table={.handle=1,.family=NFPROTO_IPV4};
     struct md_filter_chain chain={.table=1,.handle=2,.policy=NF_ACCEPT,.nat=1};
@@ -1323,8 +1397,8 @@ static void compat_revisions(void) {
     struct md_network_namespace *n=md_network_namespace_new(NULL,MD_NETWORK_ROUTED);
     struct md_identity root=md_identity_new(0,0);
     assert(n);
-    const char *names[]={"DNAT","SNAT","MASQUERADE","MARK","tcp","udp","comment","mark","addrtype","conntrack"};
-    unsigned revisions[]={0,0,0,2,0,0,0,1,1,3};
+    const char *names[]={"DNAT","SNAT","MASQUERADE","MARK","tcp","udp","comment","mark","addrtype","conntrack","statistic"};
+    unsigned revisions[]={0,0,0,2,0,0,0,1,1,3,0};
     for (unsigned i=0;i<sizeof(names)/sizeof(*names);++i) for (unsigned variant=0;variant<4;++variant) {
         struct packet p,reply;
         struct md_network_message o={.data=p.data,.capacity=sizeof(p.data)};
@@ -2057,6 +2131,7 @@ void test_network_nft(void) {
     compat_revisions();
     compat_transport();
     compat_multiport();
+    compat_statistic();
     compat_nat();
     compat_masquerade();
     nft_source_port_range();

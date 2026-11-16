@@ -86,9 +86,14 @@ class Kubectl:
         self.binary, self.env = binary, env
 
     def __call__(self, *args, check=True, timeout=120):
+        started = time.monotonic()
+        print('KUBECTL_START', args, flush=True)
         # EVENT_WAIT: kubectl watch/response; timeout is a failure, not readiness.
-        result = subprocess.run([self.binary, 'kubectl', *args], env=self.env, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+        try:
+            result = subprocess.run([self.binary, 'kubectl', *args], env=self.env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+        finally:
+            print('KUBECTL_DURATION', args, time.monotonic() - started, flush=True)
         print('KUBECTL', args, result.returncode, result.stdout, flush=True)
         if check:
             assert result.returncode == 0, result.stdout
@@ -585,6 +590,8 @@ def add_runtime_arguments(parser):
     parser.add_argument('--output', type=Path)
     parser.add_argument('--store', help='Existing server store accessible to the selected executor; no copy')
     parser.add_argument('--backend', choices=('vxlan', 'host-gw'), default='vxlan')
+    parser.add_argument('--network', choices=('bridge', 'routed'), default='bridge',
+                        help='Private bridge by default; routed also reserves matching ports on the host')
     parser.add_argument('--restart-checks', type=int, default=1,
                         help='Independent server restart/workload checks; a failure is never retried')
     parser.add_argument('--images', type=Path, action='append', default=[],
@@ -633,6 +640,7 @@ def run(args):
         with args.k3s.open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
         suite.report['k3s'] = {'sha256': digest, 'profile': str(args.nodes) + '-node-' + args.backend,
+            'network': args.network,
             'serviceUmask': '0022',
             'serverEnvironment': args.environment, 'agentEnvironment': args.agent_environment or args.environment}
         suite.upload(args.k3s, suite.base + '/k3s')
@@ -668,7 +676,7 @@ def run(args):
             prepare_node_state(suite, node_store, created_directories)
         # All service state is private. The outer PID namespace retires shims and
         # workload descendants even if stock k3s deliberately leaves them running.
-        command = prefix + diagnostic_options(args.diagnostics) + ['--statistics', '--network', 'routed',
+        command = prefix + diagnostic_options(args.diagnostics) + ['--statistics', '--network', args.network,
             *attachments, '--deadline-seconds', '1200', '--', '/bin/sh', '-ec', 'exec "$@"', 'k3s',
             *guest_command(target + '/test.py', target + '/k3s', args.backend,
                            args.nodes, agent_target if agent_store else '', args.restart_checks)]

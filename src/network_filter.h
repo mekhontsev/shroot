@@ -22,10 +22,12 @@ enum md_filter_opcode {
     MD_FILTER_NAT, MD_FILTER_MASQUERADE, MD_FILTER_VERDICT_MAP, MD_FILTER_DATA_MAP, MD_FILTER_COUNTER,
     MD_FILTER_TRANSPORT, MD_FILTER_STATE_MATCH, MD_FILTER_MARK_MATCH, MD_FILTER_CONNMARK_MATCH, MD_FILTER_ADDRESS_TYPE,
     MD_FILTER_PACKET_TYPE, MD_FILTER_REVERSE_PATH, MD_FILTER_ICMP_MATCH, MD_FILTER_REJECT,
-    MD_FILTER_IPSET, MD_FILTER_MULTIPORT, MD_FILTER_LIMIT, MD_FILTER_LOG, MD_FILTER_PHYSDEV
+    MD_FILTER_IPSET, MD_FILTER_MULTIPORT, MD_FILTER_LIMIT, MD_FILTER_LOG, MD_FILTER_PHYSDEV,
+    MD_FILTER_STATISTIC
 };
 struct md_filter_counter { uint64_t packets, bytes; };
 struct md_filter_limit { uint64_t cost, capacity, credit, previous; };
+struct md_filter_statistic { unsigned mode, invert; uint32_t value, count; };
 struct md_filter_log { unsigned group; char prefix[64]; };
 struct md_filter_physdev { char names[2][16], masks[2][16]; unsigned flags, invert; };
 enum { MD_FILTER_INVERT_SOURCE=1, MD_FILTER_INVERT_DESTINATION=2 };
@@ -64,6 +66,7 @@ struct md_filter_expression {
         struct md_filter_transport transport;
         struct md_filter_multiport multiport;
         struct md_filter_limit limit;
+        struct md_filter_statistic statistic;
         struct md_filter_log log;
         struct md_filter_physdev physdev;
         uint16_t nat_port;

@@ -207,7 +207,7 @@ static int may_translate(struct md_network_filter *f,const struct md_filter_chai
                     possible=0;
                 }
                 break;
-            case MD_FILTER_LIMIT: uncertain=1; break;
+            case MD_FILTER_LIMIT: case MD_FILTER_STATISTIC: uncertain=1; break;
             case MD_FILTER_META_SET: case MD_FILTER_CT_SET: case MD_FILTER_COUNTER: case MD_FILTER_LOG: break;
             }
         }

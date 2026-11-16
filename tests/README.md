@@ -320,6 +320,10 @@ supports the [borrowed-store handoff](host-execution.md#borrowing-an-installed-e
 without a second rootfs. A result applies only to its recorded OS and executor.
 
 The default profile uses stock VXLAN; `--backend host-gw` selects the alternative.
+The node runs in a private `--network bridge` by default, so its low-numbered
+ServiceLB ports do not require host bind privileges. `--network routed` also
+tests automatic host publication and requires the corresponding native port
+permissions. Both profiles retain the pod, Service, ingress and restart checks.
 `test_k3s.py` always uses one selected distribution. For a mixed cluster run
 `test_k3s_cluster.py [BUILD] SERVER_ENVIRONMENT AGENT_ENVIRONMENT K3S_ARM64`.
 It additionally accepts `--agent-store PATH` for an explicit agent store.

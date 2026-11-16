@@ -536,6 +536,14 @@ flags outside this contract are rejected. Delivery is bounded and nonblocking;
 it does not add a read/write observer. Multiport ranges and physical bridge-port
 predicates reuse the common flow model.
 
+Revision-zero xtables `statistic` supports random and every-Nth selection in
+NAT chains, including inversion and the initial counter phase. Selection occurs
+only for a new flow; conntrack retains it across packets and ruleset updates.
+Rule snapshots preserve the live counter under the fabric lock. All possible
+external destinations are reserved without sampling the predicate. Filter-chain
+use is rejected: packet-varying forwarding cannot be represented by cached
+admission without intercepting ordinary data IO.
+
 The guest `/proc/modules` catalogue advertises managed nftables, conntrack,
 ipset and bridge-filter providers only in managed networks. It does not mirror
 Android modules or permit loading host code. Native network mode has no managed

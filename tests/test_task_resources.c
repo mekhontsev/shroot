@@ -3,6 +3,7 @@
 #include "task_resources.h"
 #include "task_registry.h"
 #include "task_status.h"
+#include "process_owner.h"
 #include "mqueue_view.h"
 #include <assert.h>
 #include "uts_view.h"
@@ -594,10 +595,14 @@ void test_network_tun(void);
 void test_task_registry_exit(void);
 void test_task_mapping(void);
 int main(int argc,char **argv) {
+    /* Model the service's descriptor budget, including simultaneous native
+     * clients in the publication tests. Never raise the host hard limit. */
+    assert(!md_process_service_nofile());
     signal_dispositions();
     uts_publication();
     alarm(60);
     if(argc==2 && !strcmp(argv[1],"--tun")) { test_network_tun(); return 0; }
+    if(argc==2 && !strcmp(argv[1],"--nft")) { test_network_nft(); return 0; }
     test_task_mapping();
     test_ipc_database();
     test_task_registry_exit();

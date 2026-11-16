@@ -34,6 +34,7 @@ add_test(NAME component_signal_checkpoint COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_signal_checkpoint.py" "${CMAKE_CURRENT_BINARY_DIR}" --executor local)
 set_tests_properties(component_signal_checkpoint PROPERTIES LABELS component TIMEOUT 100)
 shroot_component(lwip_context test_lwip_context)
+shroot_component(task_resources test_task_resources)
 foreach(mode exit kill exec exec-fault exec-real-first exec-private-first exec-directed
         subreaper-exit subreaper-kill subreaper-ignore subreaper-nochildwait
         subreaper-readers subreaper-readers-kill subreaper-reader-reap)
