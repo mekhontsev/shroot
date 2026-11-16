@@ -1,8 +1,8 @@
 #define _GNU_SOURCE
 #include "cooperative_entry.h"
-#include "../shroot/src/cooperative_channel.h"
-#include "../shroot/src/posix_acl.h"
-#include "../shroot/src/interception.h"
+#include "../src/cooperative_channel.h"
+#include "../src/posix_acl.h"
+#include "../src/interception.h"
 #include "test_syscall_sites.h"
 #include <assert.h>
 #include <errno.h>

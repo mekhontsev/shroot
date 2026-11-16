@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
-#include "../shroot/src/cooperative_exchange.h"
-#include "../shroot/src/fs_syscall.h"
+#include "../src/cooperative_exchange.h"
+#include "../src/fs_syscall.h"
 #include <assert.h>
 #include <asm/ptrace.h>
 #include <dirent.h>

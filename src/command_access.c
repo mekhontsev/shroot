@@ -2,7 +2,7 @@
 #include "command_access.h"
 #include "inode_store.h"
 #include "guest_identity.h"
-#include "../../command-client/wire.h"
+#include "../integrations/magicdesk/wire.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
