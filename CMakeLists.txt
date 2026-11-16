@@ -57,6 +57,7 @@ if(SHROOT_BUILD_TESTS)
     add_test(NAME client COMMAND test_client "${CMAKE_CURRENT_BINARY_DIR}/client-fixture")
 endif()
 if(NOT SHROOT_BUILD_RUNTIME)
+    include(cmake/Bundle.cmake)
     return()
 endif()
 if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
@@ -690,3 +691,4 @@ endif()
 
 set_source_files_properties(${src}/svc_payload.c PROPERTIES
     COMPILE_OPTIONS "-mgeneral-regs-only;-fno-stack-protector;-mno-outline-atomics;-fno-jump-tables")
+include(cmake/Bundle.cmake)

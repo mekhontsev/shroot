@@ -52,6 +52,34 @@ and, when building the runtime, native fixtures. See the standalone consumer in
 The library and runtime use the repository's [GPLv3 license](LICENSE). Linking
 the library does not introduce an additional licensing exception.
 
+### Runtime Bundle
+
+`cmake --install build --prefix PREFIX --component Shroot --strip` installs the
+CLI, public libraries/header/CMake package, execution helpers and dependency
+licenses. The prefix can be moved as a unit; `bin/shroot` locates its sibling
+`libexec/shroot` without a compiled-in installation path. Embedders select that
+runtime directory explicitly. Never replace helpers used by a live launch.
+
+`libexec/shroot/runtime.json` describes the version, target and helper filenames.
+It is bundle metadata, not a persisted-store format or a replacement for native
+capability admission. `testHooks` identifies a test-enabled engine; production
+bundles are configured with `SHROOT_BUILD_TESTS=OFF`. Helper filenames ending in
+`.so` are executable files suitable for Android APK native-library packaging,
+not libraries to load into ART or another process.
+
+```sh
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release -j 4
+cpack --config build-release/CPackConfig.cmake -B artifacts
+```
+
+CPack produces a stripped, versioned `tar.gz` and SHA-256 checksum for the selected host platform.
+Only the Shroot install component is included, not fixture executables or source
+caches. Client-only archives have a `-client` filename suffix and no execution
+engine. A third-party shared SQLite remains the integrator's packaging obligation.
+The `bundle` test installs and relocates the default static-dependency package,
+audits its ELF dependencies and executes the shared native client/CLI workflow.
+
 ### SQLite Provider
 
 `SHROOT_SQLITE` selects `bundled` (the default), `system`, or an existing CMake

@@ -40,3 +40,9 @@ endforeach()
 add_test(NAME oci COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_oci.py" "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(oci library registry client_runtime PROPERTIES LABELS integration TIMEOUT 180)
+if(SHROOT_STATIC_RUNTIME AND SHROOT_SQLITE STREQUAL "bundled")
+    add_test(NAME bundle COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bundle.py" "${CMAKE_CURRENT_BINARY_DIR}"
+        --cmake "${CMAKE_COMMAND}" --readelf "${CMAKE_READELF}")
+    set_tests_properties(bundle PROPERTIES LABELS integration TIMEOUT 240)
+endif()
