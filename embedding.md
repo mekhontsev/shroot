@@ -230,6 +230,14 @@ Never treat a saved numeric PID as cancellation authority. Cancellation can
 interrupt an import; existing staging recovery remains responsible for an
 unpublished partial store. No new persisted format is introduced.
 
+A frontend using the CLI can pass `--parent-pid PID` to bind its command to the
+spawning thread's lifetime. The CLI verifies its actual parent before submitting
+work and forwards parent death through ordinary job cancellation. Use a stable
+spawning thread for this opt-in Linux contract; it is not implicit behavior of
+`libshroot`, and destroying a library handle does not cancel submitted jobs.
+MagicDesk's one-shot management adapter uses this contract for offline commands.
+Ordinary CLI execution does not require it.
+
 `SHROOT_EXEC` starts a new supervised tree in the selected store, not a command
 inside another live tree. The API makes no claim of container-engine exec
 semantics or extra guest isolation.

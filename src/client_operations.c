@@ -115,10 +115,10 @@ static int launch_command(shroot_context *context, const char *library, const ch
     shroot_option(&args, "--hostname", launch->hostname);
     shroot_option(&args, "--gamepad-endpoint", launch->gamepad_endpoint);
     shroot_option(&args, "--network", launch->network);
-    shroot_option(&args, "--subnet", launch->subnet);
     shroot_option(&args, "--ip", launch->ip);
     shroot_option(&args, "--ip6", launch->ip6);
-    shroot_option(&args, "--gateway", launch->gateway);
+    options(&args, "--subnet", launch->subnets);
+    options(&args, "--gateway", launch->gateways);
     options(&args, "--env", launch->environment);
     options(&args, "--dns", launch->dns);
     options(&args, "-p", launch->ports);

@@ -3,10 +3,36 @@
 import argparse
 import json
 import resource
+import select
+import signal
+import socket
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from client_fixture import archive_fixture
+
+
+def parent_lifetime(cli, instance):
+    launcher = ('import os, subprocess, sys; '
+                'child = subprocess.Popen(sys.argv[1:2] + ["--parent-pid", str(os.getpid())] + sys.argv[2:]); '
+                'sys.stdin.buffer.read(1)')
+    process = subprocess.Popen([sys.executable, '-c', launcher, *cli, 'exec', str(instance),
+                                '--', '/bin/client-guest', 'hold'],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        # EVENT_WAIT: the guest acknowledges startup before its frontend exits.
+        assert select.select([process.stdout], [], [], 30)[0], 'guest did not start'
+        assert process.stdout.read(12) == b'ready\nready\n'
+        process.kill()
+        output, _ = process.communicate(timeout=30)
+        assert process.returncode == -signal.SIGKILL
+        assert output == b'', output
+        # EOF verifies that the guest tree released the inherited output pipe.
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
 
 
 def main():
@@ -41,6 +67,21 @@ def main():
                               "spaces ' ; $(false)"], check=True, timeout=30)
         result = subprocess.run(cli + ["exec", str(instance), "--", "/bin/client-guest", "exit42"],
                                 timeout=30)
+        assert result.returncode == 42
+        parent_lifetime(cli, instance)
+        for parent in ('1', '0', '-1', 'invalid', '2147483648'):
+            result = subprocess.run(cli + ['--parent-pid', parent, 'format'], capture_output=True, timeout=10)
+            assert result.returncode == 125, result
+        with socket.socket() as port:
+            port.bind(('127.0.0.1', 0))
+            publication = f'127.0.0.1:{port.getsockname()[1]}:8080'
+        result = subprocess.run(cli + ['exec', str(instance), '--network', 'bridge',
+                                '--dns', '192.0.2.53',
+                                '--subnet', '192.0.2.0/24', '--subnet', '2001:db8::/64',
+                                '--gateway', '192.0.2.1', '--gateway', '2001:db8::1',
+                                '--ip', '192.0.2.2', '--ip6', '2001:db8::2',
+                                '--publish', publication,
+                                '--', '/bin/client-guest', 'exit42'], timeout=30)
         assert result.returncode == 42
         limits = resource.getrlimit(resource.RLIMIT_NOFILE)
         for entry in ('0', '1'):

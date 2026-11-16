@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/signalfd.h>
 #include <unistd.h>
 
@@ -16,10 +17,13 @@ static int launch(shroot_store *store, shroot_library *library, const char *name
     const char **env = calloc((size_t)argc + 1, sizeof(*env));
     const char **dns = calloc((size_t)argc + 1, sizeof(*dns));
     const char **ports = calloc((size_t)argc + 1, sizeof(*ports));
+    const char **subnets = calloc((size_t)argc + 1, sizeof(*subnets));
+    const char **gateways = calloc((size_t)argc + 1, sizeof(*gateways));
     struct shroot_bind *binds = calloc((size_t)argc + 1, sizeof(*binds));
     struct shroot_socket_route *routes = calloc((size_t)argc + 1, sizeof(*routes));
-    int r = env && dns && ports && binds && routes ? 0 : -ENOMEM;
+    int r = env && dns && ports && subnets && gateways && binds && routes ? 0 : -ENOMEM;
     size_t env_count = 0, dns_count = 0, port_count = 0;
+    size_t subnet_count = 0, gateway_count = 0;
     int at = 0;
     while (!r && at < argc && strcmp(argv[at], "--")) {
         const char *name = argv[at++];
@@ -44,13 +48,14 @@ static int launch(shroot_store *store, shroot_library *library, const char *name
         const char *value = argv[at++];
         if (!strcmp(name, "--env")) env[env_count++] = value;
         else if (!strcmp(name, "--dns")) dns[dns_count++] = value;
-        else if (!strcmp(name, "-p")) ports[port_count++] = value;
+        else if (!strcmp(name, "-p") || !strcmp(name, "--publish")) ports[port_count++] = value;
+        else if (!strcmp(name, "--subnet")) subnets[subnet_count++] = value;
+        else if (!strcmp(name, "--gateway")) gateways[gateway_count++] = value;
         else {
             struct { const char *name; const char **value; } scalars[] = {
                 {"--user", &options.user}, {"--cwd", &options.cwd}, {"--entrypoint", &options.entrypoint},
                 {"--hostname", &options.hostname}, {"--gamepad-endpoint", &options.gamepad_endpoint},
-                {"--network", &options.network}, {"--subnet", &options.subnet}, {"--ip", &options.ip},
-                {"--ip6", &options.ip6}, {"--gateway", &options.gateway}
+                {"--network", &options.network}, {"--ip", &options.ip}, {"--ip6", &options.ip6}
             };
             r = -EINVAL;
             for (size_t i = 0; i < sizeof(scalars)/sizeof(*scalars); ++i) {
@@ -62,9 +67,10 @@ static int launch(shroot_store *store, shroot_library *library, const char *name
     if (at < argc && !strcmp(argv[at], "--")) ++at;
     options.arguments = (const char *const *)(argv + at);
     options.environment = env; options.dns = dns; options.ports = ports;
+    options.subnets = subnets; options.gateways = gateways;
     options.binds = binds; options.routes = routes;
     if (!r) r = library ? shroot_environment_launch(library,name,&options,NULL,out) : shroot_launch(store, &options, NULL, out);
-    free(env); free(dns); free(ports); free(binds); free(routes); return r;
+    free(env); free(dns); free(ports); free(subnets); free(gateways); free(binds); free(routes); return r;
 }
 static int library_submit(shroot_context *context,int argc,char **argv,shroot_job **out) {
     if (argc<2) return -EINVAL;
@@ -160,7 +166,7 @@ static int runtime_directory(char path[PATH_MAX]) {
     strcat(path, "/../libexec/shroot"); return 0;
 }
 static void usage(void) {
-    puts("Usage: shroot [--runtime DIRECTORY] COMMAND [ARGS]\n"
+    puts("Usage: shroot [--runtime DIRECTORY] [--parent-pid PID] COMMAND [ARGS]\n"
         "  library DIRECTORY init | list | prune | resolve NAME | remove NAME\n"
         "  library DIRECTORY install rootfs|oci|registry SOURCE NAME [--resolver CONTENTS]\n"
         "      [--ca-file FILE] [--ca-directory DIRECTORY] (registry only)\n"
@@ -179,10 +185,24 @@ static void usage(void) {
 int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--version")) { puts(shroot_version()); return 0; }
     if (argc == 1 || (argc == 2 && !strcmp(argv[1], "--help"))) { usage(); return argc == 1 ? 2 : 0; }
-    char runtime[PATH_MAX]; const char *directory = NULL;
+    char runtime[PATH_MAX]; const char *directory = NULL, *parent = NULL;
     int at = 1, r = 0;
-    if (argc > 3 && !strcmp(argv[at], "--runtime")) { directory = argv[at+1]; at += 2; }
-    else { r = runtime_directory(runtime); directory = runtime; }
+    while (!r && at < argc) {
+        const char **option = !strcmp(argv[at], "--runtime") ? &directory
+            : !strcmp(argv[at], "--parent-pid") ? &parent : NULL;
+        if (!option) break;
+        if (*option || at + 1 >= argc) { r = -EINVAL; break; }
+        *option = argv[at+1]; at += 2;
+    }
+    if (!r && parent) {
+        char *end;
+        errno = 0;
+        long pid = strtol(parent, &end, 10);
+        if (errno || !*parent || *end || pid <= 1 || pid > INT_MAX) r = -EINVAL;
+        else if (prctl(PR_SET_PDEATHSIG, SIGTERM)) r = -errno;
+        else if (getppid() != pid) r = -ECHILD;
+    }
+    if (!r && !directory) { r = runtime_directory(runtime); directory = runtime; }
     shroot_context *context = NULL;
     if (!r) r = shroot_context_open(directory, &context);
     sigset_t mask;

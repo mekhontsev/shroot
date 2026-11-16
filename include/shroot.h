@@ -120,11 +120,14 @@ struct shroot_launch_options {
     enum shroot_launch_kind kind;
     unsigned flags;
     const char *user, *cwd, *entrypoint, *hostname, *gamepad_endpoint;
-    const char *network, *subnet, *ip, *ip6, *gateway;
+    const char *network, *ip, *ip6;
     const char *const *arguments;
     const char *const *environment;
     const char *const *dns;
     const char *const *ports;
+    /* One subnet/gateway per address family, validated by the network owner. */
+    const char *const *subnets;
+    const char *const *gateways;
     const struct shroot_bind *binds;
     size_t bind_count;
     const struct shroot_socket_route *routes;

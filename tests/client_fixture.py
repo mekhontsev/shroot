@@ -16,6 +16,11 @@ def archive_fixture(build, archive):
         entry.mode = 0o644
         entry.size = len(payload)
         tar.addfile(entry, io.BytesIO(payload))
+        resolver = b"nameserver 192.0.2.53\n"
+        entry = tarfile.TarInfo("etc/resolv.conf")
+        entry.mode = 0o644
+        entry.size = len(resolver)
+        tar.addfile(entry, io.BytesIO(resolver))
         for name, kind in (("hardlink", tarfile.LNKTYPE), ("link", tarfile.SYMTYPE)):
             entry = tarfile.TarInfo(name)
             entry.type = kind
