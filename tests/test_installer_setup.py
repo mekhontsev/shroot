@@ -5,6 +5,7 @@ This validates the actual package/keyring/settings payload, not image download,
 Android catalog registration, rendered GUI workflows or init-system boot.
 """
 import argparse
+from executors.magicdesk import source_root
 import hashlib
 import ipaddress
 from pathlib import Path
@@ -26,7 +27,7 @@ def main():
                         help='Explicit test resolver; repeat for multiple servers, omit to retain DNS')
     parser.add_argument('--output', type=Path, default=Path('build/installer-setup-results'))
     args = parser.parse_args()
-    installer = Path(__file__).resolve().parents[2] / 'scripts/install_linux.sh'
+    installer = source_root() / 'scripts/install_linux.sh'
     # EVENT_WAIT: script emission must finish; timeout is failure, not readiness.
     payload = subprocess.check_output(['sh', str(installer), '--print-system-setup'], timeout=15)
     suite = Suite(args.output, args.build)

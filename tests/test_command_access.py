@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in command channel across guest, native Termux and PRoot, without Desktop."""
 import argparse
-import importlib.util
+from executors.magicdesk import load_transport
 import json
 import os
 from pathlib import Path
@@ -71,10 +71,7 @@ while True: signal.pause()
 
 
 def client():
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('transport', repo / 'scripts/mcp-client.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = load_transport()
     config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
     return module.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '))
 
@@ -148,7 +145,7 @@ def main():
         termux_child(args)
         return
     c = client()
-    repo = Path(__file__).resolve().parents[2]
+    repo = Path(__file__).resolve().parents[1]
     report = {'checks':[], 'passed':False}
     terminal = console = None
     operations = []

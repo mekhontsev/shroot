@@ -6,9 +6,9 @@ session hosts the existing browser, portal, container and VS Code fixtures.
 Use stop after inspection; state and logs are kept under build/installed-NAME.
 """
 import argparse
+from executors.magicdesk import load_transport
 import base64
 import errno
-import importlib.util
 import json
 from pathlib import Path
 import re
@@ -186,7 +186,7 @@ def main():
     parser.add_argument('--name', required=True)
     parser.add_argument('--store', help='Existing store accessible to the selected executor; no import or copy')
     parser.add_argument('--output', type=Path, help='Retained fixture artifacts and session identity')
-    FixtureExecutor.add_argument(parser)
+    FixtureExecutor.add_argument(parser, graphics=True)
     parser.add_argument('--user', default='mdtester')
     parser.add_argument('--root', action='store_true')
     parser.add_argument('--wait', action='store_true', help='Wait for run completion and retain its log')
@@ -413,9 +413,7 @@ export WAYLAND_DISPLAY=/tmp/magicdesk-wayland/wayland-0
         return
 
     state = json.loads(statefile.read_text())
-    spec = importlib.util.spec_from_file_location('transport', Path(__file__).resolve().parents[2] / 'scripts/mcp-client.py')
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
     client = transport.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '),
                               timeout=args.timeout+30, request_timeout=args.timeout)
@@ -428,7 +426,7 @@ export WAYLAND_DISPLAY=/tmp/magicdesk-wayland/wayland-0
     def transfer(direction, source, destination, **options):
         if state.get('executor', {}).get('mode', 'shell') == 'shell':
             return getattr(transport, direction)(client, source, destination, **options)
-        owner = FixtureExecutor(client, transport, out, 'app', 'transfer')
+        owner = FixtureExecutor.connect(out, 'app', 'transfer')
         try:
             return getattr(owner, direction)(source, destination, **options)
         finally:

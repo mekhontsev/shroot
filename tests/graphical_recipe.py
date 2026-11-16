@@ -3,10 +3,11 @@ import hashlib
 from pathlib import Path
 import subprocess
 import shutil
+from executors.magicdesk import source_root
 
 
 def compile_recipe(classes):
-    repo = Path(__file__).resolve().parents[2]
+    repo = source_root()
     names = ('LinuxGraphicalEnvironment', 'GuestGraphicalConnection', 'GuestLaunchPlan',
              'GuestEnvironment', 'GuestNetworkProfile', 'GraphicalProtocol', 'ShellCommandLine',
              'LinuxAudioEnvironment', 'GamepadWire')
@@ -18,4 +19,5 @@ def compile_recipe(classes):
     shutil.copyfile(session, classes / session.name)
     # EVENT_WAIT: compiler exit; expiry fails preparation before client launch.
     subprocess.run(['javac', '-d', str(classes), *map(str, sources)], check=True, timeout=30)
-    return {str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest() for path in [*sources, session]}
+    return {str(path.relative_to(repo)) if path.is_relative_to(repo) else path.name:
+            hashlib.sha256(path.read_bytes()).hexdigest() for path in [*sources, session]}

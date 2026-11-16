@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Qt guest through production recipes, Android IME and an independent display."""
 import argparse
+from executors.magicdesk import load_transport, source_root
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import re
@@ -21,10 +21,7 @@ def main():
     assert prepared["checks"] and all(c["passed"] for c in prepared["checks"])
     root = prepared["directory"]
     assert re.fullmatch(r"/data/local/tmp/md-guest-lab-[0-9a-f]{32}", root)
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("md_mcp", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads(args.config.read_text())["mcp_servers"]["magicdesk"]
     client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
     state = client.call("get_state")
@@ -66,7 +63,7 @@ def main():
 
         guest("if test ! -e /etc/passwd; then /bin/sh /usr/bin/md-prepare-applications; fi")
         source = root + "/editor-" + tag + ".qml"
-        transport.upload(client, repo / "wayland-runtime/tests/toolkits/editor.qml", source)
+        transport.upload(client, source_root() / "wayland-runtime/tests/toolkits/editor.qml", source)
         command(installed + " " + shlex.quote("cat > /tmp/md-editor.qml") + " < " + shlex.quote(source))
         launch = "env WAYLAND_DEBUG=client QT_QPA_PLATFORM=wayland QT_WAYLAND_TEXT_INPUT_PROTOCOL=zwp_text_input_v3 QT_QUICK_BACKEND=software QT_QUICK_CONTROLS_STYLE=Basic /usr/lib/qt6/bin/qml /tmp/md-editor.qml"
         display = client.call("create_display", {"type": "virtual", "width": 1000, "height": 700, "densityDpi": 160})

@@ -5,9 +5,9 @@ Preparation and result validation are outside the guest-side GNU time interval.
 PRoot uses the caller's Termux identity; only chroot explicitly invokes su.
 """
 import argparse
+from executors.magicdesk import load_transport
 from datetime import datetime, timezone
 import hashlib
-import importlib.util
 import json
 import math
 import os
@@ -112,7 +112,7 @@ def main():
         parser.error("guest-baseline requires --baseline-runtime")
     if args.baseline_store and "guest-baseline" not in args.modes:
         parser.error("--baseline-store requires guest-baseline")
-    repo = Path(__file__).resolve().parents[2]
+    repo = Path(__file__).resolve().parents[1]
     work = args.work.resolve()
     root = work / "sysroot"
     fixtures = Path(__file__).resolve().parent / "fixtures"
@@ -130,9 +130,7 @@ def main():
         (root / directory).mkdir(exist_ok=True)
     # Temporary files are shared only by sequential runs, never simultaneous builds.
     (root / "tmp").chmod(0o1777)
-    spec = importlib.util.spec_from_file_location("transport", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads((Path.home() / ".codex/config.toml").read_text())["mcp_servers"]["magicdesk"]
     client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "),
                               timeout=400, request_timeout=360)

@@ -14,19 +14,55 @@ cmake --build build --target shroot-check-fixtures -j 4
 ctest --test-dir build --output-on-failure
 ```
 
-This path requires CMake, a C compiler, Python and OpenSSL for local HTTPS test
+This path requires CMake, a C compiler, Python 3.11+ and OpenSSL for local HTTPS test
 certificates. It requires no Java, Android application, privileged service or
 public registry. `NativeChecks.cmake` registers the existing component fixtures,
 including supervisor state, policy, signal, robust-futex, descriptor, storage and
-image contracts. `run_component.py` owns temporary directories, process-group
-cleanup and timeout failure; assertions remain in the same C tests used by the
-device runners. `ctest -L component` selects these checks; `-L integration`
+image contracts. `run_component.py` uses the same local executor as runtime and
+service suites for private directories, process-group cleanup and timeout
+failure; assertions remain in the same C tests used by device runners.
+`ctest -L component` selects these checks; `-L integration`
 selects native management/import workflows. Cross-built binaries must run on
 their target, not the build machine.
 
-The graphical and installed-application runners below still use MagicDesk's
-integration transport and are not part of the standalone CTest suite. Their
-migration is separate from native component qualification.
+## Fixture Transports
+
+Shared resource, runtime, OCI service and headless-browser runners default to
+`--executor local`. They keep the caller's real UID and host restrictions, use
+an explicit native build and disposable fixture directories, and need no MCP
+configuration. Assertions, Base/lazy entry selection and host-kernel profiles
+are shared with the MagicDesk executors. An installed store must be supplied
+explicitly; local tests never select a global distribution.
+
+```sh
+python tests/test_resources.py build --executor local --case supervisor-state
+python tests/test_watch_runtime.py build --executor local
+python tests/test_oci_services.py build/results --build build --python /path/to/oci-layout
+```
+
+Build the fixtures used by the chosen workload; `shroot-check-fixtures` builds
+the CTest set, not every optional application probe. Local evidence records UID,
+groups, kernel, page size, SELinux context and effective capabilities. A Termux
+run establishes that actual Android identity, not MagicDesk's different Zygote
+domain, Shell, or ordinary Linux. Native streaming uses pipes; it does not loop
+through a console, network log relay or file previews.
+
+MagicDesk graphical, installer and APK-specific workflows use the optional
+`executors/magicdesk.py` adapter. Set its source location explicitly; Shroot does
+not assume a parent checkout or duplicate MagicDesk's MCP implementation:
+
+```sh
+export MAGICDESK_SOURCE=/path/to/magicdesk-android
+export SHROOT_TEST_EXECUTOR=shell  # or app with a matching fixture APK
+python tests/test_resources.py /path/to/exact/native/build --case supervisor-state
+```
+
+The adapter reads the existing MCP configuration (`~/.codex/config.toml`) without
+modifying it. `app` invokes the debug APK's real Zygote identity and verifies the
+exact packaged helper hashes; `shell` verifies UID 2000 and the shell SELinux
+domain. On-device service tests use a loopback log channel. Graphical checks
+still require MagicDesk and its graphics/placement services; a local headless
+browser pass does not qualify Android presentation or audio.
 
 - [Choose A Suite](#choose-a-suite)
 - [Evidence Rules](#evidence-rules)

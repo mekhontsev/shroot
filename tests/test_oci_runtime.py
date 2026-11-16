@@ -5,7 +5,7 @@ No Desktop, root, Termux execution, daemon or timing-based readiness checks.
 Inputs are immutable OCI layouts; report retains their digests and exact outputs.
 """
 import argparse
-import importlib.util
+from executors.magicdesk import load_transport
 import json
 from pathlib import Path
 import shlex
@@ -20,10 +20,7 @@ def main():
     parser.add_argument('build', type=Path)
     parser.add_argument('layouts', type=Path, nargs='+')
     args = parser.parse_args()
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('transport', repo / 'scripts/mcp-client.py')
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
     client = transport.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '))
     state = client.call('get_state')

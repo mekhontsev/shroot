@@ -82,7 +82,8 @@ def start_service(init, service):
 
 def prepare_init(system=None):
     """Read the installer-owned preparation on the host, never on guest import."""
-    program = subprocess.check_output(['sh', str(Path(__file__).resolve().parents[2] /
+    from executors.magicdesk import source_root
+    program = subprocess.check_output(['sh', str(source_root() /
         'scripts/install_linux.sh'), '--print-init-prepare'], text=True)
     if system is not None:
         if not system.startswith('/nix/store/') or '\n' in system:

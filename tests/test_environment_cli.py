@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Installed named-environment CLI, actual UID 2000, no Termux execution or Desktop."""
 import argparse
-import importlib.util
+from executors.magicdesk import load_transport
 import json
 from pathlib import Path
 import shlex
@@ -17,10 +17,8 @@ def main():
     parser.add_argument('--images', nargs='+', default=['alpine:3.23', 'debian:trixie-slim'])
     parser.add_argument('--dns', default='system', help='Explicit fixture DNS policy, never changes Android DNS')
     args = parser.parse_args()
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('transport', repo / 'scripts/mcp-client.py')
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    repo = Path(__file__).resolve().parents[1]
+    transport = load_transport()
     config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
     client = transport.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '),
                               timeout=600, request_timeout=600)

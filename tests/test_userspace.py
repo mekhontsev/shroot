@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """One graphical contract for an explicitly prepared glibc or musl store."""
 import argparse
+from executors.magicdesk import load_transport
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import shlex
@@ -29,10 +29,7 @@ def main():
         name, separator, _ = value.partition("=")
         if not separator or not name.isascii() or not name.isidentifier() or "\0" in value:
             parser.error("--environment requires NAME=VALUE with a shell variable name")
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("transport", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads((Path.home() / ".codex/config.toml").read_text())["mcp_servers"]["magicdesk"]
     client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
     state = client.call("get_state")

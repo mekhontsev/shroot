@@ -6,12 +6,13 @@ import tempfile
 import unittest
 from unittest import mock
 
+from executors.magicdesk import MagicDeskExecutor
 from fixture_executor import FixtureExecutor
 
 
 class CapturedCommands(unittest.TestCase):
     def executor(self, output):
-        executor = object.__new__(FixtureExecutor)
+        executor = object.__new__(MagicDeskExecutor)
         executor.mode, executor.root, executor.output = 'shell', '/owned fixture', output
         executor.console = 'console'
         executor.client = mock.Mock()
@@ -53,7 +54,7 @@ class CapturedCommands(unittest.TestCase):
                 executor = self.executor(Path(directory))
                 executor.client.timeout, executor.client.request_timeout = 270, 240
                 executor.download = mock.Mock(side_effect=lambda remote, local: local.write_text('complete'))
-                with mock.patch('fixture_executor.time.monotonic', return_value=100):
+                with mock.patch('executors.magicdesk.time.monotonic', return_value=100):
                     executor.execute('long workload', 1245, capture=capture)
                 self.assertEqual(executor.client.call.call_args.kwargs,
                                  dict(deadline=1345, request_timeout=1245))
@@ -75,6 +76,23 @@ class CapturedCommands(unittest.TestCase):
                     executor.execute('true', 0, capture=capture)
                 executor.client.call.assert_not_called()
                 executor._transport_command.assert_not_called()
+
+    def test_selected_connection_reaches_initial_app_launch(self):
+        client = mock.Mock()
+        client.call.side_effect = [dict(app={}, device={}), dict(sessionId='selected-console')]
+        observed = []
+
+        def launch(executor, command, timeout):
+            observed.append((executor.config, executor.server, executor.console))
+            return dict(exitCode=0, output='/data/user/0/package/files\n')
+
+        with tempfile.TemporaryDirectory() as output, \
+                mock.patch('executors.magicdesk.connect', return_value=(client, mock.Mock())) as connect, \
+                mock.patch.object(MagicDeskExecutor, '_app_command', launch):
+            executor = FixtureExecutor.connect(output, 'app', config=Path('/selected/config'), server='selected')
+        connect.assert_called_once_with(Path('/selected/config'), 'selected')
+        self.assertEqual(observed, [(Path('/selected/config'), 'selected', 'selected-console')] * 2)
+        self.assertEqual(executor.mode, 'app')
 
 
 if __name__ == '__main__':

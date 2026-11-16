@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Exercise inotify through the production guest supervisor and syscall adapter."""
 import argparse
-import importlib.util
 import json
 import re
 from pathlib import Path
 import shlex
-import tomllib
 import uuid
 from kernel_profile import KernelProfile
 from fixture_executor import FixtureExecutor
@@ -24,21 +22,14 @@ def main():
     FixtureExecutor.add_argument(parser)
     args = parser.parse_args()
     profile = KernelProfile(args.kernel_profile)
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("transport", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
-    config = tomllib.loads((Path.home() / ".codex/config.toml").read_text())["mcp_servers"]["magicdesk"]
-    client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
-    state = client.call("get_state")
     tag = uuid.uuid4().hex
-    executor = FixtureExecutor(client, transport, args.build, args.executor, 'watch')
+    executor = FixtureExecutor.connect(args.build, args.executor, 'watch')
     directory = executor.root
     def executable(name):
         return executor.native_path(directory + '/libmagicdesk_guest_' + name + '.so')
     runner_path = directory + '/libmagicdesk_guest_run.so'
     runner = shlex.join([runner_path, '--user', args.user])
-    report = {"id": tag, "directory": directory, "app": state["app"], "device": state["device"],
+    report = {"id": tag, "directory": directory, **executor.state,
               "executor": executor.evidence, "guestUser": args.user, "productionAdapter": True,
               "checks": [], "uploads": [], "passed": False}
     report['kernelProfile'] = profile.evidence

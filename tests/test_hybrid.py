@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run owned native hybrid ptrace/notification boundary controls under UID 2000."""
 import argparse
-import importlib.util
+from executors.magicdesk import load_transport
 import json
 from pathlib import Path
 import shlex
@@ -16,10 +16,7 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.runs <= 100:
         parser.error("--runs must be 1-100")
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("transport", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads((Path.home() / ".codex/config.toml").read_text())["mcp_servers"]["magicdesk"]
     client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
     state = client.call("get_state")

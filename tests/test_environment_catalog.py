@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Installed catalog and exact launch ownership, without Desktop or a Termux executor."""
 import argparse
+from executors.magicdesk import load_transport
 import base64
-import importlib.util
 import json
 import subprocess
 from pathlib import Path
@@ -16,10 +16,8 @@ def main():
     parser.add_argument('--lease')
     parser.add_argument('--names', nargs='+', default=['check-alpine-cold01', 'check-debian-cold01'])
     args = parser.parse_args()
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('transport', repo / 'scripts/mcp-client.py')
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    repo = Path(__file__).resolve().parents[1]
+    transport = load_transport()
     config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
     client = transport.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '), timeout=180)
     report = {'checks': [], 'passed': False}

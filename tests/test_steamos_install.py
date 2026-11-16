@@ -5,6 +5,7 @@ Retains the named test environment for runtime and graphical checks. Uses the
 installed APK's CLI; native-build testing is a separate test_steamos_runtime run.
 """
 import argparse
+from executors.magicdesk import source_root
 import hashlib
 from pathlib import Path
 from test_oci_services import Suite
@@ -19,7 +20,7 @@ def main():
     parser.add_argument('--resume', action='store_true')
     args = parser.parse_args()
     suite = Suite(Path('build/steamos-install-results'))
-    installer = Path(__file__).resolve().parents[2] / 'scripts/install_linux.sh'
+    installer = source_root() / 'scripts/install_linux.sh'
     suite.report['installerSha256'] = hashlib.sha256(installer.read_bytes()).hexdigest()
     suite.report['environment'] = args.name
     try:

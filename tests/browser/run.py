@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Exercise the production guest runtime with real browser workloads."""
 import argparse
-import importlib.util
 import json
 from pathlib import Path
 import shlex
 import sys
-import tomllib
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -40,17 +38,12 @@ def main():
         args.program.pop(0)
     if not args.program:
         parser.error("missing guest program")
-    repo = Path(__file__).resolve().parents[3]
-    spec = importlib.util.spec_from_file_location("transport", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
-    config = tomllib.loads((Path.home() / ".codex/config.toml").read_text())["mcp_servers"]["magicdesk"]
-    client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
-    state = client.call("get_state")
+    if args.executor == 'local' and args.installed:
+        parser.error('--installed requires the MagicDesk shell/app adapter')
     tag = uuid.uuid4().hex
-    executor = FixtureExecutor(client, transport, args.build, args.executor, 'browser')
+    executor = FixtureExecutor.connect(args.build, args.executor, 'browser')
     remote = executor.root
-    report = {"id": tag, "directory": remote, "app": state["app"], "device": state["device"],
+    report = {"id": tag, "directory": remote, **executor.state,
               "uid": executor.uid, "adapter": "selective-TRACE-USER_NOTIF", "productionAdapter": True,
               "scope": args.scope, "layerOneEstablished": False,
               "procRootDomain": True,
@@ -73,7 +66,7 @@ def main():
             for name in ("libmagicdesk_guest_supervisor.so", "libmagicdesk_guest_run.so",
                          "libmagicdesk_guest_bootstrap.so", "libmagicdesk_guest_service.so"):
                 report["uploads"].append(executor.upload(args.build / name, remote + "/" + name))
-            if args.executor == 'shell':
+            if args.executor != 'app':
                 command("chmod 700 " + remote + "/*")
             report["hashes"] = command("sha256sum " + remote + "/*")["output"]
         report["installed"] = args.installed

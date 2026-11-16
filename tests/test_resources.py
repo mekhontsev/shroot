@@ -8,7 +8,6 @@ import re
 import shlex
 import statistics
 import tempfile
-import tomllib
 import uuid
 from kernel_profile import KernelProfile
 from fixture_executor import FixtureExecutor, probe_native_capability
@@ -34,22 +33,18 @@ def main():
         parser.error("Kernel profiles require fixture helpers, not installed APK helpers")
     if args.case != "all" and args.compare_installed:
         parser.error("--compare-installed requires the full resource suite")
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("md_mcp", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
-    config = tomllib.loads(args.config.read_text())["mcp_servers"][args.server]
-    client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "),
-                              request_timeout=120)
-    state = client.call("get_state")
-    executor = FixtureExecutor(client, transport, args.build, args.executor, 'resources')
+    if args.executor == 'local' and args.compare_installed:
+        parser.error('--compare-installed compares MagicDesk helpers; select --executor shell/app')
+    executor = FixtureExecutor.connect(args.build, args.executor, 'resources',
+                                       config=args.config, server=args.server)
+    executor.keep = args.keep
     root = executor.root
     def executable(name):
         directory = executor.libraries if args.executor == 'app' else root
         return directory + '/libmagicdesk_guest_' + name + '.so'
     guest_run = executable("run")
     supervisor_run = shlex.join([*profile.environment, executable("supervisor")])
-    result = {"device": state["device"], "app": state["app"], "root": root, "case": args.case, "checks": []}
+    result = {**executor.state, "root": root, "case": args.case, "checks": []}
     result['kernelProfile'] = profile.evidence
 
     def native_capability(name):
@@ -621,7 +616,7 @@ def main():
         for name in names:
             file = "libmagicdesk_guest_" + name + ".so"
             executor.upload(args.build / file, root + "/" + file)
-        if args.executor == 'shell':
+        if args.executor != 'app':
             check("prepare fixtures", "chmod 700 " + root + "/*.so")
         if profile.options:
             if 'supervisor' not in names:
@@ -639,7 +634,7 @@ def main():
                 return
         if args.case in ("all", "supervisor-state", "private-memory"):
             check("host policy admission", executable("test_host_policy") + ' ' + shlex.quote(root),
-                  "PASS app-UID admission and scoped host access")
+                  "PASS native/Android identity admission and scoped host access")
             check("host path resolution", executable("test_host_open"),
                   "PASS host open resolution:")
             check("signal delivery", executable("test_signal_delivery"),

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stock OCI entrypoints and persistent services through the selected runtime.
 
-Run on the Android device hosting the configured local MCP endpoint. Python only
+Run locally or through the optional on-device MagicDesk adapter. Python only
 controls fixtures; every Linux process retains the explicitly selected executor.
 Services bind loopback, use private instances and leave no running processes.
 """
@@ -9,7 +9,6 @@ import argparse
 import base64
 import hashlib
 import http.client
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -20,7 +19,6 @@ import tarfile
 import tempfile
 import threading
 import time
-import tomllib
 import uuid
 from kernel_profile import KernelProfile
 from fixture_executor import FixtureExecutor, probe_native_capability
@@ -32,48 +30,27 @@ NAMES = ('nginx', 'redis', 'postgres', 'python', 'node', 'caddy', 'mariadb',
 class Server:
     def __init__(self, suite, argv, timeout=180):
         self.suite = suite
-        self.client = suite.new_client()
-        self.executor = FixtureExecutor(self.client, suite.transport, suite.output.parent,
-                                        suite.executor.mode, 'server')
+        self.executor = suite.executor.fork('server')
         self.lines = queue.Queue()
         self.log = []
         self.result = None
         self.error = None
-        self.listener = socket.socket()
-        self.listener.bind(('127.0.0.1', 0))
-        self.listener.listen(1)
-        self.listener.settimeout(20)
         self.timeout = timeout
-        self.command = 'set -o pipefail\n' + shlex.join(['timeout', str(timeout), *argv])
-        self.command += ' 2>&1 | /system/bin/toybox nc -w 10 127.0.0.1 '
-        self.command += str(self.listener.getsockname()[1])
-        self.command = suite.kernel_profile.shell(self.command)
-        self.connection = None
-        self.reader = threading.Thread(target=self.read)
+        argv = [suite.executor.native_path(argv[0]), *argv[1:]]
+        self.command = suite.kernel_profile.shell(shlex.join(['timeout', str(timeout), *argv]))
         self.process = threading.Thread(target=self.execute)
-        self.reader.start()
         self.process.start()
+
+    def record(self, line):
+        self.log.append(line)
+        print(line, end='', flush=True)
+        self.lines.put(line)
 
     def execute(self):
         try:
-            self.result = self.executor.execute(self.command, self.timeout + 15)
+            self.result = self.executor.execute(self.command, self.timeout + 15, on_line=self.record)
         except Exception as error:
             self.error = str(error)
-        finally:
-            self.lines.put(None)
-
-    def read(self):
-        try:
-            # EVENT_WAIT: log-transport connection and output; timeout fails readiness.
-            self.connection, _ = self.listener.accept()
-            self.connection.settimeout(self.timeout + 20)
-            with self.connection, self.connection.makefile('r', errors='replace') as stream:
-                for line in stream:
-                    self.log.append(line)
-                    print(line, end='', flush=True)
-                    self.lines.put(line)
-        except OSError as error:
-            self.log.append('log transport: ' + str(error) + '\n')
         finally:
             self.lines.put(None)
 
@@ -99,21 +76,16 @@ class Server:
         self.executor.cancel()
         if self.executor.mode == 'shell':
             self.executor.close()
-        # EVENT_WAIT: cancellation/EOF drains log and command owners before fixture exit.
+        # EVENT_WAIT: cancellation drains the command and log owners before fixture exit.
         self.process.join(30)
-        if self.connection:
-            try:
-                self.connection.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-        self.listener.close()
-        self.reader.join(25)
-        if self.executor.mode == 'app' and not self.process.is_alive():
-            self.executor.execute(shlex.join(['rmdir', self.executor.root]))
+        try:
+            assert not self.process.is_alive(), 'fixture owner still active'
+            if self.executor.mode == 'app':
+                self.executor.execute(shlex.join(['rmdir', self.executor.root]))
+        finally:
             self.executor.close()
-        self.suite.report['servers'].append({'command': self.command, 'log': ''.join(self.log),
-                                            'result': self.result, 'error': self.error})
-        assert not self.process.is_alive() and not self.reader.is_alive(), 'fixture owner still active'
+            self.suite.report['servers'].append({'command': self.command, 'log': ''.join(self.log),
+                                                'result': self.result, 'error': self.error})
         self.suite.kernel_profile.observe(''.join(self.log), required=True)
 
 
@@ -138,19 +110,15 @@ class Suite:
         self.kernel_profile = KernelProfile(kernel_profile)
         if self.kernel_profile.options and not build and session is None:
             raise ValueError('Kernel profiles require an explicit fixture build, not installed APK helpers')
+        selected = executor or os.environ.get('SHROOT_TEST_EXECUTOR', 'local')
+        if selected == 'local' and not build and session is None:
+            raise ValueError('Local suites require --build pointing to the native runtime bundle')
         output.mkdir(parents=True, exist_ok=True)
-        repo = Path(__file__).resolve().parents[2]
-        spec = importlib.util.spec_from_file_location('transport', repo / 'scripts/mcp-client.py')
-        self.transport = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.transport)
-        self.config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
-        self.client = self.new_client()
-        state = self.client.call('get_state')
-        self.executor = FixtureExecutor(self.client, self.transport, output, executor, 'oci-services')
+        self.executor = FixtureExecutor.connect(output, selected, 'oci-services')
         tag = uuid.uuid4().hex
         self.base = self.executor.root
         self.output = output / ('oci-services-' + tag + '.json')
-        self.report = {'id': tag, 'directory': self.base, 'app': state['app'], 'device': state['device'],
+        self.report = {'id': tag, 'directory': self.base, **self.executor.state,
                        'uid': self.executor.uid, 'images': [], 'commands': [], 'servers': [], 'cases': [], 'passed': False}
         self.entry_options = ([] if machine_entry is None else
                               ['--env', 'SHROOT_MACHINE_ENTRY=' + ('1' if machine_entry else '0')])
@@ -211,6 +179,8 @@ class Suite:
 
     def installed_environment(self, name, store=None):
         if store is None:
+            if self.executor.mode == 'local':
+                raise ValueError('Local suites require an explicit --store; no global environment is selected')
             store = self.command(['shroot', 'path', name], quiet=True).strip()
         # Cold admission belongs to the runtime under test, not to read-only
         # inspection by an APK which may carry an older schema revision.
@@ -220,16 +190,25 @@ class Suite:
                     self.command(self.image_command('launches', store), quiet=True).splitlines() if line])
         return info
 
-    def new_client(self):
-        return self.transport.Client(self.config['url'],
-                                     self.config['http_headers']['Authorization'].removeprefix('Bearer '),
-                                     timeout=270, request_timeout=240)
+    @property
+    def client(self):
+        if self.executor.mode == 'local':
+            raise RuntimeError('This integration requires --executor shell/app and MagicDesk')
+        return self.executor.client
+
+    @property
+    def transport(self):
+        if self.executor.mode == 'local':
+            raise RuntimeError('This integration requires --executor shell/app and MagicDesk')
+        return self.executor.transport
 
     def observe(self, argv, quiet=False, timeout=180, raw=False):
         argv = [self.executor.native_path(argv[0]), *argv[1:]]
         text = shlex.join(['timeout', '-k', '15', str(timeout)])
         # Built-in shell functions retain their selected identity and FPATH.
-        text += ' "$MAGICDESK_ANDROID_SHELL" -c ' + shlex.quote(shlex.join(list(map(str, argv))))
+        shell = (shlex.quote(self.executor.shell) if self.executor.mode == 'local'
+                 else '"$MAGICDESK_ANDROID_SHELL"')
+        text += ' ' + shell + ' -c ' + shlex.quote(shlex.join(list(map(str, argv))))
         text = self.kernel_profile.shell(text)
         result = self.executor.execute(text, timeout + 15)
         self.report['commands'].append({'command': text, **result})
@@ -288,7 +267,7 @@ class Suite:
                   'printf "\\nSHROOT_TEST_STDOUT "; base64 "$output" | tr -d "\\n"; '
                   'printf "\\n"; exit "$status"')
         argv = [self.executor.native_path(argv[0]), *argv[1:]]
-        output = self.command(['/system/bin/sh', '-c', script, 'stdout', self.base, *argv], quiet=True)
+        output = self.command([self.executor.shell, '-c', script, 'stdout', self.base, *argv], quiet=True)
         encoded, = [line.removeprefix('SHROOT_TEST_STDOUT ') for line in output.splitlines()
                     if line.startswith('SHROOT_TEST_STDOUT ')]
         return base64.b64decode(encoded, validate=True).decode()
@@ -834,6 +813,7 @@ def main():
     parser.add_argument('--build', type=Path, help='Explicit native build instead of installed APK helpers')
     add_machine_entry_argument(parser)
     KernelProfile.add_argument(parser)
+    FixtureExecutor.add_argument(parser)
     parser.add_argument('--controls', action='store_true',
                         help='Explicit controls: nginx stderr directive and redis --user redis, not default-entrypoint passes')
     for name in NAMES:
@@ -842,7 +822,8 @@ def main():
         group.add_argument('--' + name + '-instance', help='Explicit disposable prepared instance on device')
     args = parser.parse_args()
     assert any(getattr(args, name) or getattr(args, name + '_instance') for name in NAMES)
-    suite = Suite(args.output, args.build, machine_entry=args.machine_entry, kernel_profile=args.kernel_profile)
+    suite = Suite(args.output, args.build, machine_entry=args.machine_entry,
+                  kernel_profile=args.kernel_profile, executor=args.executor)
     suite.report['controls'] = args.controls
     try:
         for name, test in (('nginx', nginx), ('redis', redis), ('postgres', postgres),

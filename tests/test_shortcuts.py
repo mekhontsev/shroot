@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Installed guest recipes and content workflows, on an independent virtual display."""
 import argparse
+from executors.magicdesk import load_transport
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import re
@@ -27,9 +27,7 @@ def main():
     assert prepared["checks"] and all(item["passed"] for item in prepared["checks"])
     root = prepared["directory"]
     assert re.fullmatch(r"/data/local/tmp/md-guest-lab-[0-9a-f]{32}", root)
-    spec = importlib.util.spec_from_file_location("md_mcp", Path(__file__).resolve().parents[2] / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads(args.config.read_text())["mcp_servers"]["magicdesk"]
     client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
     state = client.call("get_state")

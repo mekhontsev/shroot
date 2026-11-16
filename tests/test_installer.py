@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run the public installer and verify settings inside a named test environment."""
 import argparse
+from executors.magicdesk import load_transport, source_root
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import shlex
@@ -26,10 +26,8 @@ def main():
     parser.add_argument('--library', help='Dedicated shell-owned library, isolated from existing image caches')
     parser.add_argument('--ipv4', action='store_true', help='Set XBPS FORCE_IPV4 for networks without working IPv6')
     args = parser.parse_args()
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('transport', repo / 'scripts/mcp-client.py')
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    repo = Path(__file__).resolve().parents[1]
+    transport = load_transport()
     config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
     client = transport.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '),
                               timeout=args.timeout, request_timeout=args.timeout)
@@ -53,7 +51,7 @@ def main():
             command(['export', 'MAGICDESK_GUEST_HOME=' + args.library])
         if args.ipv4:
             command(['export', 'FORCE_IPV4=1'])
-        source = repo / 'scripts/install_linux.sh'
+        source = source_root() / 'scripts/install_linux.sh'
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         script = '/data/local/tmp/magicdesk/installer-test-' + args.name + '-' + digest + '.sh'
         report['upload'] = transport.upload(client, source, script, overwrite=True)

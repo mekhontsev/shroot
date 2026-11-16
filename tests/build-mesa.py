@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Cross-build test-owned Linux Mesa libraries; never install a driver into Android."""
 import argparse
+from executors.magicdesk import source_root
 from pathlib import Path
 import subprocess
 import json
@@ -23,7 +24,7 @@ patch_id = None
 if args.wayland_zink:
     if args.driver != "zink" or (source / "VERSION").read_text().strip() != "26.2.3":
         parser.error("--wayland-zink requires the Zink driver and Mesa 26.2.3")
-    installer = Path(__file__).resolve().parents[2] / "scripts/install_linux.sh"
+    installer = source_root() / "scripts/install_linux.sh"
     patch = subprocess.check_output(["sh", str(installer), "--print-mesa-patch"])
     patch_id = hashlib.sha256(patch).hexdigest()
     source = output / "patched-source"

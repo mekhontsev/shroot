@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check external domain/identity contracts, not browser compatibility."""
 import argparse
+from executors.magicdesk import load_transport
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import shlex
@@ -19,10 +19,7 @@ def main():
     args = parser.parse_args()
     assert 1 <= args.repeat <= 100
     assert not args.suid_main or args.fixture == "suid-context"
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("transport", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads((Path.home() / ".codex/config.toml").read_text())["mcp_servers"]["magicdesk"]
     client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
     state = client.call("get_state")

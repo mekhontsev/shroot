@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Cold named Debian/Alpine workflows through installed MCP, CLI and Start recipes."""
 import argparse
+from executors.magicdesk import load_transport
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import shlex
@@ -21,13 +21,11 @@ def main():
     parser.add_argument('--stage', choices=['prepare', 'accounts', 'files', 'graphics', 'backup', 'all'], default='all')
     args = parser.parse_args()
     assert args.tag.isalnum() and len(args.tag) <= 32
-    repo = Path(__file__).resolve().parents[2]
+    repo = Path(__file__).resolve().parents[1]
     if args.stage in ('graphics', 'backup', 'all'):
         from graphical_recipe import compile_recipe
         compile_recipe(repo / 'build/guest-workflow-recipes')
-    spec = importlib.util.spec_from_file_location('transport', repo / 'scripts/mcp-client.py')
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
     client = transport.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '),
                               timeout=600, request_timeout=600)

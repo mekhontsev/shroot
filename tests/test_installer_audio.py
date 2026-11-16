@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify installer-owned desktop audio, mixer control and silent playback."""
 import argparse
-import importlib.util
+from executors.magicdesk import load_transport
 import json
 from pathlib import Path
 import time
@@ -62,10 +62,8 @@ def main():
     parser.add_argument('--library', help='Same shell-owned library as the installer fixture')
     parser.add_argument('--user', default='mdtester', help='Existing guest account')
     args = parser.parse_args()
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('transport', repo / 'scripts/mcp-client.py')
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    repo = Path(__file__).resolve().parents[1]
+    transport = load_transport()
     config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
     client = transport.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '),
                               timeout=60, request_timeout=60)

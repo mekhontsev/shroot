@@ -1,12 +1,18 @@
 # Host Execution Identities
 
-Shroot uses one native engine for Android application and shell identities.
-Every launch retains its explicitly selected executor. Shared fixtures select
-the real Android identity with `--executor app|shell` or
-`SHROOT_TEST_EXECUTOR`; guest credentials are a separate setting.
+Shroot uses one native engine for ordinary ARM64 Linux and Android application
+and shell identities. Every launch retains its explicitly selected executor.
+Shared fixtures use `--executor local|app|shell` or `SHROOT_TEST_EXECUTOR`;
+guest credentials are a separate setting. The default `local` transport keeps
+the calling process's identity without MagicDesk. The `app` and `shell` adapters
+select MagicDesk's real Android contexts; see [fixture transports](README.md#fixture-transports).
 
 ## Ownership
 
+- The local executor owns only disposable fixture directories, its exact child
+  process groups, output and cancellation. Native component and guest/service
+  runners share that owner; they never borrow another process's wait status or
+  automatically switch Android/Linux identity.
 - `GuestFixtureService` runs in `:guest_probe` with the app's real UID, SELinux
   domain and inherited Android seccomp. It never loads the adapter into ART or
   changes the main process's runtime limits.
@@ -218,15 +224,17 @@ Use an awake, unlocked device with MagicDesk MCP configured. Close an active
 Desktop through production cleanup before replacing the APK.
 
 ```sh
-./gradlew :app:assembleDebug -PMAGICDESK_GUEST_FIXTURES=true
-python native/guest-exec-lab/fixture_app.py \
-  --apk app/build/outputs/apk/debug/app-debug.apk --command 'id; shroot list'
+export MAGICDESK_SOURCE=/path/to/magicdesk-android
+(cd "$MAGICDESK_SOURCE" && ./gradlew :app:assembleDebug -PMAGICDESK_GUEST_FIXTURES=true)
+python tests/fixture_app.py \
+  --apk "$MAGICDESK_SOURCE/app/build/outputs/apk/debug/app-debug.apk" --command 'id; shroot list'
 
 export SHROOT_TEST_EXECUTOR=app
-python native/guest-exec-lab/test_resources.py app/build/shroot --case all
-python native/guest-exec-lab/test_resources.py app/build/shroot --case private-memory
-python native/guest-exec-lab/test_guest_policy.py --build app/build/shroot --name alpine
-python native/guest-exec-lab/test_clone3.py --build app/build/shroot --name alpine
+build="$MAGICDESK_SOURCE/app/build/shroot"
+python tests/test_resources.py "$build" --case all
+python tests/test_resources.py "$build" --case private-memory
+python tests/test_guest_policy.py --build "$build" --name alpine
+python tests/test_clone3.py --build "$build" --name alpine
 ```
 
 The same drivers accept `SHROOT_TEST_EXECUTOR=shell` for UID 2000. Where exposed,
@@ -241,7 +249,7 @@ assertions. Debugger coverage belongs to `test_debugger_runtime.py`; memory
 coverage belongs to `test_resources.py --case private-memory`, not to
 another app-only suite.
 
-Fixtures are debug-only APK executables. The app executor verifies their exact
+For the `app` adapter, fixtures are debug-only APK executables. It verifies their exact
 ELF digests before use. Native tests execute immutable packaged ELFs; guest
 mounts receive regular byte copies. Writable app data is never made directly
 executable and `run-as` is used only for inert transfers.

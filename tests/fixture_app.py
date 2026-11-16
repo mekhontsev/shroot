@@ -1,25 +1,14 @@
 #!/usr/bin/env python3
 """Bounded shell command in MagicDesk's real Zygote identity, never in run-as."""
 import argparse
-import importlib.util
 import json
 from pathlib import Path
 import re
 import shlex
 import time
-import tomllib
 import uuid
-
-PACKAGE = 'io.github.mekhontsev.magicdesk'
-PRIVATE_DIRECTORY = 'cache/guest-fixtures'
-MAX_DEADLINE_SECONDS = 7200
-
-
-def deadline_seconds(value):
-    seconds = int(value)
-    if not 1 <= seconds <= MAX_DEADLINE_SECONDS:
-        raise argparse.ArgumentTypeError(f'deadline must be between 1 and {MAX_DEADLINE_SECONDS} seconds')
-    return seconds
+from fixture_executor import deadline_seconds
+from executors.magicdesk import connect, PACKAGE, PRIVATE_DIRECTORY
 
 
 def main():
@@ -42,12 +31,7 @@ def main():
         parser.error('Invalid run ID')
     if args.observe_run and args.apk:
         parser.error('Observing a run must not replace its APK')
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('md_mcp', repo / 'scripts/mcp-client.py')
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
-    config = tomllib.loads(args.config.read_text())['mcp_servers'][args.server]
-    client = transport.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '))
+    client, transport = connect(args.config, args.server)
     args.output.mkdir(parents=True, exist_ok=True)
     if args.apk:
         transport.update(client, args.apk)

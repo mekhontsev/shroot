@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Stock distribution application startup, presentation and protocol closure."""
 import argparse
+from executors.magicdesk import load_transport
 import base64
-import importlib.util
 import io
 import json
 import re
@@ -69,10 +69,8 @@ def main():
         parser.error("--x11-manager requires X11")
     if args.application == "gles" and args.protocol != "wayland":
         parser.error("The EGL fixture currently uses the Wayland client")
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("transport", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    repo = Path(__file__).resolve().parents[1]
+    transport = load_transport()
     config = tomllib.loads((Path.home() / ".codex/config.toml").read_text())["mcp_servers"]["magicdesk"]
     client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
     before = client.call("get_state")
@@ -144,7 +142,7 @@ def main():
         "chromium": "exec chromium --no-first-run --no-default-browser-check --user-data-dir=/tmp/chromium-" + tag
             + " --ozone-platform=" + args.protocol + " " + shlex.quote(browser_page),
         "blender": "exec blender --factory-startup --python-expr "
-            + shlex.quote((repo / "native/guest-exec-lab/fixtures/md-blender.py").read_text()),
+            + shlex.quote((repo / "tests/fixtures/md-blender.py").read_text()),
         "gles": "exec es2gears_wayland -info",
         "gtkgl": "exec python3 " + shlex.quote(gl_fixture),
     }
@@ -152,7 +150,7 @@ def main():
         command("ln -sf libmagicdesk_guest_run.so " + shlex.quote(args.runtime + "/shroot"))
         if args.application == "gtkgl":
             source = args.runtime + "/" + Path(gl_fixture).name
-            result["fixture"] = transport.upload(client, str(repo / "native/guest-exec-lab/fixtures/md-gtk-gl.py"), source)
+            result["fixture"] = transport.upload(client, str(repo / "tests/fixtures/md-gtk-gl.py"), source)
             command("cat " + shlex.quote(source) + " | " + runner + " /bin/sh -c "
                     + shlex.quote("cat > " + shlex.quote(gl_fixture)))
         if args.application in ("writer", "calc"):

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Launch installer catalog entries without Desktop, on a private or selected display."""
 import argparse
+from executors.magicdesk import load_transport
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -17,10 +17,8 @@ def main():
     parser.add_argument('--lease', help='Retain an existing phone awake lease')
     parser.add_argument('--display', type=int, help='Use this connected non-phone display instead of creating one')
     args = parser.parse_args()
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('transport', repo / 'scripts/mcp-client.py')
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    repo = Path(__file__).resolve().parents[1]
+    transport = load_transport()
     config = tomllib.loads((Path.home() / '.codex/config.toml').read_text())['mcp_servers']['magicdesk']
     client = transport.Client(config['url'], config['http_headers']['Authorization'].removeprefix('Bearer '), timeout=180)
     report = {'checks': [], 'passed': False}

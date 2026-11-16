@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the opt-in guest executor fixture through existing authorized MCP services."""
 import argparse
-import importlib.util
+from executors.magicdesk import load_transport
 import io
 import json
 from pathlib import Path
@@ -25,10 +25,7 @@ def main():
         package_links = [member for member in package.getmembers() if member.islnk()]
         uncompress = next(member for member in package.getmembers() if member.name.endswith("/uncompress"))
         gunzip = next(member for member in package.getmembers() if member.name.endswith("/gunzip"))
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("md_mcp", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads(args.config.read_text())["mcp_servers"][args.server]
     # EVENT_WAIT: command completion may take its full 180-second bound plus
     # process-tree cleanup. A transport timeout remains a failure, not a replay.

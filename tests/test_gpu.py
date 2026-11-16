@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Real Linux Vulkan WSI through the guest runtime and MagicDesk's graphical hosts."""
 import argparse
+from executors.magicdesk import load_transport
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import shlex
@@ -28,9 +28,7 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.frames <= 1000000:
         parser.error("--frames must be between 1 and 1000000")
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("transport", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec); spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads((Path.home() / ".codex/config.toml").read_text())["mcp_servers"]["magicdesk"]
     client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
     before = client.call("get_state")

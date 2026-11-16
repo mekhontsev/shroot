@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Exercise a prepared Xfce session in one retained X11 viewer, without Desktop."""
 import argparse
+from executors.magicdesk import load_transport
 import base64
-import importlib.util
 import json
 from pathlib import Path
 import shlex
@@ -20,9 +20,7 @@ def main():
     parser.add_argument("--keyboard-directory", required=True)
     parser.add_argument("--trace", help="Optional native observer wrapper executable")
     args = parser.parse_args()
-    repo = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("transport", repo / "scripts/mcp-client.py")
-    transport = importlib.util.module_from_spec(spec); spec.loader.exec_module(transport)
+    transport = load_transport()
     config = tomllib.loads((Path.home() / ".codex/config.toml").read_text())["mcp_servers"]["magicdesk"]
     client = transport.Client(config["url"], config["http_headers"]["Authorization"].removeprefix("Bearer "))
     before = client.call("get_state")
