@@ -685,6 +685,7 @@ if(SHROOT_BUILD_TESTS)
             target_compile_options(${fixture} PRIVATE -iquote ${src} -UNDEBUG)
         endif()
     endforeach()
+    include(tests/NativeChecks.cmake)
 endif()
 
 set_source_files_properties(${src}/svc_payload.c PROPERTIES

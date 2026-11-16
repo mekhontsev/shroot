@@ -1,9 +1,32 @@
 # Shroot Fixture Guide
 
 This directory contains native probes, prepared Linux workloads and device
-runners. Production implementation belongs to [native/shroot](../shroot/README.md).
-The [user guide](../../docs/shroot.md) describes supported workflows and limits;
-fixtures do not define a separate runtime or installation interface.
+runners. Production implementation belongs to [Shroot](../README.md).
+The [embedding guide](../embedding.md) and [environment library](../library.md)
+describe standalone operations; fixtures do not define a separate runtime.
+
+## Standalone Native Checks
+
+```sh
+tests/build.sh build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+# An already configured native build:
+cmake --build build --target shroot-check-fixtures -j 4
+ctest --test-dir build --output-on-failure
+```
+
+This path requires CMake, a C compiler, Python and OpenSSL for local HTTPS test
+certificates. It requires no Java, Android application, privileged service or
+public registry. `NativeChecks.cmake` registers the existing component fixtures,
+including supervisor state, policy, signal, robust-futex, descriptor, storage and
+image contracts. `run_component.py` owns temporary directories, process-group
+cleanup and timeout failure; assertions remain in the same C tests used by the
+device runners. `ctest -L component` selects these checks; `-L integration`
+selects native management/import workflows. Cross-built binaries must run on
+their target, not the build machine.
+
+The graphical and installed-application runners below still use MagicDesk's
+integration transport and are not part of the standalone CTest suite. Their
+migration is separate from native component qualification.
 
 - [Choose A Suite](#choose-a-suite)
 - [Evidence Rules](#evidence-rules)
@@ -24,14 +47,14 @@ fixtures do not define a separate runtime or installation interface.
 | SteamOS, X11/Wayland desktops, audio and GPU | [Desktop workflows](desktop-workflows.md) |
 | OCI images, mounts, filesystem operations and watches | [Filesystem workflows](filesystem-workflows.md) |
 | GDB, strace and matched performance measurements | [Developer workflows](developer-workflows.md) |
-| Entry contracts, stock musl/glibc workloads and native/PRoot comparisons | [Cooperative entry](cooperative-entry.md), [runtime contract](../shroot/cooperative-entry.md) |
+| Entry contracts, stock musl/glibc workloads and native/PRoot comparisons | [Cooperative entry](cooperative-entry.md), [runtime contract](../cooperative-entry.md) |
 | Init systems and distribution boot | [Init matrix](init-matrix.md) |
 | Browser workload and sandbox evidence | [Browser fixtures](browser/README.md) |
 | Kernel seccomp/ptrace controls | [Sandbox controls](sandbox-research.md) |
 | Shared regression under real Android application and shell identities | [Host execution identities](host-execution.md) |
 | Lazy machine-code entry, signal boundaries and Go stress | [Lazy SVC entry](svc-rewriting.md) |
 | Native namespace admission and restricted brokers | [Isolation controls](chromium-isolation.md) |
-| Descriptor custody, publication and resource teardown | [Resource verification](../shroot/resource-tests.md) |
+| Descriptor custody, publication and resource teardown | [Resource verification](../resource-tests.md) |
 
 ## Evidence Rules
 
@@ -61,7 +84,7 @@ fixtures do not define a separate runtime or installation interface.
 
 ## Kernel Profiles
 
-Use a native build configured with `-DMAGICDESK_GUEST_FIXTURES=ON`. The
+Use a native build configured with `-DSHROOT_BUILD_TESTS=ON`. The
 `linux-5.15` profile removes newer host capabilities from the supervisor and its
 workers, without putting a denial filter around the guest or disabling lazy SVC.
 It needs neither root nor a phone reboot. Existing Linux sessions are unchanged.
@@ -86,7 +109,7 @@ Reports retain the real kernel and verified profile separately. The runner
 checks fixture support and records each observed profile activation; guest output
 remains usable as JSON or text. A missing profile is a failure, not a silent
 modern-kernel pass. Release binaries contain no profile hooks. See the
-[scope and limits](../shroot/kernel-compatibility.md#host-kernel-profiles): this
+[scope and limits](../kernel-compatibility.md#host-kernel-profiles): this
 tests missing host APIs, not old-kernel scheduling, SELinux or all native guest
 semantics. It does not replace testing on a real 5.15 device.
 
@@ -796,22 +819,15 @@ pointer-lock, screencast, package-update handling and read-only dispatch remain
 separate requirements before changing recipes. No new runtime interception of
 ordinary system calls is part of this approach.
 
-A local checkpoint is saved outside disposable build output at
-`~/magicdesk-research/graphics-adaptation-20261029.tar.gz`. It contains the lab
-sources, installer patch definitions, retained reports/screenshots/modules and
-the Debian source archive/preparation helper. Its repository baseline is
-`636a8dab1ef4eb94720733dedb8a4f754c55b8ec`; extract it only into a separate checkout
-of that baseline, not over an unrelated worktree. This is a local research
-backup, not a commit, release or backup of installed guest environments.
-Re-running requires the prepared guests and compiler/source caches described
-by the fixture profiles;
-the archive does not contain complete SteamOS/NixOS build environments.
-
 ### Rootfs Fixtures
+
+The following prepared graphical workflows run from the **MagicDesk checkout**.
+Their Java recipe adapter and APK presentation are integration tests, not
+dependencies of this repository's `tests/build.sh` or native runtime.
 
 `prepare.mjs` authenticates Debian archive metadata and packages, then extracts
 an isolated test rootfs without maintainer scripts or host installation.
-`build.sh` builds the same CMake runtime as the APK and separate Bionic/glibc
+MagicDesk's `native/guest-exec-lab/build.sh` builds its CMake runtime and Bionic/glibc
 fixtures. It requires the Termux development toolchain and JDK; installed guest launches
 do not require Termux. Exact inputs are retained in the build's `manifest.json`.
 
