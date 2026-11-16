@@ -32,7 +32,8 @@ struct md_bpf_maps *md_bpf_maps_new(void) {
     atomic_init(&p->refs,1); return p;
 }
 struct md_bpf_maps *md_bpf_maps_retain(struct md_bpf_maps *p) {
-    if (p) atomic_fetch_add(&p->refs,1); return p;
+    if (p) atomic_fetch_add(&p->refs,1);
+    return p;
 }
 void md_bpf_maps_release(struct md_bpf_maps *p) {
     if (!p || atomic_fetch_sub(&p->refs,1)!=1) return;

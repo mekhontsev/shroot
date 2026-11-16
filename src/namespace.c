@@ -324,7 +324,7 @@ long md_namespace_call(const struct md_fs *fs, const char *exe, long nr, const u
         if (out.result.size > a[1])
             return -ERANGE;
         r = md_write_memory((void *)a[0], out.data, out.result.size);
-        return r < 0 ? r : out.result.size;
+        return r < 0 ? r : (long)out.result.size;
     }
     char first[PATH_MAX];
     int base = (int)a[0];
@@ -471,7 +471,7 @@ __attribute__((noinline)) static long path_metadata(const struct md_fs *fs, long
         if (out.result.size > a[3])
             out.result.size = (uint32_t)a[3];
         r = md_write_memory((void *)a[2], out.data, out.result.size);
-        return r < 0 ? r : out.result.size;
+        return r < 0 ? r : (long)out.result.size;
     case SYS_symlinkat:
         r = md_read_string(second, sizeof(second), (const char *)a[0]);
         if (r < 0)

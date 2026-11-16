@@ -106,7 +106,8 @@ failed:
 }
 int md_devpts_root(struct md_devpts *p) { return p->root; }
 struct md_devpts *md_devpts_retain(struct md_devpts *p) {
-    if (p) atomic_fetch_add_explicit(&p->references,1,memory_order_relaxed); return p;
+    if (p) atomic_fetch_add_explicit(&p->references,1,memory_order_relaxed);
+    return p;
 }
 void md_devpts_release(struct md_devpts *p) {
     if (!p || atomic_fetch_sub_explicit(&p->references,1,memory_order_acq_rel)!=1) return;
@@ -161,7 +162,8 @@ int md_devpts_step(struct md_devpts *p,int directory,const char *name) {
     }
     if (fd<0) return -errno;
     struct stat st; int r=md_devpts_stat(p,fd,&st);
-    if (r) close(fd); return r ? r : fd;
+    if (r) close(fd);
+    return r ? r : fd;
 }
 int md_devpts_open(struct md_devpts *p,int fd,int flags,const struct md_identity *id) {
     struct stat st; int r=md_devpts_stat(p,fd,&st); if (r) return r;

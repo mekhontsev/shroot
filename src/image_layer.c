@@ -149,8 +149,8 @@ static int entry_file(struct md_inode_store *s, struct archive *ar, struct archi
         if (archive_entry_symlink(entry) || archive_entry_size(entry)
                 || archive_entry_uid(entry) < 0 || archive_entry_uid(entry) >= UINT32_MAX
                 || archive_entry_gid(entry) < 0 || archive_entry_gid(entry) >= UINT32_MAX
-                || archive_entry_rdevmajor(entry) < 0 || archive_entry_rdevmajor(entry) > UINT32_MAX
-                || archive_entry_rdevminor(entry) < 0 || archive_entry_rdevminor(entry) > UINT32_MAX) return -EINVAL;
+                || (uint64_t)archive_entry_rdevmajor(entry) > UINT32_MAX
+                || (uint64_t)archive_entry_rdevminor(entry) > UINT32_MAX) return -EINVAL;
     }
     if (!link && !device && kind != S_IFREG && kind != S_IFDIR && kind != S_IFLNK && kind != S_IFIFO) return -ENOTSUP;
     if (kind == S_IFIFO && archive_entry_size(entry)) return -EINVAL;

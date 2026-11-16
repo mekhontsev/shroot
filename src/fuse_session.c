@@ -50,7 +50,8 @@ int md_fuse_session_new(struct md_fuse_connection *connection,const struct md_fu
     return error;
 }
 struct md_fuse_session *md_fuse_session_retain(struct md_fuse_session *s) {
-    if (s) atomic_fetch_add_explicit(&s->references,1,memory_order_relaxed); return s;
+    if (s) atomic_fetch_add_explicit(&s->references,1,memory_order_relaxed);
+    return s;
 }
 void md_fuse_session_abort(struct md_fuse_session *s,int error) {
     if (s) md_fuse_connection_abort(s->connection,error);

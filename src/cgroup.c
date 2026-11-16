@@ -447,7 +447,8 @@ struct md_cgroup_namespace *md_cgroup_namespace_new(struct md_cgroup_member *m,s
     pthread_mutex_unlock(&m->world->lock); return ns;
 }
 struct md_cgroup_namespace *md_cgroup_namespace_retain(struct md_cgroup_namespace *ns) {
-    if (ns) atomic_fetch_add(&ns->refs,1); return ns;
+    if (ns) atomic_fetch_add(&ns->refs,1);
+    return ns;
 }
 void md_cgroup_namespace_release(struct md_cgroup_namespace *ns) {
     if (!ns || atomic_fetch_sub(&ns->refs,1)!=1) return;
@@ -487,7 +488,8 @@ struct md_cgroup_member *md_cgroup_member_fork(struct md_cgroup_member *old) {
     pthread_mutex_unlock(&m->world->lock); return m;
 }
 struct md_cgroup_member *md_cgroup_member_retain(struct md_cgroup_member *m) {
-    if (m) atomic_fetch_add(&m->refs,1); return m;
+    if (m) atomic_fetch_add(&m->refs,1);
+    return m;
 }
 void md_cgroup_member_release(struct md_cgroup_member *m) {
     if (!m || atomic_fetch_sub(&m->refs,1)!=1) return;

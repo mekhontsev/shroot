@@ -86,7 +86,8 @@ static void bitmap(const uint8_t *bits,size_t size,char *text,size_t capacity) {
     while (words>1) {
         uint64_t value=0; size_t count=size-(words-1)*8; if (count>8) count=8;
         memcpy(&value,bits+(words-1)*8,count);
-        if (value) break; --words;
+        if (value) break;
+        --words;
     }
     while (words) {
         --words; uint64_t value=0; size_t count=size-words*8; if (count>8) count=8;

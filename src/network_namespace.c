@@ -458,7 +458,7 @@ long md_network_socket_call(struct md_fd_object *object, const struct md_identit
     }
     if (nr==SYS_ioctl) {
         if (md_network_family_ioctl(a[1])) {
-            unsigned family=md_network_endpoint_is(object) ? md_network_endpoint_family(object) : s->family;
+            unsigned family=md_network_endpoint_is(object) ? (unsigned)md_network_endpoint_family(object) : s->family;
             size_t bytes=family==AF_INET6 ? (md_network_route_ioctl(a[1]) ? sizeof(struct in6_rtmsg) : sizeof(struct in6_ifreq))
                 : md_network_route_ioctl(a[1]) ? sizeof(struct md_network_route_ioctl) : sizeof(struct ifreq);
             /* A zero-sized request queries the exact socket ABI before guest

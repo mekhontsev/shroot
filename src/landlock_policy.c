@@ -31,7 +31,8 @@ struct md_landlock_ruleset *md_landlock_ruleset_new(uint64_t handled) {
     return r;
 }
 struct md_landlock_ruleset *md_landlock_ruleset_retain(struct md_landlock_ruleset *r) {
-    if (r) atomic_fetch_add(&r->refs,1); return r;
+    if (r) atomic_fetch_add(&r->refs,1);
+    return r;
 }
 void md_landlock_ruleset_release(struct md_landlock_ruleset *r) {
     if (!r || atomic_fetch_sub(&r->refs,1)!=1) return;
@@ -65,7 +66,8 @@ int md_landlock_rule_add(struct md_landlock_ruleset *r,const struct md_landlock_
     return 0;
 }
 struct md_landlock_policy *md_landlock_retain(struct md_landlock_policy *p) {
-    if (p) atomic_fetch_add(&p->refs,1); return p;
+    if (p) atomic_fetch_add(&p->refs,1);
+    return p;
 }
 void md_landlock_release(struct md_landlock_policy *p) {
     while (p && atomic_fetch_sub(&p->refs,1)==1) {

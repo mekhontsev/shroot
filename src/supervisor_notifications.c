@@ -585,7 +585,7 @@ int interrupted_metadata_event(struct thread *t,int status,const struct rusage *
     if (site) regs.pc=site->direct.svc;
     uint32_t instruction=UINT32_C(0xd4000001);
     const struct md_private_memory_access *access=md_memory_private_access(t->memory);
-    ssize_t copied=site ? sizeof(instruction) : md_task_read_memory(t->pid,regs.pc,
+    ssize_t copied=site ? (ssize_t)sizeof(instruction) : md_task_read_memory(t->pid,regs.pc,
         &instruction,sizeof(instruction),access ? access->memory : -1);
     if (copied==sizeof(instruction) && !metadata_instruction(t,regs.pc,instruction)) return 0;
     /* arm64 rewinds the SVC before the signal-delivery stop. Reception is not

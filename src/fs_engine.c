@@ -888,7 +888,7 @@ void md_fs_inode_execute(struct md_filesystem *fs, const struct md_fs_request *q
     if (fs->mounts) store->nodev=!!(md_mount_policy_flags(fs->inode_mount
         ? &fs->inode_mount->policy : &fs->mounts->base.policy)&MD_MOUNT_NODEV);
     if (fs->mounts && (fs->inode_mount ? md_view_readonly(fs->inode_mount)
-            : (md_mount_policy_flags(&fs->mounts->base.policy)&MD_MOUNT_READONLY))) store->mount_readonly=1;
+            : !!(md_mount_policy_flags(&fs->mounts->base.policy)&MD_MOUNT_READONLY))) store->mount_readonly=1;
     inode_execute(fs,q,out,output);
     store->directory_pins=previous_pins;
     store->mount_readonly=readonly;

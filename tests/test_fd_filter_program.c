@@ -293,7 +293,7 @@ void test_fd_filter_program(void) {
             assert(!md_fd_filter_build(kind,190,&gates,&separate));
             assert(!md_fd_filter_build(kind,190,g,&built));
             assert(built.count<separate.count);
-            if (p==1) assert(separate.count-built.count==12u*(kind==MD_FD_SELECTOR_PROC ? 3
+            if (p==1) assert((unsigned)(separate.count-built.count)==12u*(kind==MD_FD_SELECTOR_PROC ? 3
                 : kind==MD_FD_SELECTOR_POLL ? 1 : 2));
             for (unsigned nr=0;nr<512;++nr) for (unsigned i=0;i<MD_FD_FILTER_GATES;++i)
                 for (unsigned adjacent=0;adjacent<2;++adjacent) {

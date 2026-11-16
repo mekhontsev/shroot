@@ -269,7 +269,7 @@ int md_user_namespace_map(struct md_user_namespace *n, int group,
             || (group && md_user_namespace_groups_allowed(n)))) return -EPERM;
     for (unsigned i=0;i<count;++i) {
         const struct md_id_extent *r=ranges+i;
-        if (!group && !r->outside && !(same(opener->namespace,n) ? n->page->creator_setfcap
+        if (!group && !r->outside && !(same(opener->namespace,n) ? !!n->page->creator_setfcap
                 : capable(opener,n->parent,CAP_SETFCAP))) return -EPERM;
         if (!covered(n->parent,group,r->outside,r->count)) return -EPERM;
     }

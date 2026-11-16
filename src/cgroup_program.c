@@ -38,7 +38,8 @@ struct md_cgroup_programs *md_cgroup_programs_new(void) {
     atomic_init(&p->refs,1); return p;
 }
 struct md_cgroup_programs *md_cgroup_programs_retain(struct md_cgroup_programs *p) {
-    if (p) atomic_fetch_add(&p->refs,1); return p;
+    if (p) atomic_fetch_add(&p->refs,1);
+    return p;
 }
 void md_cgroup_programs_release(struct md_cgroup_programs *p) {
     if (!p || atomic_fetch_sub(&p->refs,1)!=1) return;

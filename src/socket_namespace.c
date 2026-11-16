@@ -75,7 +75,8 @@ long md_namespace_socket_output(const struct md_fs *fs, long nr, const unsigned 
     if (result < 0) return result;
     long r = length > sizeof(buffer.bytes) ? -EPROTO : 0;
     if (!r) {
-        r = md_namespace_socket_restore(fs, (int)((nr == SYS_accept || nr == SYS_accept4) ? result : a[0]), address, &length);
+        int fd=(nr == SYS_accept || nr == SYS_accept4) ? (int)result : (int)a[0];
+        r = md_namespace_socket_restore(fs, fd, address, &length);
     }
     if (!r) r = md_write_memory(target, address, capacity < length ? capacity : length);
     if (!r) r = md_write_memory((void *)a[index + 1], &length, sizeof(length));
