@@ -396,10 +396,11 @@ if(SHROOT_BUILD_TESTS)
     target_compile_options(fd_filter_remote PRIVATE -iquote ${src} -UNDEBUG)
     guest_executable(control_event tests/test_control_event.c
         tests/test_control_epoll.c tests/test_fd_weak.c
+        tests/test_control_readiness.c ${src}/network_connection.c ${src}/fifo_readiness.c
         tests/test_fd_filter_program.c ${src}/fd_filter_program.c ${src}/pid_filter_program.c
         ${src}/control_event.c ${src}/control_epoll.c)
     target_compile_options(control_event PRIVATE -iquote ${src} -UNDEBUG)
-    target_link_options(control_event PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc)
+    target_link_options(control_event PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=epoll_wait)
     guest_executable(wait_guest tests/test_wait_guest.c)
     target_compile_options(wait_guest PRIVATE -UNDEBUG)
     guest_executable(test_process_limits tests/test_process_limits.c ${identity})

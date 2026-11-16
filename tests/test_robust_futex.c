@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/auxv.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
@@ -220,6 +221,16 @@ static void seize(pid_t child) {
         |PTRACE_O_TRACEEXEC|PTRACE_O_TRACEEXIT|PTRACE_O_TRACESECCOMP|PTRACE_O_EXITKILL;
     assert(!ptrace(PTRACE_SEIZE,child,NULL,(void *)options));
 }
+static uintptr_t exec_relocation(pid_t pid) {
+    char path[64]; snprintf(path,sizeof(path),"/proc/%d/auxv",pid);
+    FILE *f=fopen(path,"re"); assert(f);
+    uintptr_t entry[2],phdr=0;
+    while (fread(entry,sizeof(entry),1,f)==1 && entry[0]!=AT_NULL) {
+        if (entry[0]==AT_PHDR) { phdr=entry[1]; break; }
+    }
+    assert(!fclose(f) && phdr && getauxval(AT_PHDR));
+    return phdr-getauxval(AT_PHDR);
+}
 static void reap_private(pid_t pid,pid_t group,pid_t agent,pid_t real,int code,int value,int executing) {
     /* The new application has not run. Reap only the owned private child;
      * restoring the exec syscall exit must preserve every entry register. */
@@ -237,9 +248,12 @@ static void reap_private(pid_t pid,pid_t group,pid_t agent,pid_t real,int code,i
         displaced.si_pid=real; displaced.si_uid=getuid(); displaced.si_status=value;
     }
     struct md_task_child_reap reap={0};
+    /* exec remaps this same test ELF; PIE addresses are not inherited. */
+    uintptr_t relocation=executing ? exec_relocation(pid) : 0;
+    uintptr_t syscall=(uintptr_t)md_raw_syscall+relocation;
     assert(!md_task_child_reap_begin(&reap,native_trace,pid,group,agent,boundary,&saved,
-        (uintptr_t)md_raw_syscall,(uintptr_t)md_raw_syscall+4,
-        &signal_exchange,(uintptr_t)&signal_exchange,&displaced));
+        syscall,syscall+4,
+        &signal_exchange,(uintptr_t)&signal_exchange+relocation,&displaced));
     int ready=0;
     while (!ready) {
         int status=waiter_status(pid);

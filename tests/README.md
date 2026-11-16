@@ -44,6 +44,11 @@ applicable signal-checkpoint controls.
 | Raspberry Pi 5, Debian 13 | UID/GID 1000, no effective capabilities or inherited seccomp | 6.18.50+rpt-rpi-2712 / 16 KiB | Installed production API/CLI, independent CMake consumer, stripped archive audit, stock Alpine 3.23.8 with `apk update`, Debian trixie with `dpkg --audit` and `apt-get update` |
 | Android, Termux | UID/GID 10601, `untrusted_app_27`, no effective capabilities, inherited seccomp | 6.12.23-android16 / 4 KiB | Shared standalone native test set; not MagicDesk's Zygote identity or Shell |
 
+The Pi also passes all 77 checks for GCC with system SQLite and dynamic runtime
+helpers. The static-only installed-bundle test is not registered for that
+configuration. Stock Alpine and Debian execute successfully with both builds in
+Base and lazy-SVC modes, sharing the same installed stores without copies.
+
 Linux package checks include logical guest root, shell execution, hardlinks and
 file IO; lazy-SVC completion is observed. This is not the full distribution
 GUI/container matrix or a performance comparison. The `linux-5.15` profile tests

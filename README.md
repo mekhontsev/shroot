@@ -417,6 +417,9 @@ apply. Root retains the same logical engine, not a separate native-mount backend
 Only an Android application identity enables inherited Android-seccomp handling.
 Android Shell and ordinary Linux keep the native host-syscall path. Set-ID
 helpers and capability-bearing unprivileged launches are not an elevation API.
+Guest flags and signal numbers use the Linux ABI independently of host-libc
+conveniences and reserved signals. Host libc manages the native implementation,
+not the guest's ABI contract.
 ELF segments use private RW mappings followed by final protections, never RWX.
 Fixed images use `MAP_FIXED_NOREPLACE` and returned-address validation; conflicts
 fail before replacement. Hardened policies may still deny RW-to-RX transitions.

@@ -6,8 +6,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-static unsigned calls;
-static int denied;
+/* Link-time wrapping is invisible to the compiler's call-side analysis. */
+static volatile unsigned calls;
+static volatile int denied;
 ssize_t __real_process_vm_readv(pid_t,const struct iovec *,unsigned long,const struct iovec *,unsigned long,unsigned long);
 ssize_t __wrap_process_vm_readv(pid_t pid,const struct iovec *local,unsigned long ln,
         const struct iovec *remote,unsigned long rn,unsigned long flags) {

@@ -105,7 +105,8 @@ static long poll_value(void *context) {
         result=EPOLLIN|EPOLLOUT|EPOLLRDNORM|EPOLLWRNORM|EPOLLHUP|(c->error ? EPOLLERR : 0);
     else if (c->state!=PENDING) {
         int count=epoll_wait(c->query,&e,1,0);
-        result=count<0 ? -errno : count ? e.events : 0;
+        if (count<0) result=-errno;
+        else if (count) result=e.events;
     }
     pthread_mutex_unlock(&c->lock); return result;
 }
