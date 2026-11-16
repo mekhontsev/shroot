@@ -23,6 +23,9 @@ int md_image_applications(const char *store, const char *icon);
 #include <unistd.h>
 #include <sys/prctl.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include "client_protocol.h"
+#include "process_owner.h"
 
 static int save(int directory, const char *name, const char *json) {
     int fd = openat(directory, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
@@ -120,31 +123,26 @@ static int create(const char *source, const char *destination) {
     if (!r) printf("Created instance %s\n", destination);
     return r;
 }
-int main(int argc, char **argv) {
+static int execute(int argc, char **argv) {
     const char *owner = getenv("MAGICDESK_IMAGE_OWNER_PID");
     if (owner) {
         char *end;
         long pid = strtol(owner, &end, 10);
-        if (!*owner || *end || pid <= 1 || prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != pid) return 2;
+        if (!*owner || *end || pid <= 1 || prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != pid) return -ECHILD;
         unsetenv("MAGICDESK_IMAGE_OWNER_PID");
     }
-    int admitted=md_launch_identity(getuid(),geteuid(),getgid(),getegid());
-#ifdef MD_INODE_TESTING
-    (void)admitted;
-#else
-    if (!admitted) return 2;
-#endif
+    if (!md_launch_identity(getuid(),geteuid(),getgid(),getegid())) return -EACCES;
     umask(0);
     const char *reference = NULL, *pool = NULL, *blobs = NULL;
     int r = -EINVAL;
     if (argc >= 5 && !strcmp(argv[1], "import")
             && (!strcmp(argv[4], "--map-current-user") || !strcmp(argv[4], "--preserve-ownership"))) {
         for (int i=5; i<argc; i+=2) {
-            if (i+1 == argc) return 2;
+            if (i+1 == argc) return -EINVAL;
             if (!strcmp(argv[i], "--reference") && !reference) reference = argv[i+1];
             else if (!strcmp(argv[i], "--layers") && !pool) pool = argv[i+1];
             else if (!strcmp(argv[i], "--blobs") && !blobs) blobs = argv[i+1];
-            else return 2;
+            else return -EINVAL;
         }
         r = import(argv[2], argv[3], reference, !strcmp(argv[4], "--preserve-ownership"), pool, blobs);
     } else if (argc == 2 && !strcmp(argv[1], "format")) { printf("%d\n", md_inode_store_format()); r = 0; }
@@ -205,6 +203,34 @@ int main(int argc, char **argv) {
         "             [--dns IP] [--subnet CIDR] [--ip IPv4] [--ip6 IPv6] [--gateway IP]\n"
         "             [--bind HOST GUEST] [--bind-ro HOST GUEST] [--bind-store-ro STORE GUEST]\n"
         "             [--magicdesk] [-- COMMAND...]\n");
+    return r;
+}
+static int client_message(unsigned phase, int error) {
+    struct shroot_client_message message = {SHROOT_CLIENT_MAGIC, phase, error, 0};
+    ssize_t n;
+    do { n = send(SHROOT_CLIENT_FD, &message, sizeof(message), MSG_NOSIGNAL); } while (n < 0 && errno == EINTR);
+    return n == sizeof(message) ? 0 : n < 0 ? -errno : -EIO;
+}
+int main(int argc, char **argv) {
+    int client = argc > 1 && !strcmp(argv[1], SHROOT_CLIENT_OPTION);
+    int r = 0;
+    if (client) {
+        int keep = SHROOT_CLIENT_FD;
+        r = fcntl(keep, F_SETFD, FD_CLOEXEC) ? -errno : (int)md_process_close_fds(&keep, 1);
+        if (!r) r = client_message(SHROOT_CLIENT_BEGIN, 0);
+        if (r) return 1;
+        struct shroot_client_message admission;
+        ssize_t n;
+        /* EVENT_WAIT: the submitting client retains its child pidfd first.
+         * Client disconnect cancels admission without touching the store. */
+        do { n = recv(keep, &admission, sizeof(admission), MSG_TRUNC); } while (n < 0 && errno == EINTR);
+        if (n != sizeof(admission) || admission.magic != SHROOT_CLIENT_MAGIC
+                || admission.phase != SHROOT_CLIENT_ADMIT || admission.error || admission.reserved) return 1;
+        unsetenv("MAGICDESK_IMAGE_OWNER_PID");
+        argv[1] = argv[0]; ++argv; --argc;
+    }
+    r = execute(argc, argv);
     if (r) fprintf(stderr, "Guest image: %s (errno=%d)\n", strerror(-r), -r);
+    if (client && client_message(SHROOT_CLIENT_DONE, r)) return 1;
     return r ? 1 : 0;
 }

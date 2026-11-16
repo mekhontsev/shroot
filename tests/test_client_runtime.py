@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Native client integration; no Android application or automation service."""
+import argparse
+import io
+import json
+from pathlib import Path
+import subprocess
+import tarfile
+import tempfile
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("build", type=Path)
+    parser.add_argument("--prefix", type=Path)
+    parser.add_argument("--consumer", type=Path)
+    args = parser.parse_args()
+    build = args.build.resolve()
+    prefix = args.prefix.resolve() if args.prefix else None
+    runtime = prefix / "libexec/shroot" if prefix else build
+    with tempfile.TemporaryDirectory(prefix="shroot-client-", dir=build) as directory:
+        root = Path(directory)
+        archive = root / "rootfs.tar"
+        with tarfile.open(archive, "w", format=tarfile.PAX_FORMAT) as tar:
+            for name in ("bin", "tmp", "etc"):
+                entry = tarfile.TarInfo(name)
+                entry.type = tarfile.DIRTYPE
+                entry.mode = 0o755
+                tar.addfile(entry)
+            tar.add(build / "client-guest", arcname="bin/client-guest")
+            payload = b"libshroot payload"
+            entry = tarfile.TarInfo("payload")
+            entry.mode = 0o644
+            entry.size = len(payload)
+            tar.addfile(entry, io.BytesIO(payload))
+            for name, kind in (("hardlink", tarfile.LNKTYPE), ("link", tarfile.SYMTYPE)):
+                entry = tarfile.TarInfo(name)
+                entry.type = kind
+                entry.linkname = "payload"
+                tar.addfile(entry)
+        subprocess.run([str(build / "test_client_integration"), str(runtime), str(archive), str(root)],
+                       check=True, timeout=180)
+        cli = [str(prefix / "bin/shroot")] if prefix else [str(build / "shroot"), "--runtime", str(build)]
+        image = root / "cli-image"
+        instance = root / "cli-instance"
+        subprocess.run(cli + ["rootfs", str(archive), str(image)], check=True, timeout=30)
+        subprocess.run(cli + ["create", str(image), str(instance)], check=True, timeout=30)
+        result = subprocess.run(cli + ["inspect", str(instance)], check=True, text=True,
+                                capture_output=True, timeout=30)
+        assert json.loads(result.stdout)["format"] == 17
+        if args.consumer:
+            result = subprocess.run([str(args.consumer.resolve()), str(runtime), str(instance)],
+                                    check=True, text=True, capture_output=True, timeout=30)
+            assert json.loads(result.stdout)["format"] == 17
+        subprocess.run(cli + ["exec", str(instance), "--env", "LIBSHROOT_TEST=retained ' value",
+                              "--cwd", "/", "--hostname", "client-test", "--", "/bin/client-guest",
+                              "spaces ' ; $(false)"], check=True, timeout=30)
+        result = subprocess.run(cli + ["exec", str(instance), "--", "/bin/client-guest", "exit42"],
+                                timeout=30)
+        assert result.returncode == 42
+        for store in (instance, image):
+            subprocess.run(cli + ["remove", str(store)], check=True, timeout=30)
+        print("PASS CLI: public API operations, launch arguments and guest exit status")
+
+
+if __name__ == "__main__":
+    main()

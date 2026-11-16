@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.24)
+project(ShrootConsumer LANGUAGES C)
+find_package(Shroot 1 CONFIG REQUIRED)
+add_executable(shroot-inspect main.c)
+target_link_libraries(shroot-inspect PRIVATE Shroot::shroot)

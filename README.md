@@ -1,19 +1,19 @@
-# Shroot Native Runtime
+# Shroot
 
-Shroot is a native ARM64 Linux userspace runtime with one engine for the User
-(MagicDesk app UID) and Shell (authorized UID 2000 or 0) executors. Both use the
-same [fixtures and contracts](../guest-exec-lab/host-execution.md), with separate
-storage and retained launch identities. A root-backed Shell service is not a
-separate native-root implementation.
-The APK packages standalone executables, not libraries loaded into ART.
-Guest-only capabilities are probed on explicit use and never become
-prerequisites for other services.
+Shroot is an independently versioned native ARM64 Linux userspace runtime.
+It supplies a command-line frontend, a [C management API](embedding.md) through
+`libshroot`, persistent inode-backed storage and a separate native execution
+engine. Runtime and storage operations require no Java, ART or MagicDesk APK.
+Android application UIDs and authorized Shell identities use the same engine,
+with separate storage and retained launch identities. Ordinary ARM64 Linux is
+also a delivery target; its runtime qualification is not yet complete.
 
-Start with the [user guide](../../docs/shroot.md) for installation, named
-environments, Docker/Podman, init systems and supported application workflows.
-This file is the architecture map; focused contracts below own implementation
-invariants. [Fixture instructions](../guest-exec-lab/README.md) own test setup
-and evidence, rather than installation recipes.
+Start with [embedding](embedding.md) for library use and standalone operations,
+and [images and views](images.md) for storage, import and backup contracts.
+This file is the architecture map. The [fixture guide](tests/README.md) owns
+runtime test evidence; some integration runners still require their MagicDesk
+transport adapter. A root-backed Shell service is not a separate native-root
+implementation. Guest-only probes never become prerequisites for other services.
 
 - [Runtime Model](#runtime-model)
 - [Ownership](#ownership)
@@ -43,7 +43,7 @@ before eligible calls resume acceleration. Debugger ownership and unavailable
 policy views retain the common fallback. Unavailable capabilities and
 unsupported sites retain Base interception; `--env SHROOT_MACHINE_ENTRY=0`
 selects Base explicitly. See
-[integration evidence](../guest-exec-lab/svc-rewriting.md#product-boundary).
+[integration evidence](tests/svc-rewriting.md#product-boundary).
 
 One supervisor owns each process tree. Selective seccomp TRACE/USER_NOTIF directs
 operations needing adaptation to either a task-affine adapter or a filesystem
@@ -63,7 +63,7 @@ engines and sandbox-using applications, rather than only a translated root path.
 It is not a full Linux ABI or an isolation boundary for hostile code.
 
 ```text
-MagicDesk launch services
+CLI / libshroot / application launch services
   | selected identity, store, argv, PTY and optional connections
   v
 native runner -> supervisor -> bootstrap -> stock ELF / libc loader
@@ -81,6 +81,7 @@ Android kernel: actual task lifetime, descriptors, data IO and native checks
 
 | Owner | Responsibility | Does not own |
 | --- | --- | --- |
+| `libshroot`, CLI | Explicit runtime/store selection, typed requests, IO, exact-child lifetime and completion | In-process guest execution, Android authorization or guest syscall policy |
 | Application services | Authorization, catalog/registry downloads, launch recipes, immutable helper staging, PTY, graphics/audio/input connections | Guest syscall policy or native resource lifetime |
 | `namespace_run.c` | Explicit launch configuration and native process owner | Global current distribution or automatic privilege switching |
 | `bootstrap.c`, `elf.c`, `exec.c` | ELF admission/mapping, stack and exec reentry | Distribution-specific loader or libc policy |
@@ -113,12 +114,13 @@ ordering. The supervisor-state fixture compiles these same sources together for
 white-box assertions, without exporting test-only entry points or duplicating
 their state machines. Production builds compile each owner separately.
 
-`GuestEnvironmentLibrary` and `GuestOciRegistry` are app-side management, not
-part of this native module. Their Java command helper is short-lived; the
-original shell execs the native runner to retain its PTY and graphical FDs.
-The native `image` utility owns validated import, snapshots, backup, maintenance
-and launch data. Standalone `service` and offline clients reuse the filesystem
-engine rather than a separate filesystem implementation.
+The native image worker owns validated import, snapshots, backup, maintenance
+and launch data. `libshroot` and its CLI use this owner through a private,
+same-bundle management contract. Standalone `service` and offline clients reuse
+the filesystem engine rather than a separate filesystem implementation.
+MagicDesk's existing named-environment catalog and registry downloader are still
+app-side integration; moving those policies into the native project is separate
+from the already native store and runtime operations.
 
 Named environments use the inode backend. A direct-rootfs backend remains a
 low-level fixture/control path, never a fallback after a namespace error.
@@ -296,7 +298,7 @@ the ordinary UID-2000 path does not enable host-SIGSYS translation.
 caller owns guest copies and the existing address-space turn against mapping
 replacement; the policy module owns no guest memory, signal frames or process
 scheduler. Ordinary writable request pools are unchanged. See the
-[host execution contract](../guest-exec-lab/host-execution.md) for current
+[host execution contract](tests/host-execution.md) for current
 coverage and limitations.
 
 The `seccomp_notify` owner supplies a virtual notification queue
@@ -343,7 +345,7 @@ only translation of Android's inherited SIGSYS policy is app-UID-specific.
 owns guest-filter admission. The production supervisor does not enable that
 TRACESECCOMP capability.
 
-See [guest credentials and Landlock](../../docs/shroot.md#guest-credentials),
+See [guest policy](#guest-policy),
 [namespace providers](process-resources.md) and
 [image admission](interception.md#image-admission-and-logical-credentials).
 
@@ -358,7 +360,7 @@ For X11/Wayland, exact pathname/abstract socket routes select an executor-owned
 admission endpoint. Android authenticates the executor and transfers the connected
 FD to the protocol server; protocol bytes and SCM_RIGHTS then travel directly,
 without a stream proxy. X11 still requires its cookie, and independent Wayland
-clients open independent connections. See [graphical connections](../../docs/shroot.md#graphical-connections).
+clients open independent connections. See [shared memory](shared-memory.md).
 
 General guest pathname sockets instead use inode names backed by unique abstract
 kernel endpoints. Bind publication and peer identity use the filesystem/IPC
@@ -419,21 +421,28 @@ The internal resume entry is not an authorization boundary.
 
 ## Build And Verification
 
-`CMakeLists.txt` builds API-34 executables with pinned, hash-verified native
+`CMakeLists.txt` builds native executables with pinned, hash-verified native
 dependencies. SQLite belongs to the namespace owners, not ART or the freestanding
 adapter. Image archive/compression dependencies are declared in
-[image-dependencies.cmake](image-dependencies.cmake). The APK packages helpers and
-license notices; guest libc, desktop packages and GPU drivers remain guest-owned.
+[image-dependencies.cmake](image-dependencies.cmake). Integrators package helpers
+and license notices; guest libc, desktop packages and GPU drivers remain guest-owned.
 
 ```sh
-./gradlew :app:assembleDebug
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j 4
+cmake --install build --prefix "$HOME/.local" --component Shroot
 ```
 
-`MAGICDESK_GUEST_FIXTURES` enables native fixture targets. The
-[fixture guide](../guest-exec-lab/README.md) supplies preparation and device
+For Android cross builds, select the Android NDK CMake toolchain with
+`ANDROID_ABI=arm64-v8a` and `ANDROID_PLATFORM=android-34`. A client-only build
+uses `SHROOT_BUILD_RUNTIME=OFF`; it does not download runtime dependencies.
+See [embedding](embedding.md) for library ownership and test commands.
+
+`SHROOT_BUILD_TESTS` enables native fixture targets. The
+[fixture guide](tests/README.md) supplies preparation and device
 commands. Kernel/ABI, filesystem, packages, browsers, debugger, init, container
 and GUI/GPU workflows are separate checks; Desktop self-tests do not replace them.
-Read [coverage and limits](../../docs/shroot.md#coverage-and-limits), the
-[init matrix](../guest-exec-lab/init-matrix.md), and the Docker/Podman fixtures
+Read the
+[init matrix](tests/init-matrix.md), and the Docker/Podman fixtures
 before extending a compatibility claim. UI pixels, actual IO, access denials,
 process exit and resource cleanup are distinct assertions.
