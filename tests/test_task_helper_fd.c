@@ -336,7 +336,7 @@ static int cancel_birth(struct md_task_helpers *helpers,pid_t owner,enum scenari
 struct send_frame {
     struct msghdr message;
     struct iovec vector;
-    union { struct cmsghdr align; char bytes[CMSG_SPACE(253*sizeof(int))]; } control;
+    struct { _Alignas(struct cmsghdr) char bytes[CMSG_SPACE(253*sizeof(int))]; } control;
     char byte;
     struct md_task_send_import import;
     struct sockaddr_un address;
