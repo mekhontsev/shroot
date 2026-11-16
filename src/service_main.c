@@ -2,6 +2,7 @@
 #include "fs_service.h"
 #include "image_catalogue.h"
 #include "launch_identity.h"
+#include "process_owner.h"
 #include "raw.h"
 #include <errno.h>
 #include <stdlib.h>
@@ -60,7 +61,8 @@ int main(int argc, char **argv) {
     struct md_image_catalogue *images = NULL;
     struct md_inode_statistics database = {0};
     struct md_fs_statistics filesystem = {0};
-    int error = md_inode_store_open(argv[1], 0, &store), listener = -1;
+    int error = (int)md_process_service_nofile(), listener = -1;
+    if (!error) error = md_inode_store_open(argv[1], 0, &store);
     if (!error) error = md_inode_runtime_prepare(store);
     if (!error && argc == 6) error = md_image_catalogue_open(store, argv[5], &images);
     if (!error) {

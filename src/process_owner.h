@@ -18,6 +18,8 @@ long md_process_signal(int pidfd, int signal);
 long md_process_signal_child(int pid, int signal);
 long md_process_signal_children(int signal);
 long md_process_close_fds(const int *keep, unsigned count);
+/* Dedicated services only, after guest fork: use the existing hard FD budget. */
+long md_process_service_nofile(void);
 int md_process_status(int status);
 long md_process_guard(long owner, const char *bootstrap,
                       char **argv, char **env, const struct md_process_signals *inherited);

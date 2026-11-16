@@ -111,6 +111,13 @@ the update). A failed native update leaves guest state unchanged. Native allocat
 `dup`, sockets, pipes and received rights still enforce the effective soft limit;
 ordinary reads/writes acquire no new interception or accounting checks.
 
+Dedicated supervisor/filesystem service processes raise their own soft FD limit
+to the inherited hard ceiling once at startup: their descriptions cover many
+guest tasks. The supervisor does this after forking the initial guest and capturing
+its original limits. The caller, guest and management client keep their own
+limits; the hard host budget is never raised. A denied service-limit update is an
+explicit startup error. No limit queries or updates are added to syscall paths.
+
 The read-only guest `fs.nr_open` reports a logical policy ceiling of 1048576,
 independent of the host's sometimes unreadable sysctl. This is not a guarantee of
 1048576 usable physical descriptors. Allocation can exhaust the Android budget

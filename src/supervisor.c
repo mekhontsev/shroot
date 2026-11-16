@@ -828,6 +828,8 @@ int main(int argc, char **argv) {
     pid_t parent = getpid();
     struct md_ipc_inherited inherited_ipc={0};
     if (store) CHECK(!md_ipc_inherited_capture(&inherited_ipc));
+    struct md_process_limits limits;
+    CHECK(!md_process_limits_read(&limits));
     leader = fork(); CHECK(leader >= 0);
     if (!leader) {
         if (command_owner >= 0) close(command_owner);
@@ -842,6 +844,9 @@ int main(int argc, char **argv) {
         CHECK(read(channel[1], &byte, 1) == 1 && byte == 'g'); close(channel[1]);
         execv(argv[argument], argv + argument); _exit(127);
     }
+    /* Service descriptors aggregate the whole tree. The forked guest and its
+     * logical initial limits retain the caller's original soft ceiling. */
+    CHECK(!md_process_service_nofile());
 #ifdef MD_KERNEL_TESTING
     /* Restrict only native owners. The guest must retain Shroot interception
      * and must not inherit a test filter or its no_new_privs state. */
@@ -939,8 +944,6 @@ int main(int argc, char **argv) {
         md_fd_origins_finish(&update,fd);
         md_fd_object_release(pin);
     }
-    struct md_process_limits limits;
-    CHECK(!md_process_limits_read(&limits));
     thread(leader)->resources.process=md_process_member_new(&thread(leader)->identity,&limits);
     CHECK(thread(leader)->resources.process);
     network_error=md_network_launch_open(&network_profile,launch_identity.user_namespace,&launch_network);

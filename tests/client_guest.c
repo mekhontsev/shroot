@@ -6,9 +6,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <linux/netlink.h>
+#include <sys/socket.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "limits")) {
+        struct rlimit limit;
+        if (getrlimit(RLIMIT_NOFILE, &limit) || limit.rlim_cur != 128 || limit.rlim_max != 4096) return 20;
+        limit.rlim_cur = limit.rlim_max;
+        if (setrlimit(RLIMIT_NOFILE, &limit)) return 21;
+        int descriptors[256];
+        for (unsigned i = 0; i < sizeof(descriptors)/sizeof(*descriptors); ++i) {
+            descriptors[i] = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
+            if (descriptors[i] < 0) { perror("guest netlink budget"); return 22; }
+        }
+        for (unsigned i = 0; i < sizeof(descriptors)/sizeof(*descriptors); ++i)
+            if (close(descriptors[i])) return 23;
+        puts("PASS guest limits: inherited soft/hard, raised soft, independent service budget");
+        return 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "hold")) {
         if (fork() < 0) return 10;
         if (write(1, "ready\n", 6) != 6) return 11;

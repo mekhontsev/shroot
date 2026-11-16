@@ -241,7 +241,7 @@ guest_freestanding(run)
 target_sources(run PRIVATE ${src}/arguments.c ${src}/freestanding_memory.c)
 
 
-guest_executable(service ${src}/service_main.c ${src}/fs_service.c ${namespace_engine} ${src}/image_catalogue.c
+guest_executable(service ${src}/service_main.c ${src}/process_owner.c ${src}/fs_service.c ${namespace_engine} ${src}/image_catalogue.c
     ${src}/elf_admission.c ${identity} ${src}/elf.c ${src}/fs_client.c ${inodes} ${wire} ${raw} ${mounts})
 target_compile_definitions(service PRIVATE MD_NO_START MD_USE_LIBC)
 target_link_libraries(service PRIVATE guest-database guest-sha256 m)
@@ -403,7 +403,7 @@ if(SHROOT_BUILD_TESTS)
     target_link_options(control_event PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=epoll_wait)
     guest_executable(wait_guest tests/test_wait_guest.c)
     target_compile_options(wait_guest PRIVATE -UNDEBUG)
-    guest_executable(test_process_limits tests/test_process_limits.c ${identity})
+    guest_executable(test_process_limits tests/test_process_limits.c ${src}/process_owner.c ${src}/event_wait.c ${identity})
     target_compile_options(test_process_limits PRIVATE -iquote ${src} -UNDEBUG)
     guest_executable(test_process_image tests/test_process_image.c)
     target_compile_options(test_process_image PRIVATE -UNDEBUG)

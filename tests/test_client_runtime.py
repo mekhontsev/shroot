@@ -2,6 +2,7 @@
 """Native client integration; no Android application or automation service."""
 import argparse
 import json
+import resource
 from pathlib import Path
 import subprocess
 import tempfile
@@ -41,6 +42,13 @@ def main():
         result = subprocess.run(cli + ["exec", str(instance), "--", "/bin/client-guest", "exit42"],
                                 timeout=30)
         assert result.returncode == 42
+        limits = resource.getrlimit(resource.RLIMIT_NOFILE)
+        for entry in ('0', '1'):
+            subprocess.run(cli + ["exec", str(instance), "--network", "routed",
+                                  "--env", "SHROOT_MACHINE_ENTRY=" + entry,
+                                  "--", "/bin/client-guest", "limits"], check=True, timeout=30,
+                           preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (128, 4096)))
+            assert resource.getrlimit(resource.RLIMIT_NOFILE) == limits
         for store in (instance, image):
             subprocess.run(cli + ["remove", str(store)], check=True, timeout=30)
         print("PASS CLI: public API operations, launch arguments and guest exit status")

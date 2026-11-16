@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <signal.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/signalfd.h>
 #include <sys/wait.h>
 
@@ -53,6 +54,14 @@ long md_process_signal(int fd, int signal) {
 }
 int md_process_status(int status) {
     return (status & 127) ? 128 + (status & 127) : (status >> 8) & 255;
+}
+
+long md_process_service_nofile(void) {
+    struct rlimit limit;
+    long error=RAW4(prlimit64,0,RLIMIT_NOFILE,0,&limit);
+    if (error<0 || limit.rlim_cur==limit.rlim_max) return error;
+    limit.rlim_cur=limit.rlim_max;
+    return RAW4(prlimit64,0,RLIMIT_NOFILE,&limit,0);
 }
 
 long md_process_close_fds(const int *keep, unsigned count) {

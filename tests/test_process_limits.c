@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "process_limits.h"
 #include "process_oom.h"
+#include "process_owner.h"
 #include "task_status.h"
 #include <assert.h>
 #include <errno.h>
@@ -23,6 +24,43 @@ static struct md_process_member *member(const struct md_identity *id,const struc
     assert(!md_process_limits_read(&limits));
     limits.nproc=*nproc;
     return md_process_member_new(id,&limits);
+}
+static void service_nofile(void) {
+    struct rlimit original;
+    assert(!getrlimit(RLIMIT_NOFILE,&original));
+    for (unsigned denied=0;denied<2;++denied) {
+        pid_t child=fork(); assert(child>=0);
+        if (!child) {
+            struct rlimit low={64,256}, current;
+            assert(!setrlimit(RLIMIT_NOFILE,&low));
+            if (!denied) {
+                assert(!md_process_service_nofile());
+                assert(!getrlimit(RLIMIT_NOFILE,&current));
+                assert(current.rlim_cur==256 && current.rlim_max==256);
+                int fd=fcntl(STDERR_FILENO,F_DUPFD_CLOEXEC,200);
+                assert(fd==200 && !close(fd));
+            }
+            struct sock_filter code[]={
+                BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_prlimit64,0,3),
+                BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,args[2])),
+                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,0,1,0),
+                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EACCES),
+                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};
+            struct sock_fprog filter={sizeof(code)/sizeof(*code),code};
+            assert(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
+            assert(!prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&filter));
+            assert(md_process_service_nofile()==(denied ? -EACCES : 0));
+            assert(!getrlimit(RLIMIT_NOFILE,&current));
+            assert(current.rlim_cur==(denied ? 64 : 256) && current.rlim_max==256);
+            _exit(0);
+        }
+        int status; assert(waitpid(child,&status,0)==child && !status);
+    }
+    struct rlimit current;
+    assert(!getrlimit(RLIMIT_NOFILE,&current));
+    assert(current.rlim_cur==original.rlim_cur && current.rlim_max==original.rlim_max);
+    puts("PASS service descriptor budget: child-only soft expansion, hard ceiling, idempotence and denial");
 }
 static int nproc(struct md_process_member *m,const struct md_identity *actor,
         const struct md_identity *target,int group,const struct rlimit *next,struct rlimit *old) {
@@ -168,6 +206,7 @@ static void oom(struct md_identity *root,struct md_identity *user) {
 int main(void) {
     struct md_identity root=md_identity_new(0,0), user=md_identity_new(1000,1000), other=md_identity_new(1001,1001);
     struct rlimit limit={3,3}, old;
+    service_nofile();
     nofile(&root,&user);
     native_limits(&root,&user);
     proc_limits();

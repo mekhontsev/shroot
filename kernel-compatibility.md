@@ -129,6 +129,10 @@ Native write failures propagate without publishing the logical update. A
 read-only guest `fs.nr_open` describes the logical ceiling, not host capacity.
 The fixture also covers lower/re-raise, foreign protected targets, exec/thread
 inheritance, FD exhaustion and received-rights truncation in both entry modes.
+Dedicated services use the same baseline syscall once to expand their soft FD
+budget to the inherited hard ceiling, after preserving the initial guest's
+limits. `test_process_limits` covers idempotence/denial and `client_runtime`
+checks both entry modes with a low caller limit and many managed descriptors.
 Native real-time scheduling and other host resource ceilings remain authoritative;
 the packaged RTKit fixture records scheduler `EPERM` rather than masking it.
 
