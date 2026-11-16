@@ -273,17 +273,35 @@ struct observed_mapping {
 };
 static unsigned query_unavailable;
 static int query_error;
+
+/* Optional Linux 6.11 observation ABI; build headers must not raise the 5.15
+ * runtime floor. The production owner and the text control do not use it. */
+struct mapping_query {
+    uint64_t size, query_flags, query_addr, vma_start, vma_end, vma_flags;
+    uint64_t vma_page_size, vma_offset, inode;
+    uint32_t dev_major, dev_minor, vma_name_size, build_id_size;
+    uint64_t vma_name_addr, build_id_addr;
+};
+#define MAPPING_QUERY _IOWR('f',17,struct mapping_query)
+#define MAPPING_SHARED 0x08
+_Static_assert(sizeof(struct mapping_query)==104,"mapping query ABI");
+#ifdef PROCMAP_QUERY
+_Static_assert(MAPPING_QUERY==PROCMAP_QUERY,"kernel mapping query ABI");
+_Static_assert(MAPPING_SHARED==PROCMAP_QUERY_VMA_SHARED,"kernel mapping shared flag");
+_Static_assert(offsetof(struct mapping_query,inode)==offsetof(struct procmap_query,inode),"kernel mapping identity ABI");
+#endif
+
 static int mapped_backing(const struct observed_mapping *m, int text) {
     if (!text) {
-        struct procmap_query q={.size=sizeof(q),.query_addr=m->input};
-        if (ioctl(m->maps,PROCMAP_QUERY,&q)) {
+        struct mapping_query q={.size=sizeof(q),.query_addr=m->input};
+        if (ioctl(m->maps,MAPPING_QUERY,&q)) {
             if (!query_unavailable++) query_error=errno;
             else assert(errno==query_error);
             return -errno;
         }
         return q.inode==m->source.inode && q.dev_major==major(m->source.device)
             && q.dev_minor==minor(m->source.device) && q.vma_offset+m->input-q.vma_start==0
-            && !!(q.vma_flags&PROCMAP_QUERY_VMA_SHARED)==m->source.shared;
+            && !!(q.vma_flags&MAPPING_SHARED)==m->source.shared;
     }
     struct md_mapping_source source={m->source.device,m->source.inode};
     int result=md_mapping_observe(m->maps,&source,m->input,(size_t)getpagesize(),0,m->source.shared);
