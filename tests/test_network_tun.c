@@ -741,7 +741,7 @@ static void raw_echo(int tap,int ipv6) {
         assert(packets<8 && poll(&ready,1,5000)==1);
         ssize_t received=recv(fd,reply,sizeof(reply),0); assert(received>(ssize_t)header);
         if(ipv6 && ((reply[header]>=130 && reply[header]<=137) || reply[header]==143)) continue; /* ND/MLD share raw ICMPv6. */
-        assert(received==header+sizeof(echo));
+        assert(received==(ssize_t)(header+sizeof(echo)));
         break;
     }
     assert(reply[header]==(ipv6 ? 129 : 0) && !memcmp(reply+header+4,echo+4,sizeof(echo)-4));
@@ -802,7 +802,7 @@ static void packet_reject(int tap,int ipv6) {
         assert(!md_network_stack_send_ip(spaces[0],index,packet,sizeof(packet)));
         pthread_mutex_unlock(&spaces[0]->fabric->lock);
         unsigned char reply[2048]; size_t offset=sizeof(struct md_network_packet)+(ipv6 ? 0 : 20);
-        ssize_t size;
+        ssize_t size=-1;
         for(unsigned received=0;;++received) {
             struct pollfd ready={.fd=raw,.events=POLLIN};
             /* EVENT_WAIT: an actual ICMP refusal; timeout fails the test. */

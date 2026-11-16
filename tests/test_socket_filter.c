@@ -25,7 +25,7 @@ static void compare(const struct sock_filter *code,unsigned count) {
         assert(send(native[0],payload,size,0)==size);
         struct iovec v[]={{&header,sizeof(header)},{payload,size}};
         struct msghdr msg={.msg_iov=v,.msg_iovlen=2};
-        assert(sendmsg(wrapped[0],&msg,0)==sizeof(header)+size);
+        assert(sendmsg(wrapped[0],&msg,0)==(ssize_t)(sizeof(header)+size));
         ssize_t n=recv(native[1],a,sizeof(a),MSG_DONTWAIT);
         if (n<0) assert(errno==EAGAIN);
         ssize_t m=recv(wrapped[1],b,sizeof(b),MSG_DONTWAIT);

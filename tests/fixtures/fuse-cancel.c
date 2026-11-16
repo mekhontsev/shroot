@@ -20,11 +20,13 @@ static void *receive(void *arg) {
     char buffer[8192];
     pthread_cleanup_push(cleaned,r);
     atomic_store(&r->entered,1);
-    if (r->mode==2) (void)splice(r->fd,NULL,r->sink,NULL,sizeof(buffer),0);
+    ssize_t received;
+    if (r->mode==2) received=splice(r->fd,NULL,r->sink,NULL,sizeof(buffer),0);
     else if (r->mode==1) {
         struct iovec v={buffer,sizeof(buffer)};
-        (void)readv(r->fd,&v,1);
-    } else (void)read(r->fd,buffer,sizeof(buffer));
+        received=readv(r->fd,&v,1);
+    } else received=read(r->fd,buffer,sizeof(buffer));
+    (void)received;
     pthread_cleanup_pop(0);
     return NULL;
 }

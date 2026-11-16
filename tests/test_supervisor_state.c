@@ -230,7 +230,7 @@ static void borrowed_terminal_replacement(void) {
     pid_t child=fork(); assert(child>=0);
     if (!child) {
         close(channel[1]); char byte;
-        (void)read(channel[0],&byte,1); _exit(1);
+        ssize_t received=read(channel[0],&byte,1); (void)received; _exit(1);
     }
     close(channel[0]);
     assert(!ptrace(PTRACE_SEIZE,child,NULL,(void *)(uintptr_t)(PTRACE_O_TRACEEXIT|PTRACE_O_EXITKILL)));
@@ -482,7 +482,7 @@ static void cancel_stopped_child(void) {
     if (!child) {
         close(channel[1]); char byte;
         /* EVENT_WAIT: parent cancels this exact ptraced child. */
-        (void)read(channel[0],&byte,1); _exit(1);
+        ssize_t received=read(channel[0],&byte,1); (void)received; _exit(1);
     }
     close(channel[0]);
     assert(!ptrace(PTRACE_SEIZE,child,NULL,(void *)(uintptr_t)PTRACE_O_EXITKILL));
@@ -1025,7 +1025,7 @@ static void metadata_policy_delivery(void) {
         assert(!prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&filter));
         char byte='r'; assert(write(channel[1],&byte,1)==1);
         /* EVENT_WAIT: parent installs the replay at an acknowledged stop. */
-        (void)read(channel[1],&byte,1);
+        ssize_t received=read(channel[1],&byte,1); (void)received;
         (void)syscall(SYS_getpid);
         _exit(replay_traps!=1 || replay_alarms!=1);
     }

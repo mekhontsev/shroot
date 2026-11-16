@@ -18,7 +18,8 @@ static int failed(struct md_fuse_mapping *m,int error) {
     /* A confirmed daemon mutation cannot be rolled back. Stop exposing stale
      * pages if its local backing fails; existing mappings fault with SIGBUS. */
     m->error=error;
-    (void)ftruncate(m->writer,0);
+    int invalidated=ftruncate(m->writer,0);
+    (void)invalidated; /* Best effort; retain the original backing failure. */
     return error;
 }
 int md_fuse_mapping_write(struct md_fuse_mapping *m,const void *data,size_t size,int64_t offset) {
