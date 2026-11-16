@@ -1,4 +1,6 @@
 set(SHROOT_SQLITE bundled CACHE STRING "SQLite provider: bundled, system, or an existing CMake target")
+configure_file(${CMAKE_CURRENT_LIST_DIR}/sqlite-notice.txt
+    ${shroot_license_directory}/sqlite.txt COPYONLY)
 if(SHROOT_SQLITE STREQUAL "bundled")
     include(FetchContent)
     FetchContent_Declare(shroot_sqlite

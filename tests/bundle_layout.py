@@ -68,6 +68,6 @@ def audit_bundle(prefix, readelf='readelf', *, production=False, system=None, ve
     for filename in ('include/shroot.h', 'lib/libshroot.a', 'lib/cmake/Shroot/ShrootConfig.cmake',
                      'share/doc/shroot/LICENSE'):
         assert (prefix / filename).is_file(), filename
-    for name in ('curl', 'mbedtls', 'lwip', 'zlib', 'zstd', 'libarchive'):
+    for name in ('sqlite', 'curl', 'mbedtls', 'lwip', 'zlib', 'zstd', 'libarchive'):
         assert (prefix / 'share/doc/shroot/licenses' / (name + '.txt')).is_file(), name
     return metadata
