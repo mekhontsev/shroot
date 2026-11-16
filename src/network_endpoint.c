@@ -7,7 +7,7 @@
 #include "fd_selector.h"
 #include "guest_identity.h"
 #include <errno.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/tcp.h>
 #include <stdlib.h>
 #include <string.h>

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "task_resources.h"
 #include "task_registry.h"
 #include "task_status.h"
@@ -139,7 +140,7 @@ static void retained_proc_query(void) {
     int proc=open("/proc",O_PATH|O_DIRECTORY|O_CLOEXEC);
     int other=open("/dev",O_PATH|O_DIRECTORY|O_CLOEXEC);
     assert(proc>=0 && other>=0);
-    const int flags[]={0,O_DIRECTORY,O_CLOEXEC,O_NOFOLLOW,O_NONBLOCK,O_LARGEFILE,O_NOCTTY,O_PATH};
+    const int flags[]={0,O_DIRECTORY,O_CLOEXEC,O_NOFOLLOW,O_NONBLOCK,MD_O_LARGEFILE,O_NOCTTY,O_PATH};
     for (unsigned i=0;i<sizeof(flags)/sizeof(*flags);++i) {
         int value=O_RDONLY|O_DIRECTORY|flags[i];
         assert(md_domain_proc_fd_query(proc,"self/fd/",value));

@@ -17,7 +17,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/if_packet.h>
 #include <netinet/in.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>

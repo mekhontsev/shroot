@@ -13,7 +13,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <linux/netfilter/nfnetlink_conntrack.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <stdio.h>

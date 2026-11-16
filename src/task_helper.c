@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include <sys/un.h>
 #include "task_helper.h"
 #include "mapping_observation.h"
@@ -37,7 +38,7 @@ struct parcel {
     uint64_t token;
     struct iovec vector;
     struct msghdr message;
-    union { struct cmsghdr align; char bytes[CMSG_SPACE(sizeof(int))]; } control;
+    struct { _Alignas(struct cmsghdr) char bytes[CMSG_SPACE(sizeof(int))]; } control;
     char path[PATH_MAX];
     struct stat metadata;
 };
@@ -242,8 +243,9 @@ static int receive_export(struct helper *m) {
     p->message=(struct msghdr){.msg_iov=(void *)(m->parcel+offsetof(struct md_task_receive_frame,vector)),.msg_iovlen=1,
         .msg_control=(void *)(m->parcel+offsetof(struct md_task_receive_frame,control)),.msg_controllen=CMSG_SPACE(p->count*sizeof(int))};
     memset(&p->control,0,p->message.msg_controllen);
-    p->control.align=(struct cmsghdr){.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS,.cmsg_len=CMSG_LEN(p->count*sizeof(int))};
-    memcpy(CMSG_DATA(&p->control.align),p->descriptors,p->count*sizeof(int));
+    struct cmsghdr *header=(void *)p->control.bytes;
+    *header=(struct cmsghdr){.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS,.cmsg_len=CMSG_LEN(p->count*sizeof(int))};
+    memcpy(CMSG_DATA(header),p->descriptors,p->count*sizeof(int));
     m->operation=RECEIVE_EXPORT;
     unsigned long args[6]={m->endpoint,m->parcel+offsetof(struct md_task_receive_frame,message),MSG_NOSIGNAL|MSG_DONTWAIT};
     return call(m,m->child,SYS_sendmsg,args);
@@ -349,10 +351,11 @@ static int advance(struct helper *m, long value) {
             struct md_task_send_import *p=(void *)((char *)span.data+m->send_import-m->parcel);
             if (value!=sizeof(p->token) || p->token!=m->anchor_token) return protocol_error(m,__LINE__);
             if (p->message.msg_flags&MSG_CTRUNC) { m->result=-EMFILE; return abort_child(m); }
+            const struct cmsghdr *header=(void *)p->anchor.bytes;
             if (p->message.msg_flags&MSG_TRUNC || p->message.msg_controllen!=sizeof(p->anchor)
-                    || p->anchor.align.cmsg_level!=SOL_SOCKET || p->anchor.align.cmsg_type!=SCM_RIGHTS
-                    || p->anchor.align.cmsg_len!=CMSG_LEN(sizeof(int))) return protocol_error(m,__LINE__);
-            int fd=-1; memcpy(&fd,CMSG_DATA(&p->anchor.align),sizeof(fd));
+                    || header->cmsg_level!=SOL_SOCKET || header->cmsg_type!=SCM_RIGHTS
+                    || header->cmsg_len!=CMSG_LEN(sizeof(int))) return protocol_error(m,__LINE__);
+            int fd=-1; memcpy(&fd,CMSG_DATA(header),sizeof(fd));
             if (fd<0) return protocol_error(m,__LINE__);
             struct sockaddr_un *a=(void *)((char *)span.data+m->send_address-m->parcel);
             *a=(struct sockaddr_un){.sun_family=AF_UNIX};
@@ -496,8 +499,9 @@ export_open:
             p->vector=(struct iovec){(void *)m->parcel,sizeof(p->token)};
             p->message=(struct msghdr){.msg_iov=(void *)(m->parcel+offsetof(struct parcel,vector)),.msg_iovlen=1,
                 .msg_control=(void *)(m->parcel+offsetof(struct parcel,control)),.msg_controllen=sizeof(p->control)};
-            p->control.align=(struct cmsghdr){.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS,.cmsg_len=CMSG_LEN(sizeof(int))};
-            int fd=(int)value; memcpy(CMSG_DATA(&p->control.align),&fd,sizeof(fd));
+            struct cmsghdr *header=(void *)p->control.bytes;
+            *header=(struct cmsghdr){.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS,.cmsg_len=CMSG_LEN(sizeof(int))};
+            int fd=(int)value; memcpy(CMSG_DATA(header),&fd,sizeof(fd));
             m->operation=EXPORT; nr=SYS_sendmsg;
             args[1]=m->parcel+offsetof(struct parcel,message); args[2]=MSG_NOSIGNAL|MSG_DONTWAIT;
             break;
@@ -625,7 +629,7 @@ static int helper_begin(struct md_task_helpers *manager, pid_t owner, pid_t grou
          * of its pathname. Provider admission owns the target's authority. */
         int directory=!!(request->flags&O_DIRECTORY);
         unsigned allowed=O_PATH|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW;
-        if (directory) allowed|=O_NONBLOCK|O_NOATIME|O_LARGEFILE;
+        if (directory) allowed|=O_NONBLOCK|O_NOATIME|MD_O_LARGEFILE;
         if ((!(request->flags&O_PATH) && !fdinfo && !mounts && !process && !directory)
                 || request->flags&~allowed) return -EINVAL;
     }

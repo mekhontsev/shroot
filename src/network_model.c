@@ -16,7 +16,7 @@
 #include <linux/if_addr.h>
 #include <linux/if_bridge.h>
 #include <linux/rtnetlink.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>

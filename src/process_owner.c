@@ -86,7 +86,7 @@ long md_process_signal_child(int pid, int signal) {
     long fd=RAW2(pidfd_open,pid,0);
     /* A discovered PID may disappear or cease to name a process leader.
      * With a positive PID and flags zero, neither error proves child ownership. */
-    if (fd<0) return fd==-ESRCH || fd==-EINVAL ? 0 : fd;
+    if (fd<0) return fd==-ESRCH || fd==-EINVAL || fd==-ENOENT ? 0 : fd;
     siginfo_t info={0};
     long r=RAW5(waitid,P_PIDFD,fd,&info,WEXITED|WNOHANG|WNOWAIT|__WALL,0);
     /* __WALL can expose a ptrace stop even with WEXITED. WNOWAIT proves

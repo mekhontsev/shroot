@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "interception_route.h"
 #include <string.h>
 

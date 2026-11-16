@@ -9,7 +9,7 @@
 #include "network_message.h"
 #include "netlink_attributes.h"
 #include <linux/if_link.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
 #include <unistd.h>

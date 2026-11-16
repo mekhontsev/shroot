@@ -1,16 +1,18 @@
 #define _GNU_SOURCE
 #include "native_mounts.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sysmacros.h>
+#include <unistd.h>
 
 struct native_filesystem { dev_t device; char type[128]; };
 struct md_native_mounts {
-    FILE *source; char *data; size_t size; int valid;
+    int source; char *data; size_t size; int valid;
     struct native_filesystem *filesystems;
     size_t count, capacity;
 };
@@ -34,13 +36,13 @@ static int filesystem_capture(struct md_native_mounts *s,dev_t device,const char
 
 void md_native_mounts_release(struct md_native_mounts *s) {
     if (!s) return;
-    if (s->source) fclose(s->source);
+    close(s->source);
     free(s->data); free(s->filesystems); free(s);
 }
 static int changed(struct md_native_mounts *s) {
     /* Nonblocking generation observation, not a state wait. Linux mountinfo
      * poll acknowledges namespace changes; reading alone does not. */
-    struct pollfd p={.fd=fileno(s->source),.events=POLLPRI};
+    struct pollfd p={.fd=s->source,.events=POLLPRI};
     int r=poll(&p,1,0);
     if (r<0) return -errno;
     if (p.revents&(POLLHUP|POLLNVAL)) return -EIO;
@@ -55,21 +57,25 @@ int md_native_mounts_read(struct md_native_mounts **owner,const char **data,size
     if (!s) {
         s=calloc(1,sizeof(*s));
         if (!s) return -ENOMEM;
-        s->source=fopen("/proc/self/mountinfo","re");
-        if (!s->source) { int r=-errno; free(s); return r; }
+        s->source=open("/proc/self/mountinfo",O_RDONLY|O_CLOEXEC);
+        if (s->source<0) { int r=-errno; free(s); return r; }
         *owner=s;
     }
     int r=changed(s);
     if (r<0) { s->valid=0; return r; }
     if (!s->valid || r) {
         s->valid=0; s->count=0;
-        if (fseek(s->source,0,SEEK_SET)) return -errno;
-        clearerr(s->source);
+        if (lseek(s->source,0,SEEK_SET)<0) return -errno;
+        /* Keep the polled description, but never reuse libc's previous input buffer. */
+        int fd=fcntl(s->source,F_DUPFD_CLOEXEC,0);
+        if (fd<0) return -errno;
+        FILE *input=fdopen(fd,"r");
+        if (!input) { int error=-errno; close(fd); return error; }
         char *bytes=NULL,*line=NULL; size_t length=0,capacity=0;
         FILE *out=open_memstream(&bytes,&length);
-        if (!out) return -errno;
+        if (!out) { int error=-errno; fclose(input); return error; }
         r=0;
-        while (getline(&line,&capacity,s->source)>=0) {
+        while (getline(&line,&capacity,input)>=0) {
             char path[PATH_MAX],type[128]; unsigned major,minor;
             const char *separator=strstr(line," - ");
             if (sscanf(line,"%*u %*u %u:%u %*s %4095s",&major,&minor,path)!=3
@@ -79,7 +85,8 @@ int md_native_mounts_read(struct md_native_mounts **owner,const char **data,size
             if ((below(path,"/proc") || below(path,"/dev")) && !below(path,"/dev/shm"))
                 if (fputs(line,out)==EOF) { r=-EIO; break; }
         }
-        if (!r && ferror(s->source)) r=-EIO;
+        if (!r && ferror(input)) r=-EIO;
+        fclose(input);
         free(line);
         if (fclose(out) && !r) r=-EIO;
         if (!r) {

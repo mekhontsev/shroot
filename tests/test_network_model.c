@@ -3,7 +3,7 @@
 #include "test_network_fixture.h"
 #include <assert.h>
 #include <errno.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <stdio.h>
 #include <string.h>
 #include <poll.h>

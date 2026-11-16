@@ -28,7 +28,7 @@
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <linux/sockios.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <linux/if_arp.h>
 #include <netinet/in.h>
 #include <pthread.h>

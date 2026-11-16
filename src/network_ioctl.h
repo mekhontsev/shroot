@@ -3,8 +3,8 @@
 #include <linux/sockios.h>
 #include <linux/if_bridge.h>
 #include <linux/if_arp.h>
-#include <net/if.h>
-#include <net/route.h>
+#include <linux/if.h>
+#include <linux/route.h>
 #include <linux/ipv6.h>
 #include <linux/ipv6_route.h>
 struct md_network_route_ioctl { struct rtentry route; char device[IFNAMSIZ]; };

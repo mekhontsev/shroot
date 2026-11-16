@@ -9,7 +9,7 @@
 #include <linux/netfilter_ipv4.h>
 #include <linux/rtnetlink.h>
 #include <linux/if_packet.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/in.h>
 #include <string.h>
 #include <stdlib.h>

@@ -13,7 +13,7 @@
 #include "netif/ethernet.h"
 #include <errno.h>
 #include <linux/if_addr.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>

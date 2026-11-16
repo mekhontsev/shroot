@@ -12,7 +12,7 @@
 #include <errno.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter/nf_tables.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>

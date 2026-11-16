@@ -29,6 +29,8 @@ struct md_xattr_args { uint64_t value; uint32_t size, flags; };
 // libc headers and faccessat wrappers differ in AT_EACCESS support. The guest
 // and our raw faccessat2 calls use the Linux ABI, independent of the build libc.
 #define MD_AT_EACCESS 0x200
+/* AArch64 kernel bit: 64-bit glibc exposes O_LARGEFILE as zero instead. */
+#define MD_O_LARGEFILE 0400000
 // pidfd_open's thread flag is absent from older NDK kernel headers.
 #define MD_PIDFD_THREAD 0x80
 /* Linux 6.11 pidfs namespace queries; implemented against guest namespaces. */

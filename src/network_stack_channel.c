@@ -4,7 +4,7 @@
 #include "network_endpoint.h"
 #include "lwip/ip.h"
 #include <errno.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
 #include <unistd.h>

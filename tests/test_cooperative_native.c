@@ -74,7 +74,7 @@ static void open_admission(void) {
             unsigned planned=md_open_plan_path(path,0,(unsigned)pin,flags,S_IFDIR);
             for (unsigned route=0;route<2;++route) {
                 int fd=route ? md_open_pinned(pin,(int)flags) : open(path,(int)planned);
-                assert(fd>=0 && (fcntl(fd,F_GETFL)&~O_LARGEFILE)==(int)flags);
+                assert(fd>=0 && (fcntl(fd,F_GETFL)&~MD_O_LARGEFILE)==(int)flags);
                 struct stat actual,original;
                 assert(!fstat(fd,&actual) && !fstat(pin,&original));
                 assert(actual.st_dev==original.st_dev && actual.st_ino==original.st_ino);

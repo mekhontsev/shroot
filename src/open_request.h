@@ -1,5 +1,6 @@
 #ifndef MD_OPEN_REQUEST_H
 #define MD_OPEN_REQUEST_H
+#include <linux/openat2.h>
 #include "linux_abi.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -7,7 +8,7 @@
 /* Validation is independent of the transport that captured open_how. */
 static inline int md_open_how_validate(const struct open_how *how) {
     const uint64_t allowed=O_ACCMODE|O_CREAT|O_EXCL|O_NOCTTY|O_TRUNC|O_APPEND|
-        O_NONBLOCK|O_DSYNC|O_ASYNC|O_DIRECT|O_LARGEFILE|O_DIRECTORY|O_NOFOLLOW|
+        O_NONBLOCK|O_DSYNC|O_ASYNC|O_DIRECT|MD_O_LARGEFILE|O_DIRECTORY|O_NOFOLLOW|
         O_NOATIME|O_CLOEXEC|O_SYNC|O_PATH|O_TMPFILE;
     if ((how->flags&~allowed) || (how->mode&~07777UL)) return -EINVAL;
     if (how->mode && !(how->flags&O_CREAT) && (how->flags&O_TMPFILE)!=O_TMPFILE) return -EINVAL;

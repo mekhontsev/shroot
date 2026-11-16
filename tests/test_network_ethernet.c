@@ -11,7 +11,7 @@
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
 #include <linux/rtnetlink.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>

@@ -13,7 +13,7 @@
 #include <linux/pkt_sched.h>
 #include <linux/rtnetlink.h>
 #include <linux/tc_act/tc_csum.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>

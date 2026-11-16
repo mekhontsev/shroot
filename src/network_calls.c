@@ -18,7 +18,7 @@
 #include <linux/netfilter/ipset/ip_set.h>
 #include <linux/filter.h>
 #include <linux/sockios.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <stddef.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>

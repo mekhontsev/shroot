@@ -21,6 +21,6 @@ struct md_task_send_import {
     uint64_t token;
     struct iovec vector;
     struct msghdr message;
-    union { struct cmsghdr align; char bytes[CMSG_SPACE(sizeof(int))]; } anchor;
+    struct { _Alignas(struct cmsghdr) char bytes[CMSG_SPACE(sizeof(int))]; } anchor;
 };
 #endif

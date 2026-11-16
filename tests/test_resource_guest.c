@@ -1236,7 +1236,7 @@ static void retained_proc_filter(int proc) {
         };
         struct sock_fprog program={sizeof(code)/sizeof(*code),code};
         assert(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
-        int flags=O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW|O_LARGEFILE;
+        int flags=O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW|MD_O_LARGEFILE;
         unsigned before=export_fds(NULL);
         assert(syscall(SYS_openat,proc,"self/fd/",flags|O_NONBLOCK,0)==-1 && errno==EBUSY);
         assert(export_fds(NULL)==before);
@@ -1296,8 +1296,8 @@ static void metadata_export(int guest, int managed) {
         O_RDONLY|O_DIRECTORY|O_NOFOLLOW,
         O_RDONLY|O_DIRECTORY|O_NONBLOCK|O_CLOEXEC,
         O_RDONLY|O_NOFOLLOW|O_NONBLOCK,
-        O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_LARGEFILE,
-        O_RDONLY|O_DIRECTORY|O_LARGEFILE|O_NOCTTY,
+        O_RDONLY|O_DIRECTORY|O_CLOEXEC|MD_O_LARGEFILE,
+        O_RDONLY|O_DIRECTORY|MD_O_LARGEFILE|O_NOCTTY,
         O_PATH|O_DIRECTORY|O_CLOEXEC,
         O_PATH|O_NOFOLLOW
     };

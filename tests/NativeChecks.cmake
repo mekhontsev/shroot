@@ -7,7 +7,8 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(component_runner "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_component.py")
 add_custom_target(shroot-check-fixtures DEPENDS
     shroot-cli test_client test_client_worker test_client_integration client-guest
-    bootstrap supervisor run service image test_database test_image_registry test_host_policy)
+    bootstrap supervisor run service image test_database test_image_registry test_host_policy
+    audit_const audit_mutable audit_weak audit_tls audit_current)
 function(shroot_component name target)
     add_dependencies(shroot-check-fixtures ${target})
     add_test(NAME component_${name} COMMAND "${Python3_EXECUTABLE}" "${component_runner}"
@@ -27,6 +28,11 @@ foreach(name control_event event_signal pending task_wait task_wait_live fuse_tr
 endforeach()
 shroot_component(task_wait_idle task_wait_live --idle)
 shroot_component(task_wait_small task_wait_live --small)
+shroot_component(kernel_baseline kernel_baseline)
+add_dependencies(shroot-check-fixtures test_signal_checkpoint)
+add_test(NAME component_signal_checkpoint COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_signal_checkpoint.py" "${CMAKE_CURRENT_BINARY_DIR}" --executor local)
+set_tests_properties(component_signal_checkpoint PROPERTIES LABELS component TIMEOUT 100)
 shroot_component(lwip_context test_lwip_context)
 foreach(mode exit kill exec exec-fault exec-real-first exec-private-first exec-directed
         subreaper-exit subreaper-kill subreaper-ignore subreaper-nochildwait

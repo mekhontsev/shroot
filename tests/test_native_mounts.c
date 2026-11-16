@@ -2,6 +2,7 @@
 #include "native_mounts.h"
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,9 +10,10 @@
 #include <sys/sysmacros.h>
 #include <unistd.h>
 
-static FILE *source;
+static int source=-1;
 static unsigned opens,seeks,observations,change_at;
 static int event,poll_error,seek_error,open_error,mock=1;
+static int stream_error,reader=-1;
 static const char initial[]=
     "1 1 0:1 / / rw - rootfs root rw\n"
     "2 1 0:2 / /proc rw - proc proc rw\n"
@@ -20,27 +22,35 @@ static const char initial[]=
     "5 1 0:5 / /device rw - tmpfs tmpfs rw\n"
     "6 1 253:17 / /data rw - f2fs /dev/block/private rw\n"
     "7 1 253:17 /bind /hidden rw - f2fs /dev/block/private rw\n";
-FILE *__real_fopen(const char *,const char *);
-int __real_fseek(FILE *,long,int);
+int __real_open(const char *,int,...);
+off_t __real_lseek(int,off_t,int);
+FILE *__real_fdopen(int,const char *);
 int __real_poll(struct pollfd *,nfds_t,int);
-FILE *__wrap_fopen(const char *path,const char *mode) {
-    if (!mock || strcmp(path,"/proc/self/mountinfo")) return __real_fopen(path,mode);
-    ++opens;
-    if (open_error) { errno=open_error; return NULL; }
-    int fd=memfd_create("mount-snapshot-test",MFD_CLOEXEC); assert(fd>=0);
-    source=fdopen(fd,"w+"); assert(source);
-    assert(fwrite(initial,1,sizeof(initial)-1,source)==sizeof(initial)-1);
-    assert(!fflush(source)); return source;
+FILE *__wrap_fdopen(int fd,const char *mode) {
+    if (mock) {
+        reader=fd;
+        if (stream_error) { errno=stream_error; return NULL; }
+    }
+    return __real_fdopen(fd,mode);
 }
-int __wrap_fseek(FILE *stream,long offset,int whence) {
-    if (mock && stream==source) {
+int __wrap_open(const char *path,int flags,...) {
+    assert(!(flags&O_CREAT));
+    if (!mock || strcmp(path,"/proc/self/mountinfo")) return __real_open(path,flags);
+    ++opens;
+    if (open_error) { errno=open_error; return -1; }
+    source=memfd_create("mount-snapshot-test",MFD_CLOEXEC); assert(source>=0);
+    assert(write(source,initial,sizeof(initial)-1)==sizeof(initial)-1);
+    return source;
+}
+off_t __wrap_lseek(int fd,off_t offset,int whence) {
+    if (mock && fd==source) {
         ++seeks;
         if (seek_error) { errno=seek_error; return -1; }
     }
-    return __real_fseek(stream,offset,whence);
+    return __real_lseek(fd,offset,whence);
 }
 int __wrap_poll(struct pollfd *p,nfds_t count,int timeout) {
-    if (!mock || !source || count!=1 || p->fd!=fileno(source)) return __real_poll(p,count,timeout);
+    if (!mock || source<0 || count!=1 || p->fd!=source) return __real_poll(p,count,timeout);
     assert(timeout==0 && p->events==POLLPRI);
     ++observations;
     if (poll_error) { errno=poll_error; return -1; }
@@ -49,8 +59,8 @@ int __wrap_poll(struct pollfd *p,nfds_t count,int timeout) {
 }
 static void replace(const char *text) {
     size_t size=strlen(text);
-    assert(!ftruncate(fileno(source),0));
-    assert(pwrite(fileno(source),text,size,0)==(ssize_t)size);
+    assert(!ftruncate(source,0));
+    assert(pwrite(source,text,size,0)==(ssize_t)size);
 }
 int main(void) {
     struct md_native_mounts *snapshot=NULL;
@@ -93,7 +103,14 @@ int main(void) {
     replace("");
     assert(!md_native_mounts_read(&snapshot,&bytes,&size) && !size);
     assert(!md_native_mounts_type(snapshot,makedev(0,8)));
-    int fd=fileno(source);
+    assert(fcntl(reader,F_GETFD)<0 && errno==EBADF);
+    event=1; stream_error=ENOMEM;
+    assert(md_native_mounts_read(&snapshot,&bytes,&size)==-ENOMEM);
+    assert(fcntl(reader,F_GETFD)<0 && errno==EBADF);
+    stream_error=0;
+    replace(initial);
+    assert(!md_native_mounts_read(&snapshot,&bytes,&size) && strstr(bytes,"/proc"));
+    int fd=source;
     md_native_mounts_release(snapshot);
     assert(read(fd,&fd,1)<0 && errno==EBADF);
     mock=0; snapshot=NULL;

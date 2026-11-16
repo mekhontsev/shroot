@@ -7,16 +7,17 @@ import re
 import statistics
 from test_oci_services import Suite
 from benchmark_cpu import observe_suite_cpu
-from fixture_executor import probe_native_capability
+from fixture_executor import FixtureExecutor, probe_native_capability
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('build', type=Path)
+    FixtureExecutor.add_argument(parser)
     parser.add_argument('--copy-fault', action='store_true',
                         help='Run invalid-pointer controls and isolated copy costs only')
     args = parser.parse_args()
-    suite = Suite(Path('build/signal-checkpoints'))
+    suite = Suite(Path('build/signal-checkpoints'), args.build.resolve(), executor=args.executor)
     try:
         suite.report['suiteMode'] = 'copy-fault' if args.copy_fault else 'checkpoints'
         suite.report['kernel'] = suite.command(['uname', '-r'], quiet=True).strip()

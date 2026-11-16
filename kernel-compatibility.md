@@ -367,6 +367,9 @@ Native `/proc/self/mountinfo` snapshots use its baseline namespace-generation
 The namespace owner retains the source descriptor and invalidates cached native
 entries on change or observation failure. Changes during construction prevent
 reuse; guest mounts and namespace-relative IDs are generated per request.
+Each refresh rewinds the retained description and uses a fresh buffered reader;
+libc cannot replay bytes from the preceding snapshot. Cached queries acquire no
+additional descriptor or input buffer.
 `test_native_mounts` covers reuse, invalidation, interrupted/failed observation,
 changes during reading and descriptor release, plus a real kernel-source read.
 It is included in `test_resources.py --case stores`; no newer kernel primitive
@@ -1105,7 +1108,7 @@ retain native errors; arbitrary new guest syscalls are not runtime requirements.
 | Interface | First upstream kernel | Owner and purpose | Behavior without it |
 | --- | --- | --- | --- |
 | `DMA_BUF_IOCTL_EXPORT_SYNC_FILE` / `DMA_BUF_IOCTL_IMPORT_SYNC_FILE` | 6.0 | Graphics DMA-BUF fence bridge; `render_device.c` probes allocation/export/poll/import once per Turnip-enabled launch. `test_render.py` checks strict and completion-owned admission; hosted-runtime and Wayland fixtures check GPU ordering, idle release and cancellation. | The `turnip-completion-v1` recipe enables the common Mesa completion fallback plus compositor-held read leases on `ENOTTY`/`ENOSYS`. Legacy DMA-BUF validation and readiness are still required; `EPERM` is not absence. The older `turnip` profile remains bridge-only. Modern ioctls retain the native GPU dependency path. Neither profile is a Shroot startup prerequisite. |
-| `PIDFD_THREAD` | 6.9 | `task_descriptor.c` owns descriptor capture; `task_lifetime.c` owns exact-thread liveness for restricted proc roots. | Try flags zero for the same task. A non-leader rejected with EINVAL is reported as ENOTSUP and uses task-affine SCM_RIGHTS export. Liveness retains `/proc/<tid>/stat` instead: a flags-zero pidfd observes group death, not exact-thread death. Never substitute the leader's file table. |
+| `PIDFD_THREAD` | 6.9 | `task_descriptor.c` owns descriptor capture; `task_lifetime.c` owns exact-thread liveness for restricted proc roots. | Try flags zero for the same task. A non-leader rejected with EINVAL or ENOENT is reported as ENOTSUP and uses task-affine SCM_RIGHTS export. Liveness retains `/proc/<tid>/stat` instead: a flags-zero pidfd observes group death, not exact-thread death. Never substitute the leader's file table. |
 | `pidfs` filesystem identity | 6.9 | `fd_filesystem.c` supplies statfs metadata for an actual retained pidfd when Android denies native fstatfs. It identifies the kernel object and compares its superblock with anon_inodefs; it does not grant process access. `test_kernel_baseline.c` compares native and denial-injected results; `test_proc_root_guest.py` covers proc aliases, duplicates, peer pidfds and protected callers. | Older pidfds retain ANON_INODE_FS_MAGIC; no pidfs ioctl, release check or new startup requirement. Non-pidfd denials remain errors. |
 | `SECCOMP_IOCTL_NOTIF_SET_FLAGS` / `SECCOMP_USER_NOTIF_FD_SYNC_WAKE_UP` | 6.6 | `namespace_broker.c`: optional notification scheduling hint. | Failed ioctl leaves normal notification wakeups enabled; no permission or affinity change. Success does not guarantee CPU co-location: the scheduler still owns placement, and not every FD-install completion uses this hint. |
 | `fchmodat2` | 6.5; `AT_EMPTY_PATH` in 6.6 | `namespace.c` translates store metadata through the worker. `file_calls.c` also has a native direct-backend path. | Logical store metadata does not require this host syscall. Native passthrough retains ENOSYS/flag errors; no fake success or unconditional startup requirement. |
@@ -1132,8 +1135,11 @@ and [Linux 6.14 exec flags](https://github.com/torvalds/linux/blob/v6.14/include
 
 ## Validation Limits
 
-Device coverage is actual UID 2000 on RM11/NX809J, Linux 6.12.23, API 36,
-4 KiB pages. A real 5.15 kernel, API 34 and 16 KiB pages remain unverified.
+Android device coverage includes actual UID 2000 on RM11/NX809J, Linux 6.12.23,
+API 36, 4 KiB pages. Standalone native/runtime and package coverage additionally
+includes Raspberry Pi 5, Debian 13, UID 1000 without capabilities, Linux
+6.18.50+rpt-rpi-2712 and 16 KiB pages; see [qualified hosts](tests/README.md#qualified-hosts).
+A real 5.15 kernel and API 34 remain unverified.
 Missing-operation injection on a newer kernel tests explicit failure/fallback,
 not the scheduling, ABI or security policy of an older kernel.
 
@@ -1338,8 +1344,9 @@ PTRACE_INTERRUPT/SEIZE and GET_SYSCALL_INFO predate the minimum. There is no
 newer-than-5.15 dependency. The guest-only startup private-helper probe exercises
 the restricted owner; rejection is a native runtime failure, never a reason to
 disable another MagicDesk service or silently fall back to signal-forcing BRKs.
-UID-2000 device coverage is Linux 6.12 on 4 KiB pages. A 5.15 device and 16 KiB
-pages are not covered by these results. Strict IP/number KILL, TSYNC, protected
+UID-2000 device coverage is Linux 6.12 on 4 KiB pages. The shared checkpoint
+controls also pass on Raspberry Pi 5 with Linux 6.18 and 16 KiB pages, but not
+on a real 5.15 device. Strict IP/number KILL, TSYNC, protected
 tasks, full register payloads, clone/exec, cancellation and actual GDB/strace
 workflows have focused fixtures.
 
@@ -1370,7 +1377,8 @@ The default [lazy-entry owner](tests/svc-rewriting.md)
 PTRACE_POKETEXT after actual syscall execution. It requires HWCAP_ATOMICS,
 4/16/64 KiB-aligned frame/guard layout, MAP_FIXED_NOREPLACE (4.17) and firmware permission
 for private executable memory. Resource/preparation failure leaves Base entry
-available. Only 4 KiB pages have device coverage. Publication does not borrow
+available. Android has 4 KiB coverage; native runtime and stock Alpine/Debian
+launches also exercise 16 KiB pages on Raspberry Pi 5. Publication does not borrow
 hardware breakpoints or stop peer threads; no extra filter is installed per
 pool or exec.
 

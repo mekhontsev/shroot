@@ -13,7 +13,7 @@ int md_task_pidfd_open(pid_t actor, int *thread_handle) {
     int exact=fd>=0;
     if (fd<0 && errno==EINVAL) {
         fd=(int)syscall(SYS_pidfd_open,actor,0);
-        if (fd<0 && errno==EINVAL) return -ENOTSUP;
+        if (fd<0 && (errno==EINVAL || errno==ENOENT)) return -ENOTSUP;
     }
     if (fd>=0 && thread_handle) *thread_handle=exact;
     return fd<0 ? -errno : fd;

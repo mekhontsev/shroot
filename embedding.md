@@ -249,7 +249,8 @@ ctest --test-dir build --output-on-failure
 python3 tests/test_client_runtime.py build
 ```
 
-These workflows run outside MagicDesk. Android app-UID execution has been checked
-locally from Termux. Ordinary Linux, Raspberry Pi 5 and other page-size/device combinations
-still require their own qualification; successful client tests alone do not
-establish runtime compatibility there.
+These workflows run outside MagicDesk on Android under Termux's app UID and on
+Raspberry Pi 5 under an unprivileged Linux user with 16 KiB pages. The Pi checks
+also execute a separately installed production bundle and stock Alpine/Debian
+programs. See [qualified hosts](tests/README.md#qualified-hosts) for the exact
+scope; client tests do not establish GUI, container or other-device compatibility.

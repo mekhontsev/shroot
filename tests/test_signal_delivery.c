@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "signal_delivery.h"
+#include "process_owner.h"
 #include "syscall_result.h"
 #include <assert.h>
 #include <elf.h>
@@ -36,10 +37,11 @@ static void coalesced_kernel_signal(int signal,int code) {
         sigset_t set; sigemptyset(&set); sigaddset(&set,signal);
         siginfo_t info;
         struct timespec bound={.tv_sec=1};
-        assert(sigtimedwait(&set,&info,&bound)==signal);
+        /* Test the kernel siginfo, not libc's SI_TKILL-to-SI_USER translation. */
+        assert(syscall(SYS_rt_sigtimedwait,&set,&info,&bound,8)==signal);
         assert(info.si_code==SI_TKILL && info.si_pid==12345 && info.si_uid==54321);
         bound=(struct timespec){0};
-        assert(sigtimedwait(&set,&info,&bound)==-1 && errno==EAGAIN);
+        assert(syscall(SYS_rt_sigtimedwait,&set,&info,&bound,8)==-1 && errno==EAGAIN);
         _exit(0);
     }
     int status;
@@ -71,41 +73,47 @@ static void coalesced_kernel_signal(int signal,int code) {
     md_signal_delivery_clear(&q);
 }
 static volatile sig_atomic_t realtime_count;
+static int realtime_signal;
 static void realtime_handler(int signal,siginfo_t *info,void *context) {
     (void)context;
-    if (signal!=SIGRTMAX || info->si_code!=SI_QUEUE
+    if (signal!=realtime_signal || info->si_code!=SI_QUEUE
             || info->si_value.sival_int!=realtime_count+1) _exit(91);
     ++realtime_count;
 }
-static void realtime_order(int retain_again) {
+static void realtime_order(int retain_again,int number) {
+    realtime_signal=number;
     pid_t pid=fork(); assert(pid>=0);
     if (!pid) {
-        struct sigaction action={.sa_sigaction=realtime_handler,.sa_flags=SA_SIGINFO};
-        sigemptyset(&action.sa_mask); assert(!sigaction(SIGRTMAX,&action,NULL));
+        struct md_kernel_action action={.handler=(uintptr_t)realtime_handler,.flags=SA_SIGINFO};
+        assert(!syscall(SYS_rt_sigaction,number,&action,NULL,8));
+        /* libc reserves some realtime signals; keep admission and waiting raw. */
+        uint64_t blocked=UINT64_C(1)<<(number-1),empty=0;
+        assert(!syscall(SYS_rt_sigprocmask,SIG_BLOCK,&blocked,NULL,8));
         assert(!ptrace(PTRACE_TRACEME,0,NULL,NULL));
         assert(!raise(SIGSTOP));
-        while (realtime_count<3) pause();
+        while (realtime_count<3)
+            assert(syscall(SYS_rt_sigsuspend,&empty,8)==-1 && errno==EINTR);
         _exit(0);
     }
     int status;
     assert(waitpid(pid,&status,0)==pid && WIFSTOPPED(status) && WSTOPSIG(status)==SIGSTOP);
-    union sigval value={.sival_int=1}; assert(!sigqueue(pid,SIGRTMAX,value));
+    union sigval value={.sival_int=1}; assert(!sigqueue(pid,number,value));
     assert(!ptrace(PTRACE_CONT,pid,NULL,NULL));
-    assert(waitpid(pid,&status,0)==pid && WIFSTOPPED(status) && WSTOPSIG(status)==SIGRTMAX);
+    assert(waitpid(pid,&status,0)==pid && WIFSTOPPED(status) && WSTOPSIG(status)==number);
     siginfo_t info; assert(!ptrace(PTRACE_GETSIGINFO,pid,NULL,&info));
     struct md_signal_delivery admission={0};
     assert(!md_signal_delivery_retain(&admission,pid,&info));
-    for (int n=2;n<=3;++n) { value.sival_int=n; assert(!sigqueue(pid,SIGRTMAX,value)); }
+    for (int n=2;n<=3;++n) { value.sival_int=n; assert(!sigqueue(pid,number,value)); }
     assert(!md_signal_delivery_publish(&admission,pid,pid));
     struct md_signal_delivery q=admission;
     admission=(struct md_signal_delivery){0};
     assert(!ptrace(PTRACE_CONT,pid,NULL,NULL));
     unsigned stops=0;
     while (waitpid(pid,&status,0)==pid && WIFSTOPPED(status)) {
-        assert(WSTOPSIG(status)==SIGRTMAX && ++stops<=4);
-        int deliver=SIGRTMAX;
+        assert(WSTOPSIG(status)==number && ++stops<=4);
+        int deliver=number;
         int expected=q.realtime ? MD_SIGNAL_RESTORED : MD_SIGNAL_NEW;
-        assert(md_signal_delivery_event(&q,pid,SIGRTMAX,&deliver)==expected);
+        assert(md_signal_delivery_event(&q,pid,number,&deliver)==expected);
         if (retain_again && stops==1) {
             assert(!ptrace(PTRACE_GETSIGINFO,pid,NULL,&info) && info.si_value.sival_int==1);
             assert(!md_signal_delivery_retain(&q,pid,&info));
@@ -115,7 +123,7 @@ static void realtime_order(int retain_again) {
         assert(!ptrace(PTRACE_CONT,pid,NULL,(void *)(intptr_t)deliver));
     }
     assert(WIFEXITED(status) && !WEXITSTATUS(status) && stops==3u+(unsigned)retain_again);
-    assert(!q.realtime && !q.carriers[SIGRTMAX] && !md_signal_delivery_pending(&q));
+    assert(!q.realtime && !q.carriers[number] && !md_signal_delivery_pending(&q));
     md_signal_delivery_clear(&q);
 }
 static uintptr_t pc(pid_t pid) {
@@ -172,7 +180,7 @@ static void child(unsigned round,int traced) {
         } else {
             siginfo_t info;
             struct timespec bound={.tv_sec=1};
-            assert(sigtimedwait(&set,&info,&bound)>0);
+            assert(syscall(SYS_rt_sigtimedwait,&set,&info,&bound,8)>0);
             number=info.si_signo; code=info.si_code; sender=info.si_pid; uid=info.si_uid;
         }
         if (round==2 || round==3) {
@@ -199,7 +207,10 @@ int main(void) {
     coalesced_kernel_signal(SIGALRM,SI_KERNEL);
     coalesced_kernel_signal(SIGCHLD,CLD_EXITED);
     coalesced_kernel_signal(SIGIO,POLL_IN);
-    realtime_order(0); realtime_order(1);
+    const int realtime[]={MD_SIGRTMIN,MD_SIGRTMIN+1,SIGRTMAX};
+    for (unsigned i=0;i<sizeof(realtime)/sizeof(*realtime);++i) {
+        realtime_order(0,realtime[i]); realtime_order(1,realtime[i]);
+    }
     for (long value=-4095;value<=4095;++value)
         assert(md_syscall_restarting(value)==(value==-512 || value==-513 || value==-514 || value==-516));
     assert(!md_syscall_restarting(-EINTR));
@@ -291,7 +302,7 @@ int main(void) {
     siginfo_t info=original(SIGKILL);
     assert(md_signal_delivery_hold(&q,&info)==-EINVAL);
     info=original(SIGSTOP); assert(md_signal_delivery_hold(&q,&info)==-EINVAL);
-    info=original(SIGRTMIN); assert(md_signal_delivery_hold(&q,&info)==-EINVAL);
+    info=original(MD_SIGRTMIN); assert(md_signal_delivery_hold(&q,&info)==-EINVAL);
     info=original(SIGTRAP); info.si_code=TRAP_BRKPT;
     assert(md_signal_delivery_hold(&q,&info)==-EINVAL);
     info.si_code=SI_KERNEL; assert(md_signal_delivery_hold(&q,&info)==-EINVAL);

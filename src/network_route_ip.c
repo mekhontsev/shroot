@@ -1,5 +1,5 @@
 #include "network_route_ip.h"
-#include <net/if.h>
+#include <linux/if.h>
 #include "network_nexthop.h"
 #include "network_forward.h"
 #include "network_autoconf.h"

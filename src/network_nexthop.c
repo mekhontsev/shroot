@@ -3,7 +3,7 @@
 #include <errno.h>
 #include <linux/nexthop.h>
 #include <linux/rtnetlink.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <string.h>
 
 const struct md_network_nexthop *md_network_nexthop_find(const struct md_network_namespace *n,uint32_t id) {

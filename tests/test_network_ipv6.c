@@ -13,7 +13,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <linux/if_addr.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/udp.h>
 #include <sys/syscall.h>
 #include <stdio.h>

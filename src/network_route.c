@@ -23,7 +23,7 @@
 #include <linux/pkt_sched.h>
 #include <linux/rtnetlink.h>
 #include <linux/veth.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/in.h>
 #include <string.h>
 #include <stdlib.h>

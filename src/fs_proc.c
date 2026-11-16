@@ -485,7 +485,7 @@ int md_fs_proc_operation(struct md_filesystem *fs,struct md_mount_namespace *vie
         break;
     case MD_FS_OPEN: case MD_FS_REOPEN: {
         if (q->flags&O_DIRECTORY) { r=-ENOTDIR; break; }
-        if (q->flags&~(O_ACCMODE|O_CLOEXEC|O_APPEND|O_TRUNC|O_NONBLOCK|O_NOCTTY|O_NOFOLLOW|O_PATH|O_CREAT|O_EXCL|O_LARGEFILE|O_NOATIME)) {
+        if (q->flags&~(O_ACCMODE|O_CLOEXEC|O_APPEND|O_TRUNC|O_NONBLOCK|O_NOCTTY|O_NOFOLLOW|O_PATH|O_CREAT|O_EXCL|MD_O_LARGEFILE|O_NOATIME)) {
             r=-EOPNOTSUPP; break;
         }
         if (q->operation==MD_FS_REOPEN && (q->mode&MD_FS_REOPEN_MUTABLE)) { r=-EOPNOTSUPP; break; }

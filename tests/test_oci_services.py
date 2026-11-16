@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 from kernel_profile import KernelProfile
-from fixture_executor import FixtureExecutor, probe_native_capability
+from fixture_executor import FixtureExecutor, probe_native_capability, bounded_shell
 
 NAMES = ('nginx', 'redis', 'postgres', 'python', 'node', 'caddy', 'mariadb',
          'httpd', 'memcached', 'java', 'php', 'ruby', 'dotnet')
@@ -37,7 +37,7 @@ class Server:
         self.error = None
         self.timeout = timeout
         argv = [suite.executor.native_path(argv[0]), *argv[1:]]
-        self.command = suite.kernel_profile.shell(shlex.join(['timeout', str(timeout), *argv]))
+        self.command = suite.kernel_profile.shell(bounded_shell(self.executor, shlex.join(argv), timeout))
         self.process = threading.Thread(target=self.execute)
         self.process.start()
 
@@ -204,11 +204,11 @@ class Suite:
 
     def observe(self, argv, quiet=False, timeout=180, raw=False):
         argv = [self.executor.native_path(argv[0]), *argv[1:]]
-        text = shlex.join(['timeout', '-k', '15', str(timeout)])
         # Built-in shell functions retain their selected identity and FPATH.
         shell = (shlex.quote(self.executor.shell) if self.executor.mode == 'local'
                  else '"$MAGICDESK_ANDROID_SHELL"')
-        text += ' ' + shell + ' -c ' + shlex.quote(shlex.join(list(map(str, argv))))
+        text = shell + ' -c ' + shlex.quote(shlex.join(list(map(str, argv))))
+        text = bounded_shell(self.executor, text, timeout, kill_after=15)
         text = self.kernel_profile.shell(text)
         result = self.executor.execute(text, timeout + 15)
         self.report['commands'].append({'command': text, **result})

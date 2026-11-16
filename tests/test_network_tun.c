@@ -15,7 +15,7 @@
 #include <linux/if_tun.h>
 #include <linux/virtio_net.h>
 #include <linux/netfilter.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <poll.h>
 #include <stdio.h>
 #include <sys/eventfd.h>

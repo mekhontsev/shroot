@@ -12,7 +12,7 @@
 #include <limits.h>
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>

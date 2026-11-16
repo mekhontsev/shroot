@@ -22,7 +22,7 @@
 #include <linux/veth.h>
 #include <linux/nexthop.h>
 #include <linux/neighbour.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/in.h>
 #include <linux/sockios.h>
 #include <linux/if_arp.h>

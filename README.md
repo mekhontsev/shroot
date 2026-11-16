@@ -5,8 +5,9 @@ It supplies a command-line frontend, a [C management API](embedding.md) through
 `libshroot`, persistent inode-backed storage and a separate native execution
 engine. Runtime and storage operations require no Java, ART or MagicDesk APK.
 Android application UIDs and authorized Shell identities use the same engine,
-with separate storage and retained launch identities. Ordinary ARM64 Linux is
-also a delivery target; its runtime qualification is not yet complete.
+with separate storage and retained launch identities. Ordinary ARM64 Linux uses
+the same engine under an unprivileged user. Native runtime and package workflows
+are [verified on Raspberry Pi 5](tests/README.md#qualified-hosts) with 16 KiB pages.
 
 Start with [embedding](embedding.md) for library use and standalone operations,
 and [environment libraries](library.md) for named installation and cleanup.
@@ -75,7 +76,7 @@ native runner -> supervisor -> bootstrap -> stock ELF / libc loader
                     +-- filesystem worker -> inode/native/mounted providers
                     +-- IPC, network and descriptor readiness owners
 
-Android kernel: actual task lifetime, descriptors, data IO and native checks
+Host Linux kernel: actual task lifetime, descriptors, data IO and native checks
 ```
 
 ## Ownership

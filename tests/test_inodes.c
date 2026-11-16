@@ -1750,7 +1750,7 @@ static void native_plans(void) {
         CHECK(!fstat(directory,&st) && S_ISDIR(st.st_mode));
         char path[64]; unsigned flags=md_open_plan_path(path,0,(unsigned)directory,directories[i],st.st_mode);
         int opened=open(path,flags); CHECK(opened>=0);
-        CHECK((fcntl(opened,F_GETFL)&~O_LARGEFILE)==(int)directories[i]);
+        CHECK((fcntl(opened,F_GETFL)&~MD_O_LARGEFILE)==(int)directories[i]);
         close(opened);
         CHECK(!close(directory));
         CHECK(md_inode_plan_open(s,-1,"missing",directories[i],0,0,&completion,1,NULL)==-ENOENT);
@@ -1788,7 +1788,7 @@ static void native_plans(void) {
     s->readonly=1;
     CHECK(md_inode_plan_open(s,-1,"value",O_WRONLY|O_TRUNC,0,0,&completion,1,NULL)==-EROFS);
     s->readonly=0;
-    struct md_identity user=md_identity_new(1000,1000); s->identity=&user;
+    struct md_identity user=md_identity_new(getuid()==1000 ? 1001 : 1000,1000); s->identity=&user;
     CHECK(md_inode_plan_open(s,-1,"value",O_RDONLY,0,0,&completion,1,NULL)==-EACCES);
     s->identity=NULL; md_identity_release(&user); md_inode_store_close(s);
     struct md_inode_store *source=store("native-plan-source",1),*copy=store("native-plan-copy",1);

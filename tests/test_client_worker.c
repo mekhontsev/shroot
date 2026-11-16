@@ -42,6 +42,17 @@ int main(int argc, char **argv) {
         assert(argc>at && !strcmp(argv[at], "exec"));
         close(SHROOT_CLIENT_FD); return 42;
     }
+    if (mode && (!strcmp(mode, "retained") || !strcmp(mode, "retained-incomplete"))) {
+        char byte=0;
+        struct iovec io={&byte,1};
+        _Alignas(struct cmsghdr) char control[CMSG_SPACE(sizeof(int))]={0};
+        struct msghdr parcel={.msg_iov=&io,.msg_iovlen=1,.msg_control=control,.msg_controllen=sizeof(control)};
+        struct cmsghdr *header=CMSG_FIRSTHDR(&parcel);
+        header->cmsg_level=SOL_SOCKET; header->cmsg_type=SCM_RIGHTS; header->cmsg_len=CMSG_LEN(sizeof(int));
+        int fd=SHROOT_CLIENT_FD; memcpy(CMSG_DATA(header),&fd,sizeof(fd));
+        assert(sendmsg(1,&parcel,MSG_NOSIGNAL)==1);
+        if (!strcmp(mode,"retained-incomplete")) return 0;
+    }
     if (mode && !strcmp(mode, "incomplete")) return 0;
     if (mode && !strcmp(mode, "error")) { message(SHROOT_CLIENT_DONE, -EBUSY); return 1; }
     assert(!strcmp(argv[2], "format"));

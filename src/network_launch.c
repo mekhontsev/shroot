@@ -8,7 +8,7 @@
 #include <linux/netfilter/nf_tables.h>
 #include <linux/if_addr.h>
 #include <linux/rtnetlink.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/in.h>
 #include <string.h>
 

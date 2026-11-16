@@ -1,9 +1,11 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "inode_native.h"
 #include "posix_acl.h"
 #include "file_capability.h"
 #include <endian.h>
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +40,7 @@ int mdi_native_pin_create(int directory,const char *name,uint32_t uid,uint32_t g
 int mdi_native_create_in(int directory,const char *parent,const char *name,int flags,uint32_t uid,uint32_t gid,mode_t mode) {
     if (!mdi_native_eligible(uid,gid,mode)) return -EOPNOTSUPP;
     if (!valid_name(name)) return -EINVAL;
-    if (flags&~(O_ACCMODE|O_CLOEXEC|O_NONBLOCK|O_APPEND|O_SYNC|O_DSYNC|O_DIRECT|O_NOATIME|O_LARGEFILE)
+    if (flags&~(O_ACCMODE|O_CLOEXEC|O_NONBLOCK|O_APPEND|O_SYNC|O_DSYNC|O_DIRECT|O_NOATIME|MD_O_LARGEFILE)
             || (flags&O_ACCMODE)==O_ACCMODE) return -EINVAL;
     char path[NAME_MAX+34];
     if (parent) {

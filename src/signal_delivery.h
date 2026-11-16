@@ -1,5 +1,6 @@
 #ifndef MD_SIGNAL_DELIVERY_H
 #define MD_SIGNAL_DELIVERY_H
+#include "signal_abi.h"
 #include "signal_origin.h"
 #include <signal.h>
 #include <sys/types.h>

@@ -15,7 +15,7 @@
 #include <linux/virtio_net.h>
 #include <linux/magic.h>
 #include <limits.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -3,6 +3,7 @@
 
 /* Shared launch services and diagnostics; operation protocols live in focused owners. */
 #include "supervisor_thread.h"
+#include "signal_abi.h"
 #include "task_checkpoint.h"
 #include "task_filter.h"
 #include "task_copy.h"
@@ -15,6 +16,7 @@
 #include "entry_route.h"
 #include "profile.h"
 #include <stdio.h>
+#include <sys/wait.h>
 
 #define READY abi.ready
 #define DONE abi.done

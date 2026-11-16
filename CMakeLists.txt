@@ -588,7 +588,7 @@ if(SHROOT_BUILD_TESTS)
     guest_executable(test_launch_registry tests/test_launch_registry.c ${src}/launch_registry.c)
     guest_executable(test_native_mounts tests/test_native_mounts.c ${src}/native_mounts.c)
     target_compile_options(test_native_mounts PRIVATE -iquote ${src} -UNDEBUG)
-    target_link_options(test_native_mounts PRIVATE -Wl,--wrap=fopen -Wl,--wrap=fseek -Wl,--wrap=poll)
+    target_link_options(test_native_mounts PRIVATE -Wl,--wrap=open -Wl,--wrap=lseek -Wl,--wrap=fdopen -Wl,--wrap=poll)
     target_compile_options(test_launch_registry PRIVATE -iquote ${src} -UNDEBUG)
     get_target_property(image_test_sources image SOURCES)
     list(REMOVE_ITEM image_test_sources ${src}/image_main.c)
@@ -694,3 +694,7 @@ endif()
 set_source_files_properties(${src}/svc_payload.c PROPERTIES
     COMPILE_OPTIONS "-mgeneral-regs-only;-fno-stack-protector;-mno-outline-atomics;-fno-jump-tables")
 include(cmake/Bundle.cmake)
+
+# All native owners use the Linux/POSIX extensions, including shared headers.
+# Apply only to this directory's targets, not the fetched dependency projects.
+add_compile_definitions("$<$<COMPILE_LANGUAGE:C>:_GNU_SOURCE=>")

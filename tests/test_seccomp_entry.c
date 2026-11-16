@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "../src/signal_abi.h"
 #include "seccomp_policy.h"
 #include <assert.h>
 #include <errno.h>

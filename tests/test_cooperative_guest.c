@@ -15,7 +15,7 @@
 #include <linux/stat.h>
 #include <linux/openat2.h>
 #include <linux/if_tun.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>

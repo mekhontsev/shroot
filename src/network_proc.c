@@ -8,7 +8,7 @@
 #include <linux/magic.h>
 #include <linux/rtnetlink.h>
 #include <linux/if_addr.h>
-#include <net/route.h>
+#include <linux/route.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

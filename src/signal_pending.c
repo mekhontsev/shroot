@@ -1,4 +1,5 @@
 #include "signal_pending.h"
+#include "signal_abi.h"
 #include <errno.h>
 #include <stdlib.h>
 
@@ -47,7 +48,7 @@ void md_signal_pending_release(struct md_signal_pending *p) {
     free(p);
 }
 int md_signal_pending_put(struct md_signal_pending *p,enum md_signal_scope scope,const siginfo_t *info) {
-    if (!p || !info || info->si_signo<=0 || info->si_signo>=32
+    if (!p || !info || info->si_signo<=0 || info->si_signo>=MD_SIGRTMIN
             || (scope!=MD_SIGNAL_PRIVATE && scope!=MD_SIGNAL_SHARED)) return -EINVAL;
     struct slot *slot=scope==MD_SIGNAL_SHARED ? &p->group->pending : &p->private;
     if (slot->occupied) return slot->info.si_signo==info->si_signo ? 0 : -EINVAL;

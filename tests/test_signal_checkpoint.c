@@ -158,7 +158,8 @@ static void child(unsigned flags,struct report *out) {
         unsigned seen=0;
         for (unsigned i=0;i<2;++i) {
             struct timespec timeout={.tv_sec=1}; siginfo_t info;
-            int n=sigtimedwait(&set,&info,&timeout);
+            /* Preserve kernel si_code; glibc's wrapper rewrites SI_TKILL. */
+            int n=(int)syscall(SYS_rt_sigtimedwait,&set,&info,&timeout,8);
             assert(n==SIGUSR1 || n==SIGTRAP);
             unsigned which=n==SIGUSR1 ? 1 : 2;
             assert(!(seen&which)); seen|=which;
@@ -694,7 +695,7 @@ static void sysemu_signal_replay(int protected,int ignored,int blocked,int pendi
         if (blocked) {
             for (unsigned i=0;i<2;++i) {
                 siginfo_t info; struct timespec timeout={.tv_sec=1};
-                int signal=sigtimedwait(&signals,&info,&timeout);
+                int signal=(int)syscall(SYS_rt_sigtimedwait,&signals,&info,&timeout,8);
                 assert(signal==SIGUSR1 || signal==SIGTRAP);
                 struct signal_observation *observed=&out->signal[signal==SIGTRAP];
                 assert(!observed->count); observed->info=info; ++observed->count;
@@ -1463,7 +1464,7 @@ static void chained_native_replay(int protected,int restart,int writing,int boun
             if (disposition==3) sigaddset(&signals,SIGUSR1);
             for (int i=0;i<(disposition==3 ? 2 : 1)*(pending==2 ? 2 : 1);++i) {
                 siginfo_t info; struct timespec timeout={.tv_sec=1};
-                int signal=sigtimedwait(&signals,&info,&timeout);
+                int signal=(int)syscall(SYS_rt_sigtimedwait,&signals,&info,&timeout,8);
                 assert(signal==SIGTRAP || (disposition==3 && signal==SIGUSR1));
                 struct signal_observation *observed=next_observation(out,signal);
                 assert(!observed->count); observed->info=info; ++observed->count;
@@ -1835,7 +1836,11 @@ static void birth_terminal_race(int kind,int protected,int code) {
     assert(!ptrace(PTRACE_GETEVENTMSG,actor,NULL,&message) && message==(unsigned)code<<8);
     int terminal=0;
     assert(md_task_birth_read(task_trace,actor,event,&terminal)==(long)newborn && terminal);
-    assert(md_task_birth_terminal(task_trace,actor,SYS_clone,ULONG_MAX)==(long)newborn);
+    struct user_pt_regs birth_regs;
+    struct iovec birth_io={&birth_regs,sizeof(birth_regs)};
+    assert(!ptrace(PTRACE_GETREGSET,actor,(void *)NT_PRSTATUS,&birth_io));
+    assert(birth_regs.regs[8]==SYS_clone || birth_regs.regs[8]==SYS_clone3);
+    assert(md_task_birth_terminal(task_trace,actor,(long)birth_regs.regs[8],ULONG_MAX)==(long)newborn);
     assert(md_task_stop_displaced(task_trace,actor)==1);
     /* A separate process survives its creator's group death. */
     resume((pid_t)newborn,PTRACE_CONT,0);
@@ -1984,11 +1989,11 @@ int main(int argc,char **argv) {
         MD_FS_BUFFER_CALL,MD_FS_BUFFER_EXEC_PREPARE,MD_FS_BUFFER_EXEC_CANCEL,MD_FS_BUFFER_PROC_LINK,
         MD_FS_BUFFER_IPC_IO_PREPARE,MD_FS_BUFFER_IPC_IO_COPY,MD_FS_BUFFER_IPC_IO_SELECT};
     const unsigned fd_commands[]={MD_FD_KIND,MD_FD_SELECTORS,MD_FD_SELECTOR_QUERY,
-        MD_FD_SENT,MD_FD_RECEIVED,MD_FD_END,MD_FD_RELEASE,MD_FD_PAIR_END};
+        MD_FD_SENT,MD_FD_RECEIVED,MD_FD_END,MD_FD_RELEASE,MD_FD_PAIR_END,MD_FD_DUPLICATE_END};
     assert(!md_adapter_buffer_scalar(MD_BUFFER_FINISH) && !md_adapter_buffer_scalar(MD_BUFFER_PROC_START));
     assert(!md_adapter_buffer_scalar(MD_BUFFER_CONTROL_IOCTL) && !md_adapter_buffer_scalar(MD_BUFFER_CONTROL_MAP));
     assert(!md_fd_control_scalar(MD_FD_SELECTOR_INSTALL) && !md_fd_control_scalar(MD_FD_DUPLICATE_BEGIN)
-        && !md_fd_control_scalar(MD_FD_DUPLICATE_END) && !md_fd_control_scalar(MD_FD_INPUT));
+        && !md_fd_control_scalar(MD_FD_INPUT));
     assert(!md_fs_buffer_scalar(MD_FS_BUFFER_RESULT_REPLAY) && !md_fs_buffer_scalar(MD_BUFFER_FINISH));
     for (unsigned i=0;i<sizeof(scalar_commands)/sizeof(*scalar_commands);++i)
         for (int protected=0;protected<2;++protected)

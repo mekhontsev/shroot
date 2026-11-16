@@ -1,6 +1,7 @@
 #ifndef MD_INODE_LEAF_H
 #define MD_INODE_LEAF_H
 #include <sys/stat.h>
+#include <sys/types.h>
 struct md_inode_store;
 struct mdi_node;
 struct mdi_path_pin;

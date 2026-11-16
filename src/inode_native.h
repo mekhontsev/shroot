@@ -2,6 +2,7 @@
 #define MD_INODE_NATIVE_H
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 /* Native leaves belong to an admitted private directory, never an arbitrary
  * host bind. Callers own namespace locking, permissions and watch publication.

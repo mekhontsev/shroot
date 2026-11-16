@@ -32,6 +32,24 @@ contracts on ARM64 Linux and builds Android artifacts on Linux and Windows.
 execution. Production API/CLI qualification uses the test harness against a
 separate `SHROOT_BUILD_TESTS=OFF` installation, not test-enabled helpers.
 
+### Qualified Hosts
+
+The shared 78-test native set passes on both hosts below, using Clang and bundled
+static dependencies. It covers component, management, runtime, transport and
+packaging contracts, including native/kernel-profile admission and the complete
+applicable signal-checkpoint controls.
+
+| Host | Execution identity | Kernel / page size | Additional verified workflows |
+| --- | --- | --- | --- |
+| Raspberry Pi 5, Debian 13 | UID/GID 1000, no effective capabilities or inherited seccomp | 6.18.50+rpt-rpi-2712 / 16 KiB | Installed production API/CLI, independent CMake consumer, stripped archive audit, stock Alpine 3.23.8 with `apk update`, Debian trixie with `dpkg --audit` and `apt-get update` |
+| Android, Termux | UID/GID 10601, `untrusted_app_27`, no effective capabilities, inherited seccomp | 6.12.23-android16 / 4 KiB | Shared standalone native test set; not MagicDesk's Zygote identity or Shell |
+
+Linux package checks include logical guest root, shell execution, hardlinks and
+file IO; lazy-SVC completion is observed. This is not the full distribution
+GUI/container matrix or a performance comparison. The `linux-5.15` profile tests
+capability fallbacks on these hosts, not a real 5.15 kernel. A musl guest is not
+evidence of building the host runtime against musl; nested Shroot is unqualified.
+
 ## Fixture Transports
 
 Shared resource, runtime, OCI service and headless-browser runners default to

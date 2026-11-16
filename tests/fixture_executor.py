@@ -1,6 +1,7 @@
 """Select a fixture transport without changing identity or test semantics."""
 import argparse
 import os
+import shlex
 
 MAX_DEADLINE_SECONDS = 7200
 
@@ -10,6 +11,16 @@ def deadline_seconds(value):
     if not 1 <= seconds <= MAX_DEADLINE_SECONDS:
         raise argparse.ArgumentTypeError(f'deadline must be between 1 and {MAX_DEADLINE_SECONDS} seconds')
     return seconds
+
+
+def bounded_shell(executor, command, timeout, *, kill_after=None):
+    seconds = deadline_seconds(timeout)
+    grace = [] if kill_after is None else ['-k', str(deadline_seconds(kill_after))]
+    # The native executor owns the deadline and process group. GNU timeout
+    # would create a second group outside its cancellation boundary.
+    if executor.mode == 'local':
+        return command
+    return shlex.join(['timeout', *grace, str(seconds)]) + ' ' + command
 
 
 def add_diagnostics_argument(parser):

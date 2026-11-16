@@ -32,7 +32,8 @@ static void pidfd_filesystem(void) {
     assert(available || errno==EACCES || errno==EPERM);
     assert(!md_fd_filesystem(fd,&value));
     assert(value.f_type==ANON_INODE_FS_MAGIC || value.f_type==0x50494446);
-    assert(value.f_bsize==(unsigned long)getpagesize() && value.f_frsize==(unsigned long)getpagesize() && value.f_namelen==255);
+    assert((unsigned long)value.f_bsize==(unsigned long)getpagesize()
+        && (unsigned long)value.f_frsize==(unsigned long)getpagesize() && value.f_namelen==255);
     if (available) assert(!memcmp(&native,&value,sizeof(value)));
     struct sock_filter rules[]={
         BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),

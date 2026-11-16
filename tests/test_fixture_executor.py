@@ -7,10 +7,20 @@ import unittest
 from unittest import mock
 
 from executors.magicdesk import MagicDeskExecutor
-from fixture_executor import FixtureExecutor
+from fixture_executor import FixtureExecutor, bounded_shell
 
 
 class CapturedCommands(unittest.TestCase):
+    def test_deadline_wrapper_keeps_the_executor_cancellation_owner(self):
+        command = "sh -c 'printf ready; wait'"
+        for mode in FixtureExecutor.choices:
+            executor = mock.Mock(mode=mode)
+            with self.subTest(mode=mode):
+                expected = command if mode == 'local' else 'timeout -k 5 30 ' + command
+                self.assertEqual(bounded_shell(executor, command, 30, kill_after=5), expected)
+                with self.assertRaises(argparse.ArgumentTypeError):
+                    bounded_shell(executor, command, 0)
+
     def executor(self, output):
         executor = object.__new__(MagicDeskExecutor)
         executor.mode, executor.root, executor.output = 'shell', '/owned fixture', output

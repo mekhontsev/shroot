@@ -1,5 +1,6 @@
 #ifndef MD_LWIP_OPTIONS_H
 #define MD_LWIP_OPTIONS_H
+#include <netinet/tcp.h>
 #define NO_SYS 1
 #define SYS_LIGHTWEIGHT_PROT 0
 #define LWIP_SOCKET 0
@@ -57,6 +58,8 @@ void md_lwip_free(void *);
 #define IPV6_FRAG_COPYHEADER 1
 #define IP_REASS_MAX_PBUFS 256
 #define IP6_REASS_MAX_PBUFS 256
+/* libc also publishes TCP_MSS; the embedded stack owns this configuration. */
+#undef TCP_MSS
 #define TCP_MSS 1460
 #define TCP_WND 262144
 #define TCP_SND_BUF 262144

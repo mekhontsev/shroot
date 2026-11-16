@@ -33,7 +33,7 @@ static int realtime_publish(struct md_signal_delivery *q,pid_t tid,pid_t group) 
     if (!q->carrier_cookie) q->carrier_cookie=(uintptr_t)q;
     unsigned counts[NSIG]={0};
     for (struct md_signal_delivery_node *n=q->realtime;n;n=n->next) ++counts[n->info.si_signo];
-    for (int n=SIGRTMIN;n<NSIG;++n) while (q->carriers[n]<counts[n]) {
+    for (int n=MD_SIGRTMIN;n<NSIG;++n) while (q->carriers[n]<counts[n]) {
         siginfo_t info={.si_signo=n,.si_code=SI_QUEUE};
         info.si_pid=getpid(); info.si_uid=getuid(); info.si_value.sival_ptr=(void *)q->carrier_cookie;
         if (syscall(SYS_rt_tgsigqueueinfo,group,tid,n,&info)<0) return -errno;
@@ -75,7 +75,7 @@ static int standard_hold(struct md_signal_delivery *q,const siginfo_t *info) {
     q->last=n; return 0;
 }
 int md_signal_delivery_hold(struct md_signal_delivery *q,const siginfo_t *info) {
-    if (info->si_signo<=0 || info->si_signo>=SIGRTMIN
+    if (info->si_signo<=0 || info->si_signo>=MD_SIGRTMIN
             || info->si_signo==SIGKILL || info->si_signo==SIGSTOP || job_control(info->si_signo)) return -EINVAL;
     if (md_signal_synchronous(info)) return -EINVAL;
     return standard_hold(q,info);
@@ -85,12 +85,12 @@ int md_signal_delivery_seccomp(struct md_signal_delivery *q,const siginfo_t *inf
     return standard_hold(q,info);
 }
 int md_signal_delivery_generated(struct md_signal_delivery *q,const siginfo_t *info) {
-    if (info->si_signo<=0 || info->si_signo>=SIGRTMIN || info->si_signo==SIGKILL
+    if (info->si_signo<=0 || info->si_signo>=MD_SIGRTMIN || info->si_signo==SIGKILL
             || info->si_signo==SIGSTOP || job_control(info->si_signo)) return -EINVAL;
     return standard_hold(q,info);
 }
 int md_signal_delivery_retain(struct md_signal_delivery *q,pid_t tid,const siginfo_t *info) {
-    if (info->si_signo>=SIGRTMIN && info->si_signo<NSIG) return realtime_hold(q,info,1);
+    if (info->si_signo>=MD_SIGRTMIN && info->si_signo<NSIG) return realtime_hold(q,info,1);
     if (!job_control(info->si_signo)) return md_signal_delivery_hold(q,info);
     uint64_t mask;
     if (ptrace(PTRACE_GETSIGMASK,tid,(void *)sizeof(mask),&mask)<0) return -errno;
@@ -162,7 +162,7 @@ int md_signal_delivery_publish(struct md_signal_delivery *q,pid_t tid,pid_t grou
     q->kernel_mask=0; q->active=1; return 0;
 }
 int md_signal_delivery_event(struct md_signal_delivery *q,pid_t tid,int signal,int *deliver) {
-    if (signal>=SIGRTMIN && signal<NSIG && (q->realtime || q->carriers[signal]))
+    if (signal>=MD_SIGRTMIN && signal<NSIG && (q->realtime || q->carriers[signal]))
         return realtime_event(q,tid,signal,deliver);
     if (!q->active || signal!=q->first->info.si_signo) return MD_SIGNAL_NEW;
     siginfo_t observed;

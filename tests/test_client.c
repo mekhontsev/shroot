@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -130,9 +131,36 @@ static void *concurrent(void *value) {
         shroot_job *job = NULL;
         assert(!shroot_storage_format(context, &io, &job));
         struct shroot_result result = wait_job(job);
+        if (result.error || result.exit_code || result.signal)
+            fprintf(stderr, "concurrent worker: error=%d exit=%d signal=%d\n", result.error, result.exit_code, result.signal);
         assert(!result.error && !result.exit_code && !result.signal);
     }
     return NULL;
+}
+static void retained_peer(shroot_context *context) {
+    const char *modes[]={"SHROOT_TEST_MODE=retained","SHROOT_TEST_MODE=retained-incomplete"};
+    for (unsigned i=0;i<2;++i) {
+        int pair[2]; assert(!socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,pair));
+        char *env[]={(char *)modes[i],NULL};
+        struct shroot_io io={-1,pair[1],-1,env};
+        shroot_job *job=NULL;
+        assert(!shroot_storage_format(context,&io,&job)); close(pair[1]);
+        struct pollfd ready={pair[0],POLLIN,0};
+        /* EVENT_WAIT: fixture transfers its control peer; timeout fails the test. */
+        assert(poll(&ready,1,5000)==1);
+        char byte;
+        struct iovec data={&byte,1};
+        _Alignas(struct cmsghdr) char control[CMSG_SPACE(sizeof(int))]={0};
+        struct msghdr parcel={.msg_iov=&data,.msg_iovlen=1,.msg_control=control,.msg_controllen=sizeof(control)};
+        assert(recvmsg(pair[0],&parcel,MSG_CMSG_CLOEXEC)==1 && !(parcel.msg_flags&(MSG_TRUNC|MSG_CTRUNC)));
+        struct cmsghdr *header=CMSG_FIRSTHDR(&parcel);
+        assert(header && header->cmsg_level==SOL_SOCKET && header->cmsg_type==SCM_RIGHTS
+            && header->cmsg_len==CMSG_LEN(sizeof(int)));
+        int retained; memcpy(&retained,CMSG_DATA(header),sizeof(retained)); close(pair[0]);
+        struct shroot_result result=wait_job(job);
+        assert(result.error==(i ? -EPROTO : 0) && !result.exit_code && !result.signal);
+        close(retained);
+    }
 }
 static void early_cancel(shroot_context *context) {
     for (int i = 0; i < 16; ++i) {
@@ -179,7 +207,7 @@ int main(int argc, char **argv) {
     char *cwd = getcwd(NULL, 0); assert(cwd);
     assert(!setenv("SHROOT_CLIENT_PARENT", "retained", 1));
     modes(context); arguments(context, argv[1]); cancellation(context); early_cancel(context);
-    closed_stdio(context);
+    closed_stdio(context); retained_peer(context);
     pthread_t threads[4];
     for (int i = 0; i < 4; ++i) assert(!pthread_create(&threads[i], NULL, concurrent, context));
     for (int i = 0; i < 4; ++i) assert(!pthread_join(threads[i], NULL));

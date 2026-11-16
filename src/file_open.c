@@ -141,7 +141,7 @@ static int open_pinned(int fd,int flags,unsigned mode) {
 int md_open_pinned(int fd,int flags) { return open_pinned(fd,flags,0); }
 int md_reopen_file(int fd, int flags, struct md_open_completion *completion) {
     *completion=(struct md_open_completion){0};
-    if (flags & ~(O_PATH|O_CLOEXEC|O_NONBLOCK|O_DIRECTORY|O_LARGEFILE|O_ACCMODE
+    if (flags & ~(O_PATH|O_CLOEXEC|O_NONBLOCK|O_DIRECTORY|MD_O_LARGEFILE|O_ACCMODE
             |O_APPEND|O_TRUNC|O_NOFOLLOW|O_SYNC|O_DSYNC|O_DIRECT|O_NOCTTY|O_NOATIME)) return -EINVAL;
     if ((flags&O_ACCMODE)==O_ACCMODE || ((flags&O_TRUNC) && !(flags&O_ACCMODE))) return -EINVAL;
     if (flags&O_PATH) flags&=O_PATH|O_CLOEXEC|O_DIRECTORY|O_NOFOLLOW;

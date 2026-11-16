@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <limits.h>
 #include "proc_fdinfo.h"
 #include "fs_engine.h"
 #include "fs_control.h"

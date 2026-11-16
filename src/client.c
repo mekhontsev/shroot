@@ -211,6 +211,9 @@ int shroot_job_wait(shroot_job *job, int nonblocking, struct shroot_result *out)
             if (n < 0 && errno == EINTR) continue;
             if (!n) break;
             if (n < 0) {
+                /* The exact worker has exited. A concurrent spawn may still
+                 * retain its CLOEXEC peer until exec; EOF is not completion. */
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
                 if (errno != ECONNRESET || !WIFSIGNALED(status)) error = -EPROTO;
                 break;
             }

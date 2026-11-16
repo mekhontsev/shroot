@@ -1,7 +1,7 @@
 #include "network_link.h"
 #include "network_internal.h"
 #include <errno.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <stdlib.h>
 
 struct hop { struct md_network_namespace *space; struct md_network_interface *link; int outgoing; const void *payload; };

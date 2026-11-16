@@ -34,7 +34,7 @@
 #include <linux/if_packet.h>
 #include <linux/rtnetlink.h>
 #include <linux/fib_rules.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>

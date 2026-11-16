@@ -319,7 +319,7 @@ int md_inode_plan_reopen(struct md_inode_store *s, int original, int flags, int 
         struct md_open_completion *completion, int native_plan) {
     *completion = (struct md_open_completion){0};
     if (native_plan && (mutable || !md_open_native_plan(flags,0))) return -EXDEV;
-    if (flags & ~(O_PATH | O_CLOEXEC | O_NONBLOCK | O_DIRECTORY | O_LARGEFILE | O_ACCMODE
+    if (flags & ~(O_PATH | O_CLOEXEC | O_NONBLOCK | O_DIRECTORY | MD_O_LARGEFILE | O_ACCMODE
             | O_APPEND | O_TRUNC | O_NOFOLLOW | O_SYNC | O_DSYNC | O_DIRECT | O_NOCTTY | O_NOATIME)) return -EINVAL;
     if ((flags & O_ACCMODE) == O_ACCMODE) return -EINVAL;
     if ((flags & O_TRUNC) && !(flags & O_ACCMODE)) return -EINVAL;

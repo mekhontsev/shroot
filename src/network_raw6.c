@@ -7,7 +7,7 @@
 #include "network_stack.h"
 #include <errno.h>
 #include <linux/if_ether.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <netinet/ip6.h>
 #include <netinet/udp.h>
 #include <stdlib.h>

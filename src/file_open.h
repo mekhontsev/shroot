@@ -1,5 +1,6 @@
 #ifndef MD_FILE_OPEN_H
 #define MD_FILE_OPEN_H
+#include "linux_abi.h"
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdatomic.h>
@@ -12,7 +13,7 @@ enum md_open_kind { MD_OPEN_READY, MD_OPEN_FIFO, MD_OPEN_PIPE, MD_OPEN_CALLER, M
     MD_OPEN_NEEDS_WRITE };
 /* Read windows must never retain a transaction across a write or copy-up. */
 static inline int md_open_readonly_plan(unsigned flags) {
-    return !(flags & ~(O_CLOEXEC | O_NOFOLLOW | O_LARGEFILE));
+    return !(flags & ~(O_CLOEXEC | O_NOFOLLOW | MD_O_LARGEFILE));
 }
 /* Ordinary endpoints; exclusive creation additionally needs unpublished birth
  * custody. Keep offer, provider and execution-window admission in agreement. */
@@ -23,7 +24,7 @@ static inline int md_open_native_plan(unsigned flags,int birth) {
     if (flags&O_PATH) return 1;
     return (flags&(O_CREAT|O_EXCL))!=(O_CREAT|O_EXCL)
         && (flags&O_ACCMODE)!=O_ACCMODE && !(flags & ~(O_ACCMODE | O_CLOEXEC
-        | O_NOFOLLOW | O_LARGEFILE | O_APPEND | O_TRUNC | O_NONBLOCK | O_NOCTTY
+        | O_NOFOLLOW | MD_O_LARGEFILE | O_APPEND | O_TRUNC | O_NONBLOCK | O_NOCTTY
         | O_NOATIME | O_SYNC | O_DSYNC | O_DIRECT | O_CREAT | O_DIRECTORY));
 }
 static inline int md_open_native_kind(unsigned flags,unsigned mode) {

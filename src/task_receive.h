@@ -24,7 +24,7 @@ struct md_task_receive_frame {
     uint64_t token;
     struct iovec vector;
     struct msghdr message;
-    union { struct cmsghdr align; char bytes[CMSG_SPACE(253*sizeof(int))]; } control;
+    struct { _Alignas(struct cmsghdr) char bytes[CMSG_SPACE(253*sizeof(int))]; } control;
     struct md_fd_capture_frame capture;
     /* Optional entry snapshot; only a completed, owned receive sets prepared. */
     unsigned prepared;

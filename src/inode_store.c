@@ -31,7 +31,7 @@ int md_inode_open_object(struct md_inode_store *s, const char *id, int flags) {
     for (unsigned i = 0; i < 32; ++i)
         if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) return -EINVAL;
     if (flags & O_PATH) flags &= O_PATH | O_CLOEXEC | O_DIRECTORY;
-    if (flags & ~(O_PATH | O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NONBLOCK | O_LARGEFILE)) return -EINVAL;
+    if (flags & ~(O_PATH | O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NONBLOCK | MD_O_LARGEFILE)) return -EINVAL;
     int r = mdi_begin(s, 0);
     if (r) return r;
     struct mdi_node node;
@@ -185,7 +185,7 @@ static int open_resolved(struct md_inode_store *s, int dirfd, const char *path, 
     if (birth && (!native_plan || *birth)) return -EINVAL;
     if (native_plan && !md_open_native_plan(flags,birth!=NULL)) return -EXDEV;
     if (flags & ~(O_ACCMODE | O_CLOEXEC | O_APPEND | O_TRUNC | O_NOFOLLOW | O_DIRECTORY | O_PATH
-            | O_CREAT | O_EXCL | O_NONBLOCK | O_NOCTTY | O_NOATIME | O_LARGEFILE | O_SYNC | O_DSYNC | O_DIRECT)) return -ENOTSUP;
+            | O_CREAT | O_EXCL | O_NONBLOCK | O_NOCTTY | O_NOATIME | MD_O_LARGEFILE | O_SYNC | O_DSYNC | O_DIRECT)) return -ENOTSUP;
     if ((flags & O_ACCMODE) == O_ACCMODE) return -EINVAL;
     if (flags & O_PATH) flags &= O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
     int create = flags & O_CREAT;

@@ -20,7 +20,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <linux/sockios.h>
 #include <sys/syscall.h>
 #include <sys/vfs.h>

@@ -442,7 +442,7 @@ static int bind(struct md_filesystem *fs, const struct md_fs_request *q,
     md_provider_tree_release(devices);
     md_control_file_release(file); md_view_location_close(&source); md_view_mount_array_free(pending); return r;
 }
-static void open_tree(struct md_filesystem *fs,const struct md_fs_request *q,
+static void clone_tree(struct md_filesystem *fs,const struct md_fs_request *q,
         struct md_fs_result *result,const struct md_fs_output *out,const struct md_view_location *resolved) {
     *result=(struct md_fs_result){.fd=-1};
     int r=!fs->mounts || !fs->store->identity || !md_identity_capable_in(fs->store->identity,
@@ -896,7 +896,7 @@ static void mount_execute(struct md_filesystem *fs,const struct md_fs_request *q
         }
     }
     if (!out->error) {
-        if (clone) open_tree(fs,q,out,output,p->locations);
+        if (clone) clone_tree(fs,q,out,output,p->locations);
         else out->error=mount_change(fs,fs->actor ? fs->actor->fs : NULL,q,p->locations);
     }
     if (p==&local) mount_clear(p);

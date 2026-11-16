@@ -458,7 +458,7 @@ static void exercise_request(int protected, enum scenario scenario, unsigned exp
             p->vector=(struct iovec){(void *)(address+offsetof(struct send_frame,byte)),1};
             p->message=(struct msghdr){.msg_iov=(void *)(address+offsetof(struct send_frame,vector)),.msg_iovlen=1,
                 .msg_control=(void *)(address+offsetof(struct send_frame,control)),.msg_controllen=CMSG_SPACE(sending*sizeof(int))};
-            p->control.align=(struct cmsghdr){.cmsg_len=CMSG_LEN(sending*sizeof(int)),.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
+            *(struct cmsghdr *)p->control.bytes=(struct cmsghdr){.cmsg_len=CMSG_LEN(sending*sizeof(int)),.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
             request=(struct md_task_helper_request){.kind=MD_TASK_HELPER_SEND_CAPTURED,.send_inputs=send_inputs,
                 .send_import=address+offsetof(struct send_frame,import),
                 .send={.message=address,.token_slot=address+offsetof(struct send_frame,control)+CMSG_LEN(0),

@@ -3,6 +3,7 @@
 #include "ipc_identity.h"
 #include "fs_operation.h"
 #include "pid_namespace.h"
+#include <sys/socket.h>
 
 /* Store-scoped, live IPC metadata. Kernel sockets own data and descriptor
  * lifetimes; this authority owns connection-time identity/format snapshots. */

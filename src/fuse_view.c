@@ -1206,7 +1206,7 @@ int md_fs_fuse_operation(struct md_filesystem *fs,const struct md_fs_request *q,
         }
         if (!executable && !(q->flags&O_PATH) && !output->control) { out->requires_control=1; out->error=-EOPNOTSUPP; return 1; }
         unsigned known=O_ACCMODE|O_CLOEXEC|O_PATH|O_NOFOLLOW|O_DIRECTORY|O_CREAT|O_EXCL|O_TRUNC
-            |O_NONBLOCK|O_NOCTTY|O_LARGEFILE|O_NOATIME|O_SYNC|O_DSYNC|O_APPEND;
+            |O_NONBLOCK|O_NOCTTY|MD_O_LARGEFILE|O_NOATIME|O_SYNC|O_DSYNC|O_APPEND;
         if (q->flags&~known) { out->error=-EOPNOTSUPP; return 1; }
         if ((q->flags&O_ACCMODE)==O_ACCMODE) { out->error=-EINVAL; return 1; }
     }
