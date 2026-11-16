@@ -1,11 +1,8 @@
 #define _GNU_SOURCE
 #include "image_io.h"
-#include "image_json.h"
-#include "image_layer.h"
+#include "image_import.h"
 #include "image_launch.h"
-#include "image_oci.h"
 #include "image_publish.h"
-#include "image_pool.h"
 #include "image_backup.h"
 #include "image_maintenance.h"
 #include "image_prepare.h"
@@ -27,102 +24,6 @@ int md_image_applications(const char *store, const char *icon);
 #include "client_protocol.h"
 #include "process_owner.h"
 
-static int save(int directory, const char *name, const char *json) {
-    int fd = openat(directory, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-    if (fd < 0) return -errno;
-    int r = md_image_write(fd, json, strlen(json));
-    if (!r && fsync(fd)) r = -errno;
-    close(fd); return r;
-}
-static int import(const char *source, const char *destination, const char *reference, int preserve, const char *pool, const char *blob_path) {
-    int layout = open(source, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (layout < 0) return -errno;
-    int blobs_root = blob_path ? -1 : openat(layout, "blobs", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    int r = !blob_path && blobs_root < 0 ? -errno : 0;
-    int blobs = -1;
-    if (!r) {
-        blobs = blob_path ? open(blob_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            : openat(blobs_root, "sha256", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        if (blobs < 0) r = -errno;
-    }
-    struct md_image_publish publish = {.parent=-1, .stage=-1};
-    if (!r) r = md_image_publish_begin(destination, &publish);
-    struct md_inode_store *store = NULL;
-    if (!r) r = md_inode_store_open(publish.path, 1, &store);
-    sqlite3 *json = NULL;
-    if (!r && sqlite3_open(":memory:", &json) != SQLITE_OK) r = -ENOMEM;
-    struct md_image_oci oci = {0};
-    if (!r) r = md_image_oci_read(json, layout, blobs, publish.stage, reference, &oci);
-    char **diffs = NULL; size_t diff_count = 0;
-    if (!r) r = md_json_array(json, oci.config, "$.rootfs.diff_ids", &diffs, &diff_count);
-    sqlite3_stmt *q = NULL;
-    if (!r) r = md_json_query(json, oci.manifest, "SELECT json_type(?1,'$.layers')", &q);
-    if (!r && (sqlite3_step(q) != SQLITE_ROW || sqlite3_column_type(q, 0) != SQLITE_TEXT
-            || strcmp((const char *)sqlite3_column_text(q, 0), "array"))) r = -EINVAL;
-    sqlite3_finalize(q); q = NULL;
-    if (!r) r = md_json_query(json, oci.manifest, "SELECT type,value FROM json_each(?1,'$.layers')", &q);
-    uint64_t bytes = 0, entries = 0;
-    size_t layers = 0;
-    while (!r) {
-        int rc = sqlite3_step(q);
-        if (rc == SQLITE_DONE) break;
-        if (rc != SQLITE_ROW || strcmp((const char *)sqlite3_column_text(q, 0), "object") || layers >= diff_count) {
-            r = -EINVAL; break;
-        }
-        struct md_image_descriptor d = {0};
-        r = md_image_descriptor_read(json, (const char *)sqlite3_column_text(q, 1), &d);
-        int fd = -1;
-        if (!r) r = md_image_unpack(blobs, publish.stage, &d, diffs[layers], &fd);
-        struct md_image_pool shared = {.root=-1, .objects=-1};
-        if (!r && pool) r = md_image_pool_open(pool, diffs[layers], fd, &shared);
-        if (!r) r = pool ? md_image_layer_shared(store, fd, shared.objects, &bytes, &entries)
-            : md_image_layer(store, fd, &bytes, &entries);
-        md_image_pool_close(&shared);
-        if (fd >= 0) close(fd);
-        md_image_descriptor_free(&d);
-        ++layers;
-    }
-    sqlite3_finalize(q);
-    if (!r && layers != diff_count) r = -EINVAL;
-    if (!r) r = md_image_layers_finish(store, preserve);
-    if (!r) r = save(store->lifetime->root, "image-config.json", oci.config);
-    if (!r) r = save(store->lifetime->root, "image-manifest.json", oci.manifest);
-    if (!r) r = md_inode_store_seal(store);
-    if (!r && fsync(store->lifetime->root)) r = -errno;
-    md_inode_store_close(store);
-    if (json) sqlite3_close(json);
-    if (!r) r = md_image_publish_commit(&publish);
-    if (!r) printf("Imported %s layers=%zu entries=%llu bytes=%llu identity=%s\n", oci.identity.digest,
-        layers, (unsigned long long)entries, (unsigned long long)bytes, preserve ? "guest" : "current");
-    md_json_array_free(diffs, diff_count); md_image_oci_free(&oci);
-    md_image_publish_close(&publish);
-    if (blobs >= 0) close(blobs);
-    if (blobs_root >= 0) close(blobs_root);
-    close(layout); return r;
-}
-static int create(const char *source, const char *destination) {
-    struct md_inode_store *image = NULL, *instance = NULL;
-    int r = md_inode_store_open(source, 0, &image);
-    struct md_image_publish publish = {.parent=-1, .stage=-1};
-    if (!r) r = md_image_publish_begin(destination, &publish);
-    if (!r) r = md_inode_store_open(publish.path, 1, &instance);
-    if (!r) r = md_inode_snapshot(image, instance);
-    const char *files[] = {"image-config.json", "image-manifest.json"};
-    for (unsigned i = 0; !r && i < sizeof(files)/sizeof(*files); ++i) {
-        int fd = openat(image->lifetime->root, files[i], O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-        if (fd < 0) { if (i && errno == ENOENT) continue; r = -errno; break; }
-        char *json = NULL;
-        r = md_image_read(fd, 8*1024*1024, &json);
-        if (!r) r = save(instance->lifetime->root, files[i], json);
-        free(json); close(fd);
-    }
-    if (!r && fsync(instance->lifetime->root)) r = -errno;
-    md_inode_store_close(instance); md_inode_store_close(image);
-    if (!r) r = md_image_publish_commit(&publish);
-    md_image_publish_close(&publish);
-    if (!r) printf("Created instance %s\n", destination);
-    return r;
-}
 static int execute(int argc, char **argv) {
     const char *owner = getenv("MAGICDESK_IMAGE_OWNER_PID");
     if (owner) {
@@ -144,7 +45,7 @@ static int execute(int argc, char **argv) {
             else if (!strcmp(argv[i], "--blobs") && !blobs) blobs = argv[i+1];
             else return -EINVAL;
         }
-        r = import(argv[2], argv[3], reference, !strcmp(argv[4], "--preserve-ownership"), pool, blobs);
+        r = md_image_import(argv[2], argv[3], reference, !strcmp(argv[4], "--preserve-ownership"), pool, blobs);
     } else if (argc == 2 && !strcmp(argv[1], "format")) { printf("%d\n", md_inode_store_format()); r = 0; }
     /* Import semantics, not the SQLite layout or runtime build. Keep this key
      * stable across metadata upgrades so installed sources retain identity. */
@@ -159,7 +60,7 @@ static int execute(int argc, char **argv) {
         r=md_inode_store_open_exclusive(argv[2],&store);
         md_inode_store_close(store);
     }
-    else if (argc == 4 && !strcmp(argv[1], "create")) r = create(argv[2], argv[3]);
+    else if (argc == 4 && !strcmp(argv[1], "create")) r = md_image_create(argv[2], argv[3]);
     else if (argc == 4 && !strcmp(argv[1], "backup")) r = md_image_backup(argv[2], argv[3]);
     else if (argc == 4 && !strcmp(argv[1], "restore")) r = md_image_archive_import(argv[2], argv[3], 1);
     else if (argc == 4 && !strcmp(argv[1], "rootfs")) r = md_image_archive_import(argv[2], argv[3], 0);
