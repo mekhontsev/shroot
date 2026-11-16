@@ -43,6 +43,9 @@ not syscall paths. Unknown newer revisions fail without deletion.
 
 ## Verification
 
+Build hosts are Linux and Android/Termux. Windows users use Linux tools in WSL2;
+do not add native Windows CI jobs or build prerequisites.
+
 When fixing a defect, audit analogous entry points, executors, lifecycle and
 failure paths across the owning mechanism. Add focused regression tests using
 the shared fixtures. Report unverified paths; a single successful reproduction

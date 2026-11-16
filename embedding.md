@@ -100,7 +100,7 @@ The [native workflow](.github/workflows/ci.yml) is independent of MagicDesk:
 | Client, GCC and Clang | No runtime downloads; C API tests and an independent installed CMake consumer |
 | ARM64 Linux, Clang | Bundled static dependencies, native component/integration tests, separate production build and execution |
 | ARM64 Linux, GCC | The same tests with system SQLite and dynamically linked execution helpers |
-| Android cross build, Linux and Windows | Pinned NDK, source path with spaces, stripped production bundle and archive/ELF audit |
+| Android cross build, Linux | Pinned NDK, source path with spaces, stripped production bundle and archive/ELF audit |
 
 Native Linux tests run as the runner's unprivileged identity and record its
 kernel, UID, capabilities and page size. Android cross builds do not execute

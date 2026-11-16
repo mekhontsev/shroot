@@ -26,7 +26,7 @@ selects native management/import workflows. Cross-built binaries must run on
 their target, not the build machine.
 
 The independent [CI matrix](../embedding.md#continuous-integration) runs these
-contracts on ARM64 Linux and builds Android artifacts on Linux and Windows.
+contracts on ARM64 Linux and builds Android artifacts on Linux.
 `ctest -L packaging` tests archive validation and dependency-source preparation;
 `tests/audit_bundle.py` checks a cross-built production archive without target
 execution. Production API/CLI qualification uses the test harness against a

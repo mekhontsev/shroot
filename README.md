@@ -435,6 +435,9 @@ The internal resume entry is not an authorization boundary.
 
 ## Build And Verification
 
+Supported build hosts are Linux and Android/Termux. On Windows, use Linux in
+WSL2 with Linux build tools; native Windows builds are not supported.
+
 `CMakeLists.txt` builds native executables with pinned, hash-verified native
 dependencies by default. SQLite may instead be supplied by the system or a
 parent project's CMake target; see [provider requirements](embedding.md#sqlite-provider).
