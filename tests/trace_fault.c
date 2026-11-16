@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <asm/ptrace.h>
 #include <assert.h>
 #include <elf.h>
 #include <signal.h>

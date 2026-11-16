@@ -5,8 +5,7 @@ test "$#" = 1
 scripts=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 out=$(CDPATH= cd -- "$1" && pwd)
 cc=${CC:-clang}
-resource=$("$cc" -print-resource-dir)
-builtins=${COMPILER_BUILTINS:-$resource/lib/linux/libclang_rt.builtins-aarch64-android.a}
+builtins=${COMPILER_BUILTINS:-$("$cc" --rtlib=compiler-rt --print-libgcc-file-name)}
 test -f "$builtins"
 test -f "$out/sysroot/lib/libc.so"
 for kind in static dynamic; do

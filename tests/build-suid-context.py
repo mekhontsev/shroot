@@ -3,7 +3,6 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
 import urllib.request
@@ -40,8 +39,7 @@ def main():
     (args.build / "suid-source.json").write_text(json.dumps({"version": VERSION, "sha256": hashes}, indent=2) + "\n")
     src = Path(__file__).resolve().parent
     runtime = src.parent / "src"
-    subprocess.run([os.environ.get("CC", "clang"), "--target=aarch64-linux-android34",
-                    "-fno-termux-rpath", "-static", "-DMD_NO_START", "-DMD_USE_LIBC",
+    subprocess.run(['sh', str(src / 'compile-host.sh'), "-DMD_NO_START", "-DMD_USE_LIBC",
                     "-std=gnu17", "-O2", "-Wall", "-Wextra", "-Werror",
                     "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                     "-I" + str(vendor), str(src / "test_suid_context.c"), str(src / "test_hybrid_copy.S"),

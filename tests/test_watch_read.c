@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <asm/ptrace.h>
 #include "../src/event_wait.h"
 #include "../src/watch_queue.h"
 #include <elf.h>

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <asm/ptrace.h>
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>

@@ -9,7 +9,7 @@ runtime="$src/../src"
 work=$(CDPATH= cd -- "$1" && pwd)
 sysroot="$work/sysroot"
 cc=${CC:-clang}
-"$cc" --target=aarch64-linux-android34 -fno-termux-rpath -static -DMD_NO_START -DMD_USE_LIBC \
+sh "$src/compile-host.sh" -DMD_NO_START -DMD_USE_LIBC \
     -std=c17 -O2 -Wall -Wextra -Werror "$src/test_sandbox.c" "$src/test_policy_gate.S" \
     "$runtime/fs_client.c" "$runtime/fs_wire.c" "$runtime/event_wait.c" "$runtime/raw.c" "$runtime/memory.c" "$runtime/raw.S" \
     -o "$work/bundle/md-sandbox-native-test"

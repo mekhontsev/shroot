@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <asm/ptrace.h>
 #include "svc_patch.h"
 #include "svc_registry.h"
 #include "mapping_reader.h"

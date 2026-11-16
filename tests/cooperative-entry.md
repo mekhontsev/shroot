@@ -51,7 +51,7 @@ Compile the `test_cooperative_libc.c` workload against an existing distribution
 sysroot:
 
 ```sh
-python tests/build_svc_glibc.py STOCK_SYSROOT OUTPUT --environment ubuntu
+python tests/build_svc_glibc.py STOCK_SYSROOT OUTPUT --build BUILD --store STORE --executor local
 python tests/test_svc_libc.py BUILD OUTPUT/probe-stock --checks-only
 ```
 

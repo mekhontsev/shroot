@@ -1,5 +1,6 @@
 #ifndef MD_NETWORK_IOCTL_H
 #define MD_NETWORK_IOCTL_H
+#include <netinet/in.h>
 #include <linux/sockios.h>
 #include <linux/if_bridge.h>
 #include <linux/if_arp.h>

@@ -7,7 +7,7 @@ fi
 src=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 runtime="$src/../src"
 mkdir -p "$1"
-"${CC:-clang}" --target=aarch64-linux-android34 -fno-termux-rpath -static \
+sh "$src/compile-host.sh" \
     -DMD_NO_START -DMD_USE_LIBC -std=c17 -O2 -Wall -Wextra -Werror \
     "$src/test_hybrid.c" "$src/test_hybrid_copy.S" \
     "$runtime/event_wait.c" "$runtime/raw.c" "$runtime/memory.c" "$runtime/raw.S" \
