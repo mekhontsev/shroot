@@ -121,7 +121,8 @@ int test_device_nodes_guest(void) {
     assert(!mknod("zero",S_IFCHR|0666,makedev(1,5)));
     int zero=open("zero",O_RDONLY); assert(zero>=0);
     memset(data,1,sizeof(data)); assert(read(zero,data,sizeof(data))==sizeof(data));
-    for (unsigned i=0;i<sizeof(data);++i) assert(!data[i]); close(zero);
+    for (unsigned i=0;i<sizeof(data);++i) assert(!data[i]);
+    close(zero);
     assert(!mknod("full",S_IFCHR|0666,makedev(1,7)));
     int full=open("full",O_RDWR|O_NOFOLLOW); assert(full>=0);
     struct stat full_st;

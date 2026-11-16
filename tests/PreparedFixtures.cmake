@@ -1,0 +1,36 @@
+# Optional prepared-rootfs workloads reuse production source ownership and the
+# native component fixtures, rather than maintaining another runtime build.
+get_target_property(prepared_adapter_sources bootstrap SOURCES)
+list(REMOVE_ITEM prepared_adapter_sources ${src}/freestanding_memory.c)
+add_library(prepared-adapter STATIC EXCLUDE_FROM_ALL ${prepared_adapter_sources})
+target_compile_definitions(prepared-adapter PRIVATE MD_NO_START)
+guest_freestanding_code(prepared-adapter)
+target_compile_options(prepared-adapter PRIVATE -iquote ${src} -O2 -Wall -Wextra -Werror
+    -fno-builtin -ffunction-sections -fdata-sections -mgeneral-regs-only)
+target_link_libraries(prepared-adapter PUBLIC guest-parcels guest-objects guest-svc
+    guest-interruptible guest-seccomp)
+
+add_custom_target(shroot-prepared-fixtures DEPENDS bootstrap supervisor run service image
+    test_inodes test_import test_rpc capabilities)
+function(prepared_fixture name source)
+    guest_executable(prepared_${name} tests/${source} ${ARGN})
+    set_target_properties(prepared_${name} PROPERTIES EXCLUDE_FROM_ALL TRUE OUTPUT_NAME md-${name})
+    target_compile_definitions(prepared_${name} PRIVATE MD_NO_START MD_USE_LIBC)
+    target_compile_options(prepared_${name} PRIVATE -iquote ${src} -UNDEBUG)
+    add_dependencies(shroot-prepared-fixtures prepared_${name})
+endfunction()
+prepared_fixture(await-exit test_completion.c ${src}/event_wait.c ${raw})
+prepared_fixture(command-test test_command.c)
+prepared_fixture(sockets-test test_sockets.c)
+target_compile_definitions(prepared_sockets-test PRIVATE MD_SOCKET_DRIVER)
+prepared_fixture(sandbox-native-test test_sandbox.c tests/test_policy_gate.S)
+foreach(name command-test sockets-test sandbox-native-test)
+    target_link_libraries(prepared_${name} PRIVATE prepared-adapter)
+    target_link_options(prepared_${name} PRIVATE -Wl,--gc-sections)
+endforeach()
+prepared_fixture(lifecycle-test test_lifecycle.c ${src}/process_owner.c ${src}/event_wait.c ${raw})
+prepared_fixture(notification-test test_notification.c)
+prepared_fixture(notification-lifecycle-test test_notification_lifecycle.c ${src}/event_wait.c ${raw})
+prepared_fixture(exec-policy-test test_exec_policy.c)
+prepared_fixture(ipc-launch test_ipc_launch.c)
+prepared_fixture(trace-fault trace_fault.c)

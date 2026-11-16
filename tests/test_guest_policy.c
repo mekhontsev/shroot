@@ -1347,7 +1347,7 @@ static int signal_descriptors(int filtered) {
     assert(info[0].ssi_signo==SIGUSR1 && info[1].ssi_signo==SIGSYS && info[1].ssi_int==123);
     int copy=dup(fd); assert(copy>=0 && !close(fd)); fd=copy;
     assert(!raise(SIGSYS));
-    assert(read(fd,(void *)1,128)==-1 && errno==EFAULT);
+    assert(syscall(SYS_read,fd,(void *)1,128)==-1 && errno==EFAULT);
     assert(read(fd,info,128)==-1 && errno==EAGAIN);
     sigset_t only; sigemptyset(&only); sigaddset(&only,SIGUSR1);
     assert(signalfd(fd,&only,0)==fd);
@@ -1560,7 +1560,8 @@ static void signal_pressure_timeout(int signal) {
     state[16]=(char)atomic_load(&pressure_stage); state[17]=' ';
     for (unsigned i=0;i<SIGNAL_WAITERS;++i)
         state[18+i]=(char)atomic_load(&pressure_workers[i]);
-    write(STDERR_FILENO,state,sizeof(state)); write(STDERR_FILENO,"\n",1);
+    ssize_t written=write(STDERR_FILENO,state,sizeof(state)); (void)written;
+    written=write(STDERR_FILENO,"\n",1); (void)written;
     _exit(124);
 }
 struct waiting_signal { int descriptor,ready,filtered,synchronized,index; };
@@ -1702,7 +1703,7 @@ static int signal_mask_edges(void) {
     sigemptyset(&original); sigaddset(&original,SIGSYS); sigaddset(&original,SIGUSR1);
     sigemptyset(&temporary); sigaddset(&temporary,SIGUSR2);
     int epoll=epoll_create1(EPOLL_CLOEXEC); assert(epoll>=0);
-    for (int mode=0;mode<5;++mode) for (int kind=0;kind<4;++kind) {
+    for (volatile int mode=0;mode<5;++mode) for (volatile int kind=0;kind<4;++kind) {
         assert(!sigprocmask(SIG_SETMASK,&original,NULL));
         mask_signal=kind&1 ? SIGUSR1 : SIGSYS; mask_jumping=kind>=2; edge_seen=0;
         pid_t parent=getpid(),child=fork(); assert(child>=0);

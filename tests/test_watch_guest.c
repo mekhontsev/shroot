@@ -372,7 +372,7 @@ int main(int argc, char **argv) {
     errno = 0; CHECK(read(fd, buffer.bytes, 1) == -1 && errno == EINVAL);
     struct iovec vectors[] = {{buffer.bytes, 8}, {buffer.bytes + 8, 64}};
     errno = 0; CHECK(readv(fd, vectors, 2) == -1 && errno == EINVAL);
-    errno = 0; CHECK(read(fd, (void *)1, sizeof(buffer.bytes)) == -1 && errno == EFAULT);
+    errno = 0; CHECK(syscall(SYS_read, fd, (void *)1, sizeof(buffer.bytes)) == -1 && errno == EFAULT);
     CHECK(one(fd, IN_CREATE, "one")->wd == wd);
     CHECK(!ioctl(fd, FIONREAD, &available) && !available);
     CHECK(!link("one", "two")); one(fd, IN_CREATE, "two");

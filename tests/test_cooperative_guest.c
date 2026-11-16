@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_format.h"
 #include "cooperative_entry.h"
 #include "../src/cooperative_channel.h"
 #include "../src/posix_acl.h"
@@ -149,8 +150,8 @@ static void interrupted_wait_contract(int fd,long nr,uintptr_t buffer,size_t siz
     sigemptyset(&action.sa_mask); assert(!sigaction(SIGUSR1,&action,&previous));
     struct sigevent event={.sigev_notify=SIGEV_SIGNAL,.sigev_signo=SIGUSR1};
     timer_t timer; assert(!timer_create(CLOCK_MONOTONIC,&event,&timer));
-    md_test_syscall_fn call=md_test_syscall_site(1);
-    for (unsigned mode=0;mode<3;++mode) {
+    md_test_syscall_fn volatile call=md_test_syscall_site(1);
+    for (volatile unsigned mode=0;mode<3;++mode) {
         assert(call(fd,buffer,size,0,0,0,nr)==-EAGAIN);
         assert(!fcntl(provider_wait_fd,F_SETFL,0));
         action.sa_flags=mode ? SA_RESTART : 0;
@@ -1390,8 +1391,8 @@ static void *threaded(void *unused) {
     (void)unused;
     struct md_entry_client local={0}; struct stat st; long result;
     char directory[80],renamed[80];
-    snprintf(directory,sizeof(directory),"tmp/entry-mutate-%ld",syscall(SYS_gettid));
-    snprintf(renamed,sizeof(renamed),"%s-moved",directory);
+    test_format(directory,sizeof(directory),"tmp/entry-mutate-%ld",syscall(SYS_gettid));
+    test_format(renamed,sizeof(renamed),"%s-moved",directory);
     for (unsigned i=0;i<200;++i) {
         enum md_entry_outcome outcome=stat_try(&local,&st,&result);
         assert(outcome==MD_ENTRY_COMPLETED && !result && st.st_size==7);

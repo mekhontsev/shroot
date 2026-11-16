@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_format.h"
 #include "fs_mount_internal.h"
 #include "fs_wire.h"
 #include "event_wait.h"
@@ -72,7 +73,7 @@ static pid_t start(const char *mode, int fd, const char *base) {
     pid_t parent=getpid(), child=fork(); assert(child>=0);
     if (!child) {
         assert(!prctl(PR_SET_PDEATHSIG,SIGKILL) && getppid()==parent);
-        assert(!fcntl(fd,F_SETFD,0)); char number[16]; snprintf(number,sizeof(number),"%d",fd);
+        assert(!fcntl(fd,F_SETFD,0)); char number[16]; test_format(number,sizeof(number),"%d",fd);
         execl("/proc/self/exe","mount-policy",mode,number,base,(char *)NULL); _exit(90);
     }
     return child;
@@ -207,12 +208,12 @@ static void sealing_rejection(void) {
 }
 static struct md_filesystem filesystem(const char *base, int create) {
     char store[PATH_MAX], host[PATH_MAX], path[PATH_MAX];
-    snprintf(store,sizeof(store),"%s/policy-store",base);
-    snprintf(host,sizeof(host),"%s/policy-host",base);
+    test_format(store,sizeof(store),"%s/policy-store",base);
+    test_format(host,sizeof(host),"%s/policy-host",base);
     struct md_filesystem fs={0}; assert(!md_inode_store_open(store,create,&fs.store));
     if (create) {
         assert(!mkdir(host,0700) && !md_inode_mkdir(fs.store,-1,"/volume",0700));
-        snprintf(path,sizeof(path),"%s/value",host);
+        test_format(path,sizeof(path),"%s/value",host);
         int fd=open(path,O_CREAT|O_RDWR|O_CLOEXEC,0600); assert(fd>=0);
         assert(write(fd,"value",5)==5); close(fd);
     }

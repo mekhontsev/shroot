@@ -411,7 +411,7 @@ int test_user_namespace_guest(int argc, char **argv) {
     assert(!prctl(PR_SET_DUMPABLE,0));
     assert(!fstat(fd,&path_st) && path_st.st_ino==st.st_ino && S_ISREG(path_st.st_mode));
     assert(lseek(copy,0,SEEK_SET)==0);
-    assert(read(copy,(void *)1,33)<0 && errno==EFAULT);
+    assert(syscall(SYS_read,copy,(void *)1,33)<0 && errno==EFAULT);
     assert(lseek(copy,0,SEEK_CUR)==0);
     assert(read(copy,data,sizeof(data))==33 && !memcmp(data,map,33));
     assert(close(copy)==0 && close(fd)==0);

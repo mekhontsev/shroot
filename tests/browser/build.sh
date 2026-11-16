@@ -1,11 +1,9 @@
 #!/usr/bin/env sh
 set -eu
-test "$#" = 1
+test "$#" -ge 1
 src=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-cc=${CC:-clang}
-cmake -S "$src/../../shroot" -B "$1" -G Ninja \
-    -DCMAKE_C_COMPILER="$cc" -DCMAKE_ASM_COMPILER="$cc" \
-    -DCMAKE_C_FLAGS=--target=aarch64-linux-android34 \
-    -DCMAKE_ASM_FLAGS=--target=aarch64-linux-android34 \
-    -DCMAKE_EXE_LINKER_FLAGS=-fno-termux-rpath
-cmake --build "$1" --parallel 2
+build=$1
+shift
+cmake -S "$src/../.." -B "$build" -G Ninja "$@"
+cmake --build "$build" --target shroot-cli bootstrap supervisor run service image \
+    --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"

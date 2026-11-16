@@ -162,7 +162,7 @@ static void native_io(unsigned count, int traced) {
 struct scenario { const char *name; int program; unsigned older, newer; int state; unsigned long argument; };
 static int one(const struct scenario *test, int traced, unsigned iterations) {
     long nr = traced ? SYS_mount : SYS_getpid;
-    struct program programs[2] = {{0}};
+    struct program programs[2] = {0};
     make(&programs[0], test->program, nr, test->older);
     unsigned count = test->newer ? 2 : 1;
     if (count == 2) make(&programs[1], 0, nr, test->newer);

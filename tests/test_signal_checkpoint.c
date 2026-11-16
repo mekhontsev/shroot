@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/filter.h>
+#include <sys/ptrace.h>
 #include <linux/ptrace.h>
 #include <linux/seccomp.h>
 #include <pthread.h>
@@ -25,7 +26,6 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
-#include <sys/ptrace.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>

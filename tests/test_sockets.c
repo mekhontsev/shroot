@@ -23,7 +23,7 @@ static struct md_fs test_fs;
 static long socket_input(long nr, long a0, long a1, long a2, long a3, long a4, long a5) {
     if (!use_adapter) return syscall(nr, a0, a1, a2, a3, a4, a5);
     unsigned long args[] = {a0, a1, a2, a3, a4, a5};
-    long r = md_socket_call(&test_fs, "/test", nr, args);
+    long r = md_socket_call(&test_fs, "/test", nr, args, 0);
     if (r < 0) { errno = (int)-r; return -1; }
     return r;
 }
@@ -57,7 +57,7 @@ static long svc_connect(int fd, struct sockaddr_un *addr, socklen_t length) {
 #ifdef MD_SOCKET_DRIVER
     if (use_adapter) {
         unsigned long args[6] = {fd, (unsigned long)addr, length, 0, 0, 0};
-        return md_socket_call(&test_fs, "/test", SYS_connect, args);
+        return md_socket_call(&test_fs, "/test", SYS_connect, args, 0);
     }
 #endif
     register long x0 __asm__("x0") = fd;

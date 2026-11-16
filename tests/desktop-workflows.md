@@ -565,7 +565,7 @@ current guest adapter. They deliberately reproduce policy failures: a completed
 run is not successful browser sandboxing. Build and execute them independently:
 
 ```sh
-sh tests/build-sandbox-fixtures.sh BUILD
+python tests/build_prepared.py BUILD --native-build NATIVE_BUILD
 python tests/test_sandbox.py BUILD \
   --runtime IMMUTABLE_STAGED_HELPERS --store DISPOSABLE_GLIBC_STORE
 ```

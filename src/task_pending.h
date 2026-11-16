@@ -2,6 +2,7 @@
 #define MD_TASK_PENDING_H
 #include <errno.h>
 #include <limits.h>
+#include <sys/ptrace.h>
 #include <linux/ptrace.h>
 #include <signal.h>
 #include <stdint.h>

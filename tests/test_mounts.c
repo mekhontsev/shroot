@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_format.h"
 #include "fs_mounts.h"
 #include "fs_mount_internal.h"
 #include "fs_storage.h"
@@ -65,15 +66,15 @@ static unsigned descriptors(void) {
 }
 static void provider_mount_tables(const char *base) {
     char store[PATH_MAX],source[2][PATH_MAX],path[PATH_MAX];
-    snprintf(store,sizeof(store),"%s/provider-tables",base);
+    test_format(store,sizeof(store),"%s/provider-tables",base);
     struct md_inode_store *s=NULL; assert(!md_inode_store_open(store,1,&s));
     const char *dirs[]={"/dev","/dev/shm","/proc","/devices"};
     for (unsigned i=0;i<4;++i) assert(!md_inode_mkdir(s,-1,dirs[i],0755));
     for (unsigned i=0;i<2;++i) {
-        snprintf(source[i],sizeof(source[i]),"%s/provider-source-%u",base,i);
+        test_format(source[i],sizeof(source[i]),"%s/provider-source-%u",base,i);
         assert(!mkdir(source[i],0700));
     }
-    snprintf(path,sizeof(path),"%s/shm",source[0]); assert(!mkdir(path,0700));
+    test_format(path,sizeof(path),"%s/shm",source[0]); assert(!mkdir(path,0700));
     unsigned native_children[2]={0};
     for (unsigned mode=0;mode<6;++mode) {
         struct md_fs_storage_cache storage={0};
@@ -120,16 +121,16 @@ static void provider_mount_tables(const char *base) {
 }
 static void nested_mounts(const char *base) {
     char source[3][PATH_MAX], store[PATH_MAX], path[PATH_MAX], bytes[8192];
-    snprintf(store,sizeof(store),"%s/nested-store",base);
+    test_format(store,sizeof(store),"%s/nested-store",base);
     for (unsigned i=0; i<3; ++i) {
-        snprintf(source[i],sizeof(source[i]),"%s/source-%u",base,i);
+        test_format(source[i],sizeof(source[i]),"%s/source-%u",base,i);
         assert(!mkdir(source[i],0700));
-        snprintf(path,sizeof(path),"%s/marker",source[i]);
+        test_format(path,sizeof(path),"%s/marker",source[i]);
         int fd=open(path,O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(fd>=0);
         assert(write(fd,&"012"[i],1)==1); close(fd);
     }
     for (unsigned i=0; i<2; ++i) {
-        snprintf(path,sizeof(path),"%s/child",source[i]); assert(!mkdir(path,0700));
+        test_format(path,sizeof(path),"%s/child",source[i]); assert(!mkdir(path,0700));
     }
     struct md_inode_store *s=NULL; assert(!md_inode_store_open(store,1,&s));
     assert(!md_inode_mkdir(s,-1,"/tree",0700));
@@ -137,13 +138,13 @@ static void nested_mounts(const char *base) {
     struct md_filesystem fs={.store=s};
     struct md_fs_attachment entries[]={{source[0],"/tree",0},
         {source[1],"/tree/child",1},{source[2],"/tree/child/child",0}};
-    snprintf(path,sizeof(path),"%s/child",source[0]);
+    test_format(path,sizeof(path),"%s/child",source[0]);
     int covered=open(path,O_PATH|O_DIRECTORY|O_CLOEXEC); assert(covered>=0);
     assert(!md_fs_mounts_open(&fs,entries,3));
     const char *names[]={"/tree","/tree/child","/tree/child/child"};
     unsigned long long ids[3];
     for (unsigned i=0; i<3; ++i) {
-        snprintf(path,sizeof(path),"%s/marker",names[i]);
+        test_format(path,sizeof(path),"%s/marker",names[i]);
         int fd=opened(&fs,path,O_RDONLY); assert(read(fd,bytes,1)==1 && bytes[0]=="012"[i]);
         struct md_fs_result r=call(&fs,MD_FS_FSTAT,fd,NULL,0,0,NULL,0);
         assert(!r.error); ids[i]=r.info.mount_id;
@@ -174,7 +175,7 @@ static void nested_mounts(const char *base) {
     struct md_fs_result r=call(&fs,MD_FS_MOUNT_TABLE,-1,NULL,O_RDONLY,1,NULL,0); assert(!r.error);
     ssize_t count=read(r.fd,bytes,sizeof(bytes)-1); assert(count>0); bytes[count]=0; close(r.fd);
     for (unsigned i=0; i<3; ++i) {
-        char line[80]; snprintf(line,sizeof(line),"%llu %llu ",ids[i],i ? ids[i-1] : (unsigned long long)root_id);
+        char line[80]; test_format(line,sizeof(line),"%llu %llu ",ids[i],i ? ids[i-1] : (unsigned long long)root_id);
         assert(strstr(bytes,line));
     }
     assert(!strstr(bytes,base));
@@ -182,14 +183,14 @@ static void nested_mounts(const char *base) {
     r=call(&fs,MD_FS_OPEN,covered,"marker",O_RDONLY,0,NULL,0); assert(r.error==-ENOENT);
     r=call(&fs,MD_FS_OPEN,covered,"./marker",O_RDONLY,0,NULL,0); assert(r.error==-ENOENT);
     int leaf=opened(&fs,"/tree/child/child",O_RDONLY|O_DIRECTORY);
-    snprintf(path,sizeof(path),"%s/link",source[0]); assert(!symlink("/tree/child/child",path));
+    test_format(path,sizeof(path),"%s/link",source[0]); assert(!symlink("/tree/child/child",path));
     int alias=opened(&fs,"/tree/link/marker",O_RDONLY); assert(read(alias,bytes,1)==1 && bytes[0]=='2'); close(alias);
     r=call(&fs,MD_FS_UNLINK,-1,"/tree/child",AT_REMOVEDIR,0,NULL,0); assert(r.error==-EBUSY || r.error==-EROFS);
     struct md_fs_request rename={.operation=MD_FS_RENAME,.directory={-1,-1},.path={"/tree/marker","/tree/child/marker"}};
     md_fs_execute(&fs,&rename,&r,NULL); assert(r.error==-EXDEV);
     /* Covered dentries move independently of source objects and retained FDs. */
-    snprintf(path,sizeof(path),"%s/child",source[0]);
-    char moved[PATH_MAX]; snprintf(moved,sizeof(moved),"%s/renamed",source[0]); assert(!renameat(AT_FDCWD,path,AT_FDCWD,moved));
+    test_format(path,sizeof(path),"%s/child",source[0]);
+    char moved[PATH_MAX]; test_format(moved,sizeof(moved),"%s/renamed",source[0]); assert(!renameat(AT_FDCWD,path,AT_FDCWD,moved));
     r=call(&fs,MD_FS_PATH,leaf,NULL,0,0,bytes,sizeof(bytes));
     assert(!r.error && !strcmp(bytes,"/tree/renamed/child"));
     alias=opened(&fs,"/tree/renamed/child/marker",O_RDONLY); close(alias);
@@ -200,7 +201,7 @@ static void nested_mounts(const char *base) {
     fs.tasks=md_task_registry_create(); assert(fs.tasks);
     struct md_task_resources resources={.fs=context,.mounts=fs.mounts};
     assert(!md_task_registry_publish(fs.tasks,123,123,&identity,&resources));
-    snprintf(path,sizeof(path),"%s/absolute",source[1]); assert(!symlink("/child/marker",path));
+    test_format(path,sizeof(path),"%s/absolute",source[1]); assert(!symlink("/child/marker",path));
     r=call(&fs,MD_FS_CHROOT,-1,"/tree/renamed",0,0,NULL,0); assert(!r.error);
     alias=opened(&fs,"/../../marker",O_RDONLY); assert(read(alias,bytes,1)==1 && bytes[0]=='1'); close(alias);
     alias=opened(&fs,"/absolute",O_RDONLY); assert(read(alias,bytes,1)==1 && bytes[0]=='2'); close(alias);
@@ -215,8 +216,8 @@ static void nested_mounts(const char *base) {
     assert(strstr(bytes," / ro - none attachment rw") && strstr(bytes," /child rw - none attachment rw"));
     assert(!strstr(bytes,"/tree") && !strstr(bytes,"/proc") && !strstr(bytes,base));
     /* Path prefixes belong to one export, not the lifetime of the mount view. */
-    snprintf(path,sizeof(path),"%s/child",source[1]);
-    snprintf(moved,sizeof(moved),"%s/renamed-child",source[1]);
+    test_format(path,sizeof(path),"%s/child",source[1]);
+    test_format(moved,sizeof(moved),"%s/renamed-child",source[1]);
     assert(!renameat(AT_FDCWD,path,AT_FDCWD,moved));
     for (unsigned info=0;info<2;++info) {
         r=call(&fs,MD_FS_MOUNT_TABLE,-1,NULL,O_RDONLY,info,NULL,0); assert(!r.error);
@@ -263,9 +264,9 @@ static void nested_mounts(const char *base) {
 static void task_mount_views(const char *base) {
     unsigned before=descriptors();
     char store[PATH_MAX],host[PATH_MAX],path[PATH_MAX],bytes[8192];
-    snprintf(store,sizeof(store),"%s/task-store",base);
-    snprintf(host,sizeof(host),"%s/task-source",base); assert(!mkdir(host,0700));
-    snprintf(path,sizeof(path),"%s/value",host);
+    test_format(store,sizeof(store),"%s/task-store",base);
+    test_format(host,sizeof(host),"%s/task-source",base); assert(!mkdir(host,0700));
+    test_format(path,sizeof(path),"%s/value",host);
     int fd=open(path,O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(fd>=0);
     assert(write(fd,"native",6)==6); close(fd);
     struct md_inode_store *s=NULL; assert(!md_inode_store_open(store,1,&s));
@@ -353,14 +354,14 @@ static void task_mount_views(const char *base) {
 }
 static void native_attributes(const char *base) {
     char host[PATH_MAX],path[PATH_MAX],store[PATH_MAX],data[512],before[512],after[512];
-    snprintf(host,sizeof(host),"%s/xattr-host",base); assert(!mkdir(host,0700));
-    snprintf(path,sizeof(path),"%s/value",host);
+    test_format(host,sizeof(host),"%s/xattr-host",base); assert(!mkdir(host,0700));
+    test_format(path,sizeof(path),"%s/value",host);
     int fd=open(path,O_CREAT|O_RDWR|O_CLOEXEC,0600); assert(fd>=0);
     assert(!fsetxattr(fd,"user.fixture","value",5,0));
     ssize_t label=fgetxattr(fd,"security.selinux",before,sizeof(before));
     assert(label>=0 || errno==ENODATA || errno==ENOTSUP);
     struct md_inode_store *s=NULL;
-    snprintf(store,sizeof(store),"%s/xattr-store",base); assert(!md_inode_store_open(store,1,&s));
+    test_format(store,sizeof(store),"%s/xattr-store",base); assert(!md_inode_store_open(store,1,&s));
     assert(!md_inode_mkdir(s,-1,"/attached",0700));
     struct md_filesystem fs={.store=s};
     struct md_fs_attachment attachment={host,"/attached",0};
@@ -434,9 +435,9 @@ int main(int argc, char **argv) {
     }
     assert(argc == 2 && argv[1][0] == '/'); assert(!mkdir(argv[1], 0700));
     char path[4096], host[4096], readonly[4096], store[4096];
-    assert(snprintf(host, sizeof(host), "%s/host", argv[1]) < (int)sizeof(host));
-    assert(snprintf(readonly, sizeof(readonly), "%s/readonly", argv[1]) < (int)sizeof(readonly));
-    assert(snprintf(store, sizeof(store), "%s/store", argv[1]) < (int)sizeof(store));
+    assert(test_format(host, sizeof(host), "%s/host", argv[1]) < (int)sizeof(host));
+    assert(test_format(readonly, sizeof(readonly), "%s/readonly", argv[1]) < (int)sizeof(readonly));
+    assert(test_format(store, sizeof(store), "%s/store", argv[1]) < (int)sizeof(store));
     assert(!mkdir(host, 0700) && !mkdir(readonly, 0700));
     struct md_inode_store *s = NULL; assert(!md_inode_store_open(store, 1, &s));
     assert(!md_inode_mkdir(s, -1, "/volume", 0700));
@@ -458,7 +459,7 @@ int main(int argc, char **argv) {
     assert(!close(temporary_directory));
     puts("PASS temporary-file admission: selected directory preserves unsupported creation errno for named-file fallback");
     fd = opened(&fs, "/link/file", O_RDWR | O_CREAT); assert(write(fd, "native", 6) == 6);
-    snprintf(path, sizeof(path), "%s/file", host);
+    test_format(path, sizeof(path), "%s/file", host);
     struct stat st, native; assert(!fstat(fd, &st) && !stat(path, &native));
     assert(st.st_dev == native.st_dev && st.st_ino == native.st_ino);
     int directory = opened(&fs, "/volume", O_RDONLY | O_DIRECTORY);
@@ -487,7 +488,7 @@ int main(int argc, char **argv) {
     assert((mask & (IN_CREATE | IN_MOVED_FROM | IN_MOVED_TO)) == (IN_CREATE | IN_MOVED_FROM | IN_MOVED_TO));
     close(watch);
     result = call(&fs, MD_FS_OPEN, -1, "/readonly/new", O_CREAT | O_RDWR, 0600, NULL, 0); assert(result.error == -EROFS);
-    snprintf(path, sizeof(path), "%s/file", readonly);
+    test_format(path, sizeof(path), "%s/file", readonly);
     int external = open(path, O_CREAT | O_WRONLY | O_CLOEXEC, 0600); assert(external >= 0); close(external);
     int ro = opened(&fs, "/readonly/file", O_RDONLY);
     /* Establish the mount object's ordinary cache entry before lease counts. */

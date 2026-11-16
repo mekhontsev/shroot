@@ -73,7 +73,12 @@ int main(int argc, char **argv) {
     CHECK(mknodat(AT_FDCWD, "regular-node", 0600, 0) == -1 && errno == EEXIST);
     CHECK(mknodat(-1, "bad-node", 0600, 0) == -1 && errno == EBADF);
     CHECK(mknodat(AT_FDCWD, "regular-node/child", 0600, 0) == -1 && errno == ENOTDIR);
-    CHECK(mknodat(AT_FDCWD, "fifo-node", S_IFIFO | 0600, 0) == -1 && errno == ENOTSUP);
+    CHECK(mknodat(AT_FDCWD, "fifo-node", S_IFIFO | 0600, 0) == 0);
+    CHECK(stat("fifo-node", &b) == 0 && S_ISFIFO(b.st_mode) && (b.st_mode & 0777) == 0600);
+    int fifo = open("fifo-node", O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    char fifo_byte = 0;
+    CHECK(fifo >= 0 && write(fifo, "f", 1) == 1 && read(fifo, &fifo_byte, 1) == 1 && fifo_byte == 'f');
+    CHECK(close(fifo) == 0 && unlink("fifo-node") == 0);
     CHECK(unlink("regular-node") == 0);
     CHECK(setxattr(".", "system.posix_acl_default", "", 1, 0) == -1 && errno == EINVAL);
     int directory = open(".", O_RDONLY | O_DIRECTORY);

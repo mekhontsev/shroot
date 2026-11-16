@@ -6,6 +6,7 @@
 #include <sched.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>

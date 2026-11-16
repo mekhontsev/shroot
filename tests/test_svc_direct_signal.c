@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/filter.h>
+#include <sys/ptrace.h>
 #include <linux/ptrace.h>
 #include <linux/seccomp.h>
 #include <signal.h>
@@ -16,7 +17,6 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
-#include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
@@ -47,7 +47,7 @@ static unsigned accelerated(void) {
 }
 static uint64_t native_result(void) {
     return (uint32_t)input.x[6]==SYS_mmap ? (uint64_t)-EINVAL
-        : (uint32_t)input.x[6]==SYS_getppid ? getppid() : getpid();
+        : (uint64_t)((uint32_t)input.x[6]==SYS_getppid ? getppid() : getpid());
 }
 static int remote(void *opaque,uintptr_t at,void *data,size_t size,int write) {
     if (write && shared->unsafe==2 && at%MD_SVC_SLOT_SIZE==MD_SVC_DIRECT_PENDING

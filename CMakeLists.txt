@@ -169,6 +169,9 @@ function(guest_freestanding_code name)
 endfunction()
 function(guest_freestanding name)
     guest_freestanding_code(${name})
+    # Use one driver for C/ASM images; CMake's ASM driver otherwise appends
+    # the C archives' implicit host libc/compiler libraries despite -nostdlib.
+    set_property(TARGET ${name} PROPERTY LINKER_LANGUAGE C)
     target_compile_options(${name} PRIVATE -fno-pie)
     # These images have their own entry and layout, never a host dynamic linker.
     set_property(TARGET ${name} PROPERTY LINK_OPTIONS -static -nostdlib
@@ -689,6 +692,7 @@ if(SHROOT_BUILD_TESTS)
             target_compile_options(${fixture} PRIVATE -iquote ${src} -UNDEBUG)
         endif()
     endforeach()
+    include(tests/PreparedFixtures.cmake)
     include(tests/NativeChecks.cmake)
 endif()
 

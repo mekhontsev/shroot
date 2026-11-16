@@ -195,7 +195,7 @@ int md_inode_birth_commit(struct md_inode_birth **owner) {
     return r;
 }
 
-int mdi_leaf_id(const struct stat *st,const char scope[33],char out[33]) {
+int mdi_leaf_id(const struct stat *st,const char *scope,char out[33]) {
     static const char hex[]="0123456789abcdef";
     const uint64_t values[]={(uint64_t)st->st_dev,(uint64_t)st->st_ino};
     for (unsigned part=0;part<2;++part) for (unsigned i=0;i<16;++i)

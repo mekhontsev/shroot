@@ -1946,10 +1946,10 @@ static void xattr_slots(int guest) {
                     : getxattr(target,name,received,sizeof(received)))==sizeof(value));
                 assert(!memcmp(received,value,sizeof(value)));
                 assert((descriptor ? fgetxattr(fd,name,received,1) : getxattr(target,name,received,1))==-1 && errno==ERANGE);
-                assert((descriptor ? fgetxattr(fd,name,(void *)1,sizeof(value))
-                    : getxattr(target,name,(void *)1,sizeof(value)))==-1 && errno==EFAULT);
-                assert((descriptor ? fsetxattr(fd,name,(void *)1,sizeof(value),0)
-                    : setxattr(target,name,(void *)1,sizeof(value),0))==-1 && errno==EFAULT);
+                assert((descriptor ? syscall(SYS_fgetxattr,fd,name,(void *)1,sizeof(value))
+                    : syscall(SYS_getxattr,target,name,(void *)1,sizeof(value)))==-1 && errno==EFAULT);
+                assert((descriptor ? syscall(SYS_fsetxattr,fd,name,(void *)1,sizeof(value),0)
+                    : syscall(SYS_setxattr,target,name,(void *)1,sizeof(value),0))==-1 && errno==EFAULT);
                 ssize_t n=descriptor ? flistxattr(fd,NULL,0) : listxattr(target,NULL,0);
                 assert(n>=(ssize_t)strlen(name)+1 && (size_t)n<sizeof(received));
                 assert((descriptor ? flistxattr(fd,received,n) : listxattr(target,received,n))==n);

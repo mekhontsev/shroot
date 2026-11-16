@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_format.h"
 #include "fs_mount_internal.h"
 #include "inode_internal.h"
 #include "task_registry.h"
@@ -27,7 +28,7 @@ static struct md_fs_result call(struct md_filesystem *fs, unsigned op, const cha
 }
 static void captured_lifetime(struct md_filesystem *fs, const char *parent) {
     unsigned before=descriptors(), objects=fs->mounts->tree->objects;
-    char path[PATH_MAX]; snprintf(path,sizeof(path),"%s/transient",parent);
+    char path[PATH_MAX]; test_format(path,sizeof(path),"%s/transient",parent);
     for (unsigned i=0;i<1024;++i) {
         struct md_fs_anchor *origin=NULL;
         struct md_fs_request q={.operation=MD_FS_OPEN,.directory={-1,-1},
@@ -50,7 +51,7 @@ static void captured_lifetime(struct md_filesystem *fs, const char *parent) {
     }
 }
 static void native_open_plans(struct md_filesystem *fs,const char *parent) {
-    char path[PATH_MAX]; snprintf(path,sizeof(path),"%s/planned",parent);
+    char path[PATH_MAX]; test_format(path,sizeof(path),"%s/planned",parent);
     int fd=open(path,O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(fd>=0);
     assert(write(fd,"plan",4)==4); close(fd);
     unsigned before=descriptors();
@@ -89,7 +90,7 @@ static void native_open_plans(struct md_filesystem *fs,const char *parent) {
     assert(r.error==-EXDEV && !origin && r.fd<0);
     q.flags=O_RDONLY;
     md_fs_execute(fs,&q,&r,NULL); assert(r.error==-ENOENT);
-    snprintf(path,sizeof(path),"%s/no-search",parent); assert(!mkdir(path,0000));
+    test_format(path,sizeof(path),"%s/no-search",parent); assert(!mkdir(path,0000));
     q.path[0]="/rw/no-search"; q.flags=O_PATH|O_NOFOLLOW;
     md_fs_execute(fs,&q,&r,&(struct md_fs_output){.origin=&origin,.native_open_plan=1});
     assert(!r.error && origin && r.fd<0 && r.open_completion.kind==MD_OPEN_PLAN);
@@ -203,10 +204,10 @@ static void root_aliases(struct md_filesystem *fs) {
 void test_mount_alias(const char *base) {
     unsigned before=descriptors();
     char store[PATH_MAX], host[2][PATH_MAX], files[2][PATH_MAX];
-    snprintf(store,sizeof(store),"%s/alias-store",base);
+    test_format(store,sizeof(store),"%s/alias-store",base);
     for (unsigned i=0;i<2;++i) {
-        snprintf(host[i],sizeof(host[i]),"%s/alias-source-%u",base,i); assert(!mkdir(host[i],0700));
-        snprintf(files[i],sizeof(files[i]),"%s/value",host[i]);
+        test_format(host[i],sizeof(host[i]),"%s/alias-source-%u",base,i); assert(!mkdir(host[i],0700));
+        test_format(files[i],sizeof(files[i]),"%s/value",host[i]);
     }
     struct md_inode_store *s; assert(!md_inode_store_open(store,1,&s));
     assert(!md_inode_mkdir(s,-1,"/rw",0700) && !md_inode_mkdir(s,-1,"/ro",0700));

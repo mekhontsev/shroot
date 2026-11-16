@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <stddef.h>
 #include "../src/event_wait.h"
 #include <errno.h>
 #include <fcntl.h>

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_format.h"
 #include "fs_mount_internal.h"
 #include "inode_internal.h"
 #include <assert.h>
@@ -21,10 +22,10 @@ static struct md_fs_result request(struct md_filesystem *fs,unsigned operation,c
 }
 static void dynamic_queries(const char *base) {
     char store[PATH_MAX],native[PATH_MAX],host[PATH_MAX],targets[24][32];
-    snprintf(store,sizeof(store),"%s/query-store",base);
-    snprintf(native,sizeof(native),"%s/query-native",base); assert(!mkdir(native,0700));
-    snprintf(host,sizeof(host),"%s/link",native); assert(!symlink("native",host));
-    snprintf(host,sizeof(host),"%s/native",native);
+    test_format(store,sizeof(store),"%s/query-store",base);
+    test_format(native,sizeof(native),"%s/query-native",base); assert(!mkdir(native,0700));
+    test_format(host,sizeof(host),"%s/link",native); assert(!symlink("native",host));
+    test_format(host,sizeof(host),"%s/native",native);
     int hostfd=open(host,O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(hostfd>=0);
     assert(write(hostfd,"native",6)==6); close(hostfd);
     struct md_inode_store *s=NULL; assert(!md_inode_store_open(store,1,&s));
@@ -35,7 +36,7 @@ static void dynamic_queries(const char *base) {
     struct md_identity root=md_identity_new(0,0); s->identity=&root;
     struct md_filesystem fs={.store=s};
     for (unsigned i=0;i<24;++i) {
-        snprintf(targets[i],sizeof(targets[i]),"/mount%u",i);
+        test_format(targets[i],sizeof(targets[i]),"/mount%u",i);
         assert(!md_inode_mkdir(s,-1,targets[i],0700));
     }
     struct md_fs_attachment attachment={native,targets[0],0};
@@ -119,8 +120,8 @@ static void dynamic_queries(const char *base) {
 void test_path_walk(const char *base) {
     dynamic_queries(base);
     char store[PATH_MAX], native[PATH_MAX], path[PATH_MAX]="", leaf[PATH_MAX];
-    snprintf(store,sizeof(store),"%s/walk-store",base);
-    snprintf(native,sizeof(native),"%s/walk-native",base);
+    test_format(store,sizeof(store),"%s/walk-store",base);
+    test_format(native,sizeof(native),"%s/walk-native",base);
     assert(!mkdir(native,0700));
     struct md_inode_store *s=NULL; assert(!md_inode_store_open(store,1,&s));
     assert(!md_inode_mkdir(s,-1,"/native",0700));
@@ -130,7 +131,7 @@ void test_path_walk(const char *base) {
     uint64_t admissions=0;
     for (unsigned depth=1;depth<=24;++depth) {
         strcat(path,"/dir"); assert(!md_inode_mkdir(s,-1,path,0700));
-        snprintf(leaf,sizeof(leaf),"%s/value",path);
+        test_format(leaf,sizeof(leaf),"%s/value",path);
         int fd=md_inode_create(s,-1,leaf,0600); assert(fd>=0); close(fd);
         struct md_inode_statistics stats={0}; md_inode_measure(s,&stats);
         struct md_view_location result;

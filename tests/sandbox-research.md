@@ -20,7 +20,7 @@ SIGSYS handlers and alternate stacks belong to the application. See the
 Use a disposable prepared glibc store and an immutable staged runtime:
 
 ```sh
-sh tests/build-sandbox-fixtures.sh BUILD
+python tests/build_prepared.py BUILD --native-build NATIVE_BUILD
 python tests/test_sandbox.py BUILD \
   --runtime IMMUTABLE_STAGED_HELPERS --store DISPOSABLE_GLIBC_STORE
 sh tests/build-hybrid-fixture.sh BUILD

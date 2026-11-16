@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <stdint.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/audit.h>

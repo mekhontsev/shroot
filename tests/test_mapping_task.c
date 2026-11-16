@@ -17,6 +17,7 @@
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
+#include <linux/ptrace.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>

@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <linux/filter.h>
 #include <linux/futex.h>
+#include <sys/ptrace.h>
 #include <linux/ptrace.h>
 #include <linux/seccomp.h>
 #include <setjmp.h>
@@ -15,7 +16,6 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
-#include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/wait.h>

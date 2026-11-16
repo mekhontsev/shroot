@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_format.h"
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>
@@ -11,6 +12,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/epoll.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 struct upload { int fd,result,error; struct ff_effect effect; };
@@ -38,10 +40,10 @@ int main(int argc,char **argv) {
     }
     assert(!ioctl(ui,UI_DEV_CREATE));
     char sysname[32],path[128]; assert(ioctl(ui,UI_GET_SYSNAME(sizeof(sysname)),sysname)>0);
-    snprintf(path,sizeof(path),"/sys/class/input/%s",sysname);
+    test_format(path,sizeof(path),"/sys/class/input/%s",sysname);
     DIR *dir=opendir(path); assert(dir); struct dirent *e; int ev=-1;
     while ((e=readdir(dir))) if (!strncmp(e->d_name,"event",5)) {
-        snprintf(path,sizeof(path),"/dev/input/%s",e->d_name); ev=open(path,O_RDWR|O_NONBLOCK); break;
+        test_format(path,sizeof(path),"/dev/input/%s",e->d_name); ev=open(path,O_RDWR|O_NONBLOCK); break;
     }
     closedir(dir); assert(ev>=0); puts("CREATED virtual evdev through sysfs");
     if (argc==2 && !strcmp(argv[1],"--hotplug")) {
@@ -57,7 +59,7 @@ int main(int argc,char **argv) {
     struct epoll_event interest={.events=EPOLLIN,.data.fd=ev},ready;
     assert(!epoll_ctl(ep,EPOLL_CTL_ADD,ev,&interest));
     assert(epoll_wait(ep,&ready,1,0)==1 && ready.events==EPOLLIN); close(ep);
-    assert(read(ev,(void *)1,sizeof(frame))==-1 && errno==EFAULT);
+    assert(syscall(SYS_read,ev,(void *)1,sizeof(frame))==-1 && errno==EFAULT);
     puts("READ copy rejected, waiting for preserved input");
     struct input_event pressed=receive(ev); assert(pressed.code==BTN_SOUTH && pressed.value==1);
     assert(receive(ev).type==EV_SYN);

@@ -85,7 +85,7 @@ static void proc_files(void) {
     char value[256]; snprintf(value,sizeof(value),"%s\n",names.sysname); content(readonly,value); close(readonly);
     assert(open("/proc/sys/kernel/ostype",O_WRONLY)<0 && errno==EACCES);
     assert(access(path,X_OK)<0 && errno==EACCES);
-    assert(pwrite(fd,(void *)1,5,0)<0 && errno==EFAULT); content(fd,"parent\n");
+    assert(syscall(SYS_pwrite64,fd,(void *)1,5,0)<0 && errno==EFAULT); content(fd,"parent\n");
     struct iovec vec[]={{"joined",6},{"-name\n",6}};
     assert(writev(fd,vec,2)==12); content(fd,"joined-name\n");
     assert(lseek(fd,0,SEEK_CUR)==12);

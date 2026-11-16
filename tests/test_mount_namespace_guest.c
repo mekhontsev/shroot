@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <linux/stat.h>
 #include <sched.h>
 #include <signal.h>

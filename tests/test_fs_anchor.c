@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_format.h"
 #include "fs_mount_internal.h"
 #include "inode_internal.h"
 #include "fd_messages.h"
@@ -267,11 +268,11 @@ static void empty_views(struct md_inode_store *s) {
 static void store_custody(const char *base) {
     unsigned before=descriptors();
     char lower[PATH_MAX], upper[PATH_MAX], moved[PATH_MAX], host[PATH_MAX], file[PATH_MAX];
-    snprintf(lower,sizeof(lower),"%s/custody-lower",base);
-    snprintf(upper,sizeof(upper),"%s/custody-upper",base);
-    snprintf(moved,sizeof(moved),"%s/custody-moved",base);
-    snprintf(host,sizeof(host),"%s/custody-host",base); assert(!mkdir(host,0700));
-    snprintf(file,sizeof(file),"%s/value",host); contents(file);
+    test_format(lower,sizeof(lower),"%s/custody-lower",base);
+    test_format(upper,sizeof(upper),"%s/custody-upper",base);
+    test_format(moved,sizeof(moved),"%s/custody-moved",base);
+    test_format(host,sizeof(host),"%s/custody-host",base); assert(!mkdir(host,0700));
+    test_format(file,sizeof(file),"%s/value",host); contents(file);
     struct md_inode_store *image=NULL, *store=NULL, *probe=NULL;
     assert(!md_inode_store_open(lower,1,&image) && !md_inode_store_open(upper,1,&store));
     assert(!md_inode_mkdir(image,-1,"/native",0700));
@@ -351,15 +352,15 @@ void test_fs_anchor(const char *base) {
     store_custody(base);
     unsigned before=descriptors();
     char store[PATH_MAX],host[2][PATH_MAX],path[PATH_MAX],next[PATH_MAX];
-    snprintf(store,sizeof(store),"%s/anchor-store",base);
+    test_format(store,sizeof(store),"%s/anchor-store",base);
     for (unsigned i=0; i<2; ++i) {
-        snprintf(host[i],sizeof(host[i]),"%s/anchor-source-%u",base,i); assert(!mkdir(host[i],0700));
-        snprintf(path,sizeof(path),"%s/value",host[i]); contents(path);
+        test_format(host[i],sizeof(host[i]),"%s/anchor-source-%u",base,i); assert(!mkdir(host[i],0700));
+        test_format(path,sizeof(path),"%s/value",host[i]); contents(path);
     }
-    snprintf(path,sizeof(path),"%s/child",host[0]); assert(!mkdir(path,0700));
-    snprintf(path,sizeof(path),"%s/relative",host[0]); assert(!symlink("child/value",path));
-    snprintf(path,sizeof(path),"%s/absolute",host[0]); assert(!symlink("/mnt/child/value",path));
-    snprintf(path,sizeof(path),"%s/confined",host[0]); assert(!symlink("/child/value",path));
+    test_format(path,sizeof(path),"%s/child",host[0]); assert(!mkdir(path,0700));
+    test_format(path,sizeof(path),"%s/relative",host[0]); assert(!symlink("child/value",path));
+    test_format(path,sizeof(path),"%s/absolute",host[0]); assert(!symlink("/mnt/child/value",path));
+    test_format(path,sizeof(path),"%s/confined",host[0]); assert(!symlink("/child/value",path));
     struct md_inode_store *s; assert(!md_inode_store_open(store,1,&s));
     struct md_fs_attachment prepared={.source=host[0],.target="/prepared"};
     struct md_filesystem preparation={.store=s};
@@ -425,7 +426,7 @@ void test_fs_anchor(const char *base) {
     assert(dup2(md_fs_anchor_fd(old_child),duplicate)==duplicate);
     r=request(&current,file,duplicate,MD_FS_FSTAT,NULL,0,0,NULL); assert(r.error==-ESTALE);
     close(duplicate);
-    snprintf(path,sizeof(path),"%s/value",host[0]);
+    test_format(path,sizeof(path),"%s/value",host[0]);
     int other=open(path,O_RDWR|O_CLOEXEC); assert(other>=0);
     assert(!flock(data,LOCK_EX|LOCK_NB));
     assert(flock(other,LOCK_EX|LOCK_NB)<0 && errno==EWOULDBLOCK);
@@ -451,8 +452,8 @@ void test_fs_anchor(const char *base) {
     assert(!r.error && r.info.mount_id==original.mounts->base.id);
     assert(!strcmp(s->root_id,root.object));
     assert(!md_fs_root_select(&current,&(struct md_fs_location){0}));
-    snprintf(path,sizeof(path),"%s/child",host[0]);
-    snprintf(next,sizeof(next),"%s/moved",host[0]); assert(!rename(path,next));
+    test_format(path,sizeof(path),"%s/child",host[0]);
+    test_format(next,sizeof(next),"%s/moved",host[0]); assert(!rename(path,next));
     opens(&current,old,"moved/value",O_RDWR,0,-EROFS);
     opens(&current,old_child,"../value",O_RDWR,0,0);
     md_fs_mounts_close(&original);

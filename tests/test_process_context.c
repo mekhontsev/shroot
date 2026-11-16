@@ -41,7 +41,7 @@ static void routed(const struct md_fs *fs, int expected, int other) {
     strcpy(address.sun_path, "/same/guest/socket");
     unsigned long args[6] = {client, (unsigned long)&address,
         offsetof(struct sockaddr_un, sun_path) + strlen(address.sun_path) + 1};
-    assert(md_socket_call(fs, "/test", SYS_connect, args) == 0);
+    assert(md_socket_call(fs, "/test", SYS_connect, args, 0) == 0);
     /* EVENT_WAIT: the selected listener must receive this exact connection. */
     assert(md_event_wait_fd(expected, POLLIN, md_event_now() + 5000000000LL) == 0);
     int accepted = accept4(expected, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);

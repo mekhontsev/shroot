@@ -338,6 +338,7 @@ static void publication_admission(void) {
 }
 static void registry_growth(void) {
     enum { SITES=256 };
+    struct md_svc_code_pool pools[MD_SVC_CODE_POOLS]={0};
     size_t size=(MD_SVC_CODE_POOLS+1)*MD_SVC_CODE_BYTES;
     publication_code=mmap(NULL,size,PROT_READ|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
     assert(publication_code!=MAP_FAILED); publication_size=size;
@@ -346,7 +347,7 @@ static void registry_growth(void) {
     struct md_svc_registry r={.frames=MD_SVC_POOL_BASE,.dispatch=source+8,
         .checkpoint=(uintptr_t)md_svc_signal_checkpoint,
         .pool_count=MD_SVC_CODE_POOLS,
-        .pools=(struct md_svc_code_pool[MD_SVC_CODE_POOLS]){0}};
+        .pools=pools};
     for (unsigned i=0;i<r.pool_count;++i)
         r.pools[i].address=source+(i+1)*MD_SVC_CODE_BYTES;
     uint32_t original[]={0xd4000001,0xd503201f};
@@ -788,7 +789,8 @@ int main(void) {
     guard_recovery();
     lazy_stack_guards();
     revoked_frames();
-    struct md_svc_registry empty={.count=2,.disabled=1,.sites=(struct md_svc_site[2]){0}};
+    struct md_svc_site empty_sites[2]={0};
+    struct md_svc_registry empty={.count=2,.disabled=1,.sites=empty_sites};
     assert(!md_svc_registry_resident(NULL) && !md_svc_registry_resident(&empty));
     struct md_svc_registry registry={.frames=0x800000,.pool_count=1,.count=2,
         .pools=(struct md_svc_code_pool[]){{.address=0x40000,.used=0x1000}},

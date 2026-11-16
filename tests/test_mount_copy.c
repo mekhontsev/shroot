@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_format.h"
 #include "fs_mount_internal.h"
 #include "inode_internal.h"
 #include "resource_order.h"
@@ -92,14 +93,14 @@ static void detached_copy(struct md_inode_store *store,const char *source) {
 void test_mount_copy(const char *base) {
     unsigned before=descriptors();
     char store[PATH_MAX], source[2][PATH_MAX], path[PATH_MAX], moved[PATH_MAX];
-    snprintf(store,sizeof(store),"%s/copy-store",base);
+    test_format(store,sizeof(store),"%s/copy-store",base);
     for (unsigned i=0; i<2; ++i) {
-        snprintf(source[i],sizeof(source[i]),"%s/copy-source-%u",base,i);
+        test_format(source[i],sizeof(source[i]),"%s/copy-source-%u",base,i);
         assert(!mkdir(source[i],0700));
     }
-    snprintf(path,sizeof(path),"%s/scope",source[0]); assert(!mkdir(path,0700));
-    snprintf(path,sizeof(path),"%s/scope/child",source[0]); assert(!mkdir(path,0700));
-    snprintf(path,sizeof(path),"%s/value",source[1]);
+    test_format(path,sizeof(path),"%s/scope",source[0]); assert(!mkdir(path,0700));
+    test_format(path,sizeof(path),"%s/scope/child",source[0]); assert(!mkdir(path,0700));
+    test_format(path,sizeof(path),"%s/value",source[1]);
     int fd=open(path,O_CREAT|O_RDWR|O_CLOEXEC,0600); assert(fd>=0);
     assert(write(fd,"value",5)==5); close(fd);
     struct md_inode_store *store_owner=NULL; assert(!md_inode_store_open(store,1,&store_owner));
@@ -114,9 +115,9 @@ void test_mount_copy(const char *base) {
     struct md_fs_location root; assert(!md_fs_root_capture(&fs,scope,NULL,&root)); close(scope);
     /* Populate a cache that the copied topology must not duplicate. */
     for (unsigned i=0; i<32; ++i) {
-        snprintf(path,sizeof(path),"%s/cache-%u",source[1],i);
+        test_format(path,sizeof(path),"%s/cache-%u",source[1],i);
         fd=open(path,O_CREAT|O_RDWR|O_CLOEXEC,0600); assert(fd>=0); close(fd);
-        snprintf(path,sizeof(path),"/tree/scope/child/cache-%u",i);
+        test_format(path,sizeof(path),"/tree/scope/child/cache-%u",i);
         fd=opened(&fs,path,O_RDONLY); close(fd);
     }
     unsigned original_objects=fs.mounts->tree->objects;
@@ -162,7 +163,7 @@ void test_mount_copy(const char *base) {
     /* No readable/writable OFD is retained by either the object registry or a
      * tree copy. A closed writer delivers EOF, and a closed lock owner unlocks. */
     int locked=opened(&fs,"/tree/scope/child/value",O_RDWR);
-    snprintf(path,sizeof(path),"%s/value",source[1]);
+    test_format(path,sizeof(path),"%s/value",source[1]);
     int independent=open(path,O_RDWR|O_CLOEXEC); assert(independent>=0);
     assert(!flock(locked,LOCK_EX|LOCK_NB));
     assert(flock(independent,LOCK_EX|LOCK_NB)<0 && errno==EWOULDBLOCK);
@@ -184,8 +185,8 @@ void test_mount_copy(const char *base) {
     close(independent);
     md_fs_mounts_close(&retained);
 
-    snprintf(path,sizeof(path),"%s/scope",source[0]);
-    snprintf(moved,sizeof(moved),"%s/renamed",source[0]); assert(!rename(path,moved));
+    test_format(path,sizeof(path),"%s/scope",source[0]);
+    test_format(moved,sizeof(moved),"%s/renamed",source[0]); assert(!rename(path,moved));
     assert(!md_fs_root_select(&copy,&copied_root));
     md_fs_mounts_close(&fs);
     fd=opened(&copy,"/../../child/value",O_RDONLY);

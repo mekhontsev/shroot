@@ -107,7 +107,7 @@ static void captured_proc_identity(enum md_proc_file_kind kind,int snapshot) {
     close(fd);
     struct stat st;
     assert(!md_fs_proc_control_stat(&fs,md_proc_file_control(file),&st) && st.st_uid==1234);
-    assert(!!S_ISDIR(st.st_mode)==directory);
+    assert((S_ISDIR(st.st_mode)!=0)==directory);
     uint64_t inode=st.st_ino;
     assert(!md_proc_file_retained_stat(file,tasks,1,&st) && st.st_uid==1234 && st.st_ino==inode);
     struct md_control_opener opener={.identity=&before};

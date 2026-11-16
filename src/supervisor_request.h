@@ -4,6 +4,7 @@
 #include <asm/ptrace.h>
 #include <linux/audit.h>
 #include <linux/seccomp.h>
+#include <sys/ptrace.h>
 #include <linux/ptrace.h>
 
 /* Logical syscall input, independent of the transport that admitted it. */

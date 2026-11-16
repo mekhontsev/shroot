@@ -28,7 +28,7 @@ int main(void) {
     assert(native.stx_size==(uint64_t)original.st_size && native.stx_ino==original.st_ino);
     assert(native.stx_uid==original.st_uid && native.stx_gid==original.st_gid);
     assert(native.stx_nlink==original.st_nlink && native.stx_mode==original.st_mode);
-    assert(native.stx_blksize==original.st_blksize);
+    assert(original.st_blksize>=0 && native.stx_blksize==(uint64_t)original.st_blksize);
     assert(native.stx_atime.tv_sec==-123 && native.stx_atime.tv_nsec==456);
     assert(native.stx_mtime.tv_sec==original.st_mtim.tv_sec && native.stx_mtime.tv_nsec==999999999);
     assert(native.stx_ctime.tv_sec==789 && native.stx_ctime.tv_nsec==123456789);

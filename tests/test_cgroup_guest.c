@@ -730,7 +730,8 @@ int test_cgroup_guest(int pid_namespace) {
     char first; assert(read(statistics,&first,1)==1 && first=='c'); close(statistics);
     assert(!mkdir("/tmp/cgv2",0700) && !mkdir("/tmp/cgv1",0700));
     int r=mount("none","/tmp/cgv2","cgroup2",MS_NOSUID|MS_NOEXEC|MS_NODEV,NULL);
-    if (r) perror("cgroup2 mount"); assert(!r);
+    if (r) perror("cgroup2 mount");
+    assert(!r);
     assert(resource_value("/tmp/cgv2/cpu.stat","usage_usec ")>=100000);
     assert(!umount2("/tmp/cgv2",0));
     assert(!mount("none","/tmp/cgv2","cgroup2",MS_NOSUID|MS_NOEXEC|MS_NODEV|MS_REC|MS_RELATIME,NULL));

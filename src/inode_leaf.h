@@ -6,7 +6,7 @@ struct md_inode_store;
 struct mdi_node;
 struct mdi_path_pin;
 struct md_inode_birth;
-int mdi_leaf_id(const struct stat *,const char scope[33],char out[33]);
+int mdi_leaf_id(const struct stat *,const char *scope,char out[33]);
 int mdi_leaf_lookup(struct md_inode_store *,const struct mdi_node *parent,const char *name,struct mdi_node *,struct stat *,struct mdi_path_pin *);
 int mdi_leaf_descriptor(struct md_inode_store *,int,const struct stat *,struct mdi_node *);
 int mdi_leaf_promote(struct md_inode_store *,struct mdi_node *);

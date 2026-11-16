@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_format.h"
 #include "inode_internal.h"
 #include "inode_native.h"
 #include "inode_publication.h"
@@ -94,7 +95,7 @@ static void identities(void) {
         bits^=bits<<13; bits^=bits>>7; bits^=bits<<17;
         struct stat st={.st_dev=(dev_t)bits,.st_ino=(ino_t)~bits};
         char expected[33],actual[33];
-        snprintf(expected,sizeof(expected),"%016" PRIx64 "%016" PRIx64,(uint64_t)st.st_dev,(uint64_t)st.st_ino);
+        test_format(expected,sizeof(expected),"%016" PRIx64 "%016" PRIx64,(uint64_t)st.st_dev,(uint64_t)st.st_ino);
         assert(!mdi_leaf_id(&st,MDI_ROOT,actual) && !strcmp(actual,expected));
     }
     struct stat st={.st_dev=UINT64_C(0x0123456789abcdef),.st_ino=UINT64_C(0xfedcba9876543210)};
@@ -141,7 +142,7 @@ static void pinned_birth(int directory) {
     }
     mknod_error=0;
     int watch=inotify_init1(IN_NONBLOCK|IN_CLOEXEC); assert(watch>=0);
-    char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",directory);
+    char proc[64]; test_format(proc,sizeof(proc),"/proc/self/fd/%d",directory);
     assert(inotify_add_watch(watch,proc,IN_CREATE|IN_OPEN|IN_CLOSE)>0);
     int fd=mdi_native_pin_create(directory,"pinned",0,0,0644);
     if (fd==-EOPNOTSUPP) {
@@ -201,7 +202,7 @@ static void detached(int directory) {
     puts("PASS O_PATH and open-unlinked metadata retain inode/mmap/replacement isolation and can return to implicit metadata");
 }
 static void interrupted(int directory,int point,int error) {
-    char name[64]; snprintf(name,sizeof(name),"interrupt-%d-%d",point,error);
+    char name[64]; test_format(name,sizeof(name),"interrupt-%d-%d",point,error);
     int fd=mdi_native_create(directory,name,O_RDWR,0,0,0644); assert(fd>=0);
     reset();
     if (error) {
@@ -291,7 +292,7 @@ static void metadata_reads(int directory) {
 }
 static void watch(int directory) {
     int watch=inotify_init1(IN_NONBLOCK|IN_CLOEXEC); assert(watch>=0);
-    char path[64]; snprintf(path,sizeof(path),"/proc/self/fd/%d",directory);
+    char path[64]; test_format(path,sizeof(path),"/proc/self/fd/%d",directory);
     assert(inotify_add_watch(watch,path,IN_CREATE|IN_MOVED_FROM|IN_MOVED_TO|IN_DELETE)>=0);
     int fd=mdi_native_create(directory,"before",O_RDWR,0,0,0644); assert(fd>=0);
     assert(!renameat(directory,"before",directory,"after"));
@@ -437,7 +438,7 @@ static void birth_fallback(struct md_inode_store *s,int dir) {
         mknod_error=0;
         assert(pin>=0 && birth);
         assert(md_inode_stat(s,dir,"pin-fallback",0,&st)==-ENOENT);
-        char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",pin);
+        char proc[64]; test_format(proc,sizeof(proc),"/proc/self/fd/%d",pin);
         int fd=open(proc,O_RDWR|O_CLOEXEC); assert(fd>=0);
         assert(!md_inode_birth_commit(&birth) && !birth);
         assert(!md_inode_stat(s,dir,"pin-fallback",0,&st) && (st.st_mode&0777)==0644);
@@ -514,7 +515,7 @@ static void catalogue_absence(struct md_inode_store *s,int dir) {
     struct md_inode_statistics costs={0};
     md_inode_measure(s,&costs);
     for (unsigned i=0;i<128;++i) {
-        char name[40]; snprintf(name,sizeof(name),"unique-absent-%u",i);
+        char name[40]; test_format(name,sizeof(name),"unique-absent-%u",i);
         assert(md_inode_stat(s,dir,name,0,&st)==-ENOENT);
     }
     assert(costs.version.calls==128 && costs.step.calls==128 && !costs.transaction.calls);
@@ -730,7 +731,7 @@ static void block_birth_marker(enum md_inode_checkpoint point,void *context) {
     if (point!=MD_NAMESPACE_STAGED) return;
     struct md_inode_store *s=context;
     assert(s->event_sequence>0);
-    char name[64]; snprintf(name,sizeof(name),"events.%" PRId64,(int64_t)s->event_sequence);
+    char name[64]; test_format(name,sizeof(name),"events.%" PRId64,(int64_t)s->event_sequence);
     assert(!mkdirat(s->lifetime->root,name,0700));
 }
 static void catalogue_births(const char *path) {
@@ -745,7 +746,7 @@ static void catalogue_births(const char *path) {
         assert(pin>=0 && birth);
         struct stat st; assert(md_inode_stat(s,dir,"prepared",0,&st)==-ENOENT);
         if (!attempt) { assert(!md_inode_birth_discard(&birth) && !birth); close(pin); continue; }
-        char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",pin);
+        char proc[64]; test_format(proc,sizeof(proc),"/proc/self/fd/%d",pin);
         int fd=open(proc,O_RDWR|O_CLOEXEC); assert(fd>=0 && write(fd,"body",4)==4);
         if (attempt==2) {
             int competing=md_inode_create(s,dir,"prepared",0644); assert(competing>=0); close(competing);
@@ -769,7 +770,7 @@ static void catalogue_births(const char *path) {
     int result=md_inode_birth_commit(&birth);
     assert(result<0 && !birth);
     md_inode_observe(s,NULL,NULL);
-    char marker[64]; snprintf(marker,sizeof(marker),"events.%" PRId64,(int64_t)s->event_sequence);
+    char marker[64]; test_format(marker,sizeof(marker),"events.%" PRId64,(int64_t)s->event_sequence);
     assert(!unlinkat(s->lifetime->root,marker,AT_REMOVEDIR));
     struct stat published; assert(!md_inode_stat(s,dir,"marker-failure",0,&published));
     assert(!md_inode_unlink(s,dir,"marker-failure",0));
@@ -812,7 +813,7 @@ static void materialization_cost(const char *path) {
     for (unsigned pass=0;pass<2;++pass) {
         unsigned count=pass ? 128 : 32;
         for (;created<count;++created) {
-            char name[32]; snprintf(name,sizeof(name),"directory-%u",created);
+            char name[32]; test_format(name,sizeof(name),"directory-%u",created);
             assert(!md_inode_mkdir(s,-1,name,0755));
         }
         assert(!mdi_begin(s,1));
@@ -837,7 +838,7 @@ static void sealing(const char *path) {
     char id[33],later[33]; assert(!md_inode_object_id(s,fd,id));
     assert(!md_inode_store_seal(s) && !native_node(s,fd));
     assert(!md_inode_object_id(s,fd,later) && !strcmp(id,later));
-    char target[PATH_MAX]; snprintf(target,sizeof(target),"%s-copy",path);
+    char target[PATH_MAX]; test_format(target,sizeof(target),"%s-copy",path);
     assert(!md_inode_store_open(target,1,&copy) && !md_inode_snapshot(s,copy));
     int upper=md_inode_open(copy,-1,"data/file",O_RDWR,0); assert(upper>=0);
     assert(pwrite(upper,"upper",5,0)==5); close(upper);
@@ -857,7 +858,7 @@ static void overlay_events(struct md_inode_store *base,int upper,struct md_inode
     struct md_inode_birth *birth=NULL;
     int pin=md_inode_plan_open(view,merged,"before",O_CREAT|O_EXCL|O_RDWR,0644,0,&(struct md_open_completion){0},1,&birth);
     assert(pin>=0 && birth);
-    char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",pin);
+    char proc[64]; test_format(proc,sizeof(proc),"/proc/self/fd/%d",pin);
     int fd=open(proc,O_RDWR|O_CLOEXEC); assert(fd>=0);
     assert(!md_inode_birth_commit(&birth) && native_node(view,fd)); close(pin); close(fd);
     assert(!md_inode_rename(view,merged,"before",merged,"after",0));
@@ -974,11 +975,11 @@ int main(int argc,char **argv) {
     for (int point=1;point<=4;++point) for (int error=0;error<2;++error) interrupted(directory,point,error);
     puts("PASS SIGKILL and IO failures at all four metadata transition steps retain old-or-new logical permissions");
     reset(); malformed(directory); metadata_reads(directory); watch(directory); close(directory);
-    char store[PATH_MAX]; snprintf(store,sizeof(store),"%s/store",argv[1]); catalogue(store);
-    snprintf(store,sizeof(store),"%s/hybrid",argv[1]); hybrid(store);
-    snprintf(store,sizeof(store),"%s/births",argv[1]); catalogue_births(store);
-    snprintf(store,sizeof(store),"%s/materialization",argv[1]); materialization_cost(store);
-    snprintf(store,sizeof(store),"%s/sealed",argv[1]); sealing(store);
-    snprintf(store,sizeof(store),"%s/overlay",argv[1]); overlays(store);
+    char store[PATH_MAX]; test_format(store,sizeof(store),"%s/store",argv[1]); catalogue(store);
+    test_format(store,sizeof(store),"%s/hybrid",argv[1]); hybrid(store);
+    test_format(store,sizeof(store),"%s/births",argv[1]); catalogue_births(store);
+    test_format(store,sizeof(store),"%s/materialization",argv[1]); materialization_cost(store);
+    test_format(store,sizeof(store),"%s/sealed",argv[1]); sealing(store);
+    test_format(store,sizeof(store),"%s/overlay",argv[1]); overlays(store);
     return 0;
 }

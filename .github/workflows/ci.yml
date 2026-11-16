@@ -74,7 +74,8 @@ jobs:
         run: |
           python3 -c 'import json,sys; sys.path.insert(0,"tests"); from executors.local import host_identity; print(json.dumps(host_identity(),indent=2))' > build/test/host.json
           test "$(id -u)" -ne 0
-      - run: cmake --build build/test --target shroot-check-fixtures --parallel 4
+      - run: cmake --build build/test --parallel 4
+      - run: cmake --build build/test --target shroot-prepared-fixtures --parallel 4
       - name: Run component and native integration contracts
         run: ctest --test-dir build/test --output-on-failure --parallel 2
       - name: Build production runtime without test hooks

@@ -388,7 +388,7 @@ static void file_capabilities(const char *self) {
     assert(fgetxattr(fd,"security.capability",copy,sizeof(copy))==sizeof(value) && !memcmp(value,copy,sizeof(value)));
     errno=0; assert(fsetxattr(fd,"security.capability",value,sizeof(value),XATTR_CREATE)==-1 && errno==EEXIST);
     errno=0; assert(fgetxattr(fd,"security.capability",copy,1)==-1 && errno==ERANGE);
-    errno=0; assert(fgetxattr(fd,"security.capability",(void *)1,sizeof(copy))==-1 && errno==EFAULT);
+    errno=0; assert(syscall(SYS_fgetxattr,fd,"security.capability",(void *)1,sizeof(copy))==-1 && errno==EFAULT);
     ssize_t size=flistxattr(fd,NULL,0); assert(size>0 && (size_t)size<sizeof(buffer));
     assert(flistxattr(fd,buffer,sizeof(buffer))==size);
     int found=0; for (size_t i=0;i<(size_t)size;i+=strlen(buffer+i)+1) found+=!strcmp(buffer+i,"security.capability");
