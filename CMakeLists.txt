@@ -192,18 +192,11 @@ guest_freestanding(bootstrap)
 target_sources(bootstrap PRIVATE ${src}/arguments.c ${src}/guest_copy.S ${src}/cooperative_entry.c ${src}/cooperative_native.S)
 target_sources(bootstrap PRIVATE ${src}/svc_runtime.c ${src}/svc_payload.c)
 set_source_files_properties(${src}/cooperative_entry.c PROPERTIES COMPILE_OPTIONS -mno-outline-atomics)
-target_compile_options(bootstrap PRIVATE -mgeneral-regs-only)
-include(CheckLinkerFlag)
-check_linker_flag(C "-Wl,--image-base=0x2000000000" SHROOT_LINKER_IMAGE_BASE)
-if(SHROOT_LINKER_IMAGE_BASE)
-    target_link_options(bootstrap PRIVATE -Wl,--image-base=0x2000000000)
-else()
-    check_linker_flag(C "-Wl,-Ttext-segment=0x2000000000" SHROOT_LINKER_TEXT_SEGMENT)
-    if(NOT SHROOT_LINKER_TEXT_SEGMENT)
-        message(FATAL_ERROR "The linker cannot place the freestanding bootstrap at its fixed image address")
-    endif()
-    target_link_options(bootstrap PRIVATE -Wl,-Ttext-segment=0x2000000000)
-endif()
+target_compile_options(bootstrap PRIVATE -mgeneral-regs-only -fPIE)
+target_compile_definitions(bootstrap PRIVATE MD_BOOTSTRAP_PIE)
+target_sources(bootstrap PRIVATE ${src}/bootstrap_relocate.c)
+set_property(TARGET bootstrap PROPERTY LINK_OPTIONS -static-pie -nostdlib
+    -Wl,-z,defs -Wl,-z,noexecstack -Wl,-z,max-page-size=16384)
 
 guest_executable(supervisor ${src}/supervisor.c ${src}/arguments.c ${src}/task_resources.c ${src}/launch_registry.c ${src}/launch_peer.c ${src}/process_owner.c ${src}/interception_memory.c ${src}/interception_buffers.c ${src}/guest_domain.c
     ${src}/mount_copy_service.c ${src}/uts_namespace.c ${src}/ipc_namespace_services.c
@@ -222,7 +215,7 @@ set(supervisor_owners
     ${src}/supervisor_actors.c ${src}/supervisor_memory.c
     ${src}/supervisor_fs.c ${src}/supervisor_proc.c
     ${src}/supervisor_notifications.c ${src}/supervisor_io.c
-    ${src}/supervisor_debug.c ${src}/supervisor_robust.c)
+    ${src}/supervisor_debug.c ${src}/supervisor_robust.c ${src}/supervisor_image.c)
 target_sources(supervisor PRIVATE ${supervisor_owners})
 target_sources(bootstrap PRIVATE ${src}/network_calls.c ${src}/network_packet.c)
 target_sources(supervisor PRIVATE ${capsules})

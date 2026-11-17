@@ -18,6 +18,13 @@ initial stack/auxv, and enters the distribution's stock glibc/musl loader. Stati
 ELF and raw SVC programs use the same entry admission. No PRoot process, external
 container manager or SELinux change is required.
 
+The freestanding bootstrap is a self-relocating PIE. Each launch retains its
+first placement; the exec owner restores that placement before relocation and
+guest entry on subsequent execs, preserving inherited seccomp service addresses.
+The common ELF validator supplies its segment layout. File-backed segments move
+without copying their code, and writable state belongs to each process. Separate
+launches need no fixed shared address, nesting flag or alternative helper binary.
+
 Lazy machine-code entry admits observed AArch64 SVC sites in unmodified programs,
 including stock libc and Go, by default for inode-store launches. It shares the
 [cooperative channel](cooperative-entry.md) and syscall owners, not a second
@@ -332,9 +339,11 @@ ordinary syscalls do not acquire global entry tracing. Owned completion gates
 finish the original admitted request without replaying it through a later filter.
 This admission/notification lifecycle is shared by app UID and UID 2000;
 only translation of Android's inherited SIGSYS policy is app-UID-specific.
-`guest_debugger` supplies typed seccomp events only when its host explicitly
-owns guest-filter admission. The production supervisor does not enable that
-TRACESECCOMP capability.
+`guest_debugger` supplies typed TRACESECCOMP events through the supervisor's
+guest-filter admission owner. Tracer changes reenter that same policy path;
+service replay is not a second guest syscall or debugger boundary. Notification
+and TRACE ingress restore a resident call's original identity before policy
+publication.
 
 See [namespace providers](namespace-providers.md) and
 [image admission](interception.md#image-admission-and-logical-credentials).

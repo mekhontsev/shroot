@@ -28,6 +28,7 @@ long md_pid_signal_group(int selector,int signal);
 enum { MD_PIDFD_DONE=4 };
 struct md_pidfd_frame { struct md_fd_capture_frame capture; long result; siginfo_t info; };
 long md_pidfd_signal(const unsigned long *);
+long md_pidfd_copy_begin(const unsigned long *);
 long md_pidfd_namespace(const unsigned long *);
 long md_setns(const unsigned long *);
 long md_pid_terminal(const unsigned long *);

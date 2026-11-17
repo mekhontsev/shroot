@@ -81,7 +81,14 @@ static int dispatch(struct md_fs_context *context, const struct md_fs_packet *q,
     for (unsigned i=0;i<2;++i) {
         request.origin[i]=md_fd_exchange_input(exchange,i);
         if (q->cwd & (1U<<i)) request.directory[i]=md_fs_anchor_fd(request.origin[i]);
-        else if (q->descriptors & (1U<<i)) request.directory[i]=input->fd[index++];
+        else if (q->descriptors & (1U<<i)) {
+            int fd=input->fd[index++];
+            /* The authenticated exchange captures the same table turn as
+             * SCM_RIGHTS. Path operations use its retained dentry, not a typed
+             * provider's carrier; data operations still need the actual OFD. */
+            request.directory[i]=request.origin[i] && !(md_fs_operation_data_inputs(q->operation)&(1U<<i))
+                ? md_fs_anchor_fd(request.origin[i]) : fd;
+        }
     }
     struct md_fs_result result;
     struct md_fs_output buffer = {.data = out->data,

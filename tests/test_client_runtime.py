@@ -94,10 +94,18 @@ def main():
         attachment.mkdir()
         (attachment / 'token').write_text('read-only')
         for entry in ('0', '1'):
-            for repeat in range(2):
-                subprocess.run(cli + ['exec', str(instance), '--bind-ro-create', str(attachment),
-                                      '/readonly-' + entry, '--env', 'SHROOT_MACHINE_ENTRY=' + entry,
-                                      '--', '/bin/client-guest', 'readonly-bind', '/readonly-' + entry],
+            launches = [cli + ['exec', str(instance)],
+                        [str(runtime / 'libshroot_guest_run.so'), '--store', str(instance)]]
+            for owner, launch in enumerate(launches):
+                target = f'/readonly-{entry}-{owner}'
+                for repeat in range(2):
+                    subprocess.run(launch + ['--bind-ro-create', str(attachment), target,
+                                            '--env', 'SHROOT_MACHINE_ENTRY=' + entry,
+                                            '--', '/bin/client-guest', 'readonly-bind', target],
+                                   check=True, timeout=30)
+                subprocess.run(launch + ['--bind-create', str(attachment), '/native',
+                                        '--env', 'SHROOT_MACHINE_ENTRY=' + entry,
+                                        '--', '/bin/client-guest', 'native-tmpfile', '/native'],
                                check=True, timeout=30)
         parent_lifetime(cli, instance)
         for command in ([*cli, 'exec', str(instance)], [str(runtime / 'libshroot_guest_run.so'), '--store', str(instance)]):

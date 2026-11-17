@@ -50,6 +50,24 @@ the same output truncation and rejected-copy behavior.
 Supported requests include register sets, memory peek/poke, signal information
 and masks, continue, single step, syscall entry/exit information, interrupt,
 listen, detach, kill, event messages and fork/vfork/clone/exec/exit options.
+TRACESECCOMP exposes the original filter's cookie and syscall context, separately
+from runtime selectors. The ARM64 syscall-number regset is independent of x8;
+tracer changes are re-admitted through the common policy path. Kernel admission
+retains original x0 separately from the tracer-visible execution argument.
+Changed PCs replay through an owned SVC before restoring the selected guest PC
+for policy checks; they do not require executing that address again.
+SYSEMU suppresses the selected syscall before guest filtering. Switching to it
+at a fork event omits the parent's syscall exit; switching at TRACE finishes
+the already admitted syscall before observing the next entry. Internal replay
+cannot inherit debugger stepping or syscall suppression.
+Interrupting an already stopped
+seized inferior retains a pending stop for its next continuation.
+
+PEEKSIGINFO reads private or shared native queues without consuming signals or
+their retained sender metadata. Queue traversal and PID/UID translation reuse
+the signal owners; offsets, partial copies and invalid flags retain their Linux
+contracts. A queue containing a deferred logical SIGSYS currently returns
+EOPNOTSUPP instead of silently omitting that signal.
 Attach/interrupt stops are published at a guest boundary, outside adapter code.
 Stop demand survives intermediate preparation and borrowed-task stops. Before
 an interruptible service wait resumes, an outstanding debugger stop is handed
@@ -205,8 +223,12 @@ than waiting indefinitely for an exit that still needs ptrace continuation.
 ## Limitations
 
 This is a bounded nested-debugging implementation, not complete ptrace emulation.
-Attach cannot cross supervised launches or target Android processes. TRACESECCOMP,
-pidfd-based virtual waits and __WNOTHREAD wait selection are not implemented.
+Attach cannot cross supervised launches or target Android processes.
+Pidfd-based virtual waits and __WNOTHREAD wait selection are not implemented.
+SYSEMU_SINGLESTEP and deferred logical SIGSYS queue merging still need
+implementation. Seccomp-PC mutation coverage includes skipping the instruction
+after SVC, independently and together with argument changes, not arbitrary
+debugger control-flow rewrites.
 Non-leader debugger exec, as distinct from inferior exec, needs dedicated lifecycle coverage.
 Unsupported ptrace requests remain explicit errors; the supervisor never
 relinquishes its physical tracing ownership.

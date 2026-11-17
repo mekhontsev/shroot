@@ -396,7 +396,7 @@ int control_file_capture(pid_t actor,const char *path,struct md_fd_object **out)
         file=proc_file_capture(target,selected.descriptor);
         if (!file) return 0;
         if (target!=t && !proc_allowed(t->pid,target->pid)) { md_proc_file_release(file); return -EACCES; }
-        if (control_mount_path(file)) { md_proc_file_release(file); return 0; }
+        if (*selected.tail && control_mount_path(file)) { md_proc_file_release(file); return 0; }
         if (*selected.tail) { md_proc_file_release(file); return -ENOTDIR; }
     } else {
         if (target!=t && !proc_allowed(t->pid,target->pid)) return -EACCES;
@@ -557,8 +557,11 @@ static void proc_file_request(struct thread *t, const struct md_proc_open_reques
         struct md_proc_file *source=operation==MD_PROC_FILE_REOPEN && target
             ? proc_file_capture(target,(int)q->selector) : NULL;
         if (source) kind=(enum md_proc_kind)(MD_PROC_UID_MAP+md_proc_file_kind(source));
-        if (!selected.identity) reply.error=operation==MD_PROC_FILE_OPEN && md_proc_native_task(kind) ? -EXDEV : -ENOENT;
-        else if (operation==MD_PROC_FILE_REOPEN && !source) reply.error=-EBADF;
+        if (operation==MD_PROC_FILE_REOPEN && target && !target->born) reply.error=-ENOENT;
+        else if (operation==MD_PROC_FILE_REOPEN && target!=t && target
+                && !proc_allowed(t->pid,target->pid)) reply.error=-EACCES;
+        else if (operation==MD_PROC_FILE_REOPEN && !source) reply.error=-EXDEV;
+        else if (!selected.identity) reply.error=operation==MD_PROC_FILE_OPEN && md_proc_native_task(kind) ? -EXDEV : -ENOENT;
         else if (!source && kind==MD_PROC_NS_UNSUPPORTED) reply.error=-ENOENT;
         else if ((!source && !md_proc_control_kind(kind)) || t->proc.image_fd>=0) reply.error=-EINVAL;
         else if (source && target!=t && !proc_allowed(t->pid,target->pid)) reply.error=-EACCES;

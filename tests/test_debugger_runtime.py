@@ -289,6 +289,8 @@ print('PASS gdb-jit')
 
 def commands(*, proot=False):
     cases = [(name, [TARGET, name]) for name in ('attach', 'seize', 'trace-exit', 'syscall', 'syscall-edit-close', 'exec', 'syscall-exec', 'syscall-signal', 'credential-transition', 'mixed', 'wait-signal',
+                                               'seccomp-trace', 'syscall-emulation', 'seccomp-interrupt',
+                                               'pidfd-copy', 'proc-fd', 'service-gates', 'pending-peek',
                                                'kill-stopped', 'owner-exit', 'exitkill', 'thread-exec', 'syscall-thread-exec', 'clone-untraced', 'shared-files-debugger', 'self-dump-threads', 'self-dump-io', 'perf-event')]
     cases += [('filtered-' + name, [TARGET, 'filtered-' + name])
               for name in ('exec', 'syscall-exec', 'thread-exec', 'syscall-thread-exec')]

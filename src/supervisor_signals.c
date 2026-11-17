@@ -298,6 +298,7 @@ void deliver_signal(pid_t pid,int sig,int restored,struct md_task_signal_stop *s
 void resume_signal(pid_t pid,int sig,const struct md_signal_origin *origin) {
     /* Debugger release has already passed ordinary signal admission. */
     struct thread *t=thread(pid);
+    if (guest_trace_resume(t,sig)) return;
     if (origin && origin->valid) t->signals.origin=*origin;
     signal_deliver(pid,sig,1,NULL);
     t->signals.origin.valid=0;

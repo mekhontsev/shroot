@@ -463,6 +463,24 @@ int main(int argc, char **argv) {
     struct stat st, native; assert(!fstat(fd, &st) && !stat(path, &native));
     assert(st.st_dev == native.st_dev && st.st_ino == native.st_ino);
     int directory = opened(&fs, "/volume", O_RDONLY | O_DIRECTORY);
+    for (unsigned exclusive=0;exclusive<2;++exclusive) {
+        unsigned flags=O_TMPFILE|O_RDWR|O_CLOEXEC|(exclusive ? O_EXCL : 0);
+        for (unsigned relative=0;relative<2;++relative) {
+            struct md_fs_result temporary=call(&fs,MD_FS_OPEN,relative ? directory : -1,
+                relative ? "." : "/volume",flags,0600,NULL,0);
+            if (temporary.error) fprintf(stderr,"native tmpfile exclusive=%u relative=%u error=%d\n",exclusive,relative,temporary.error);
+            assert(!temporary.error && temporary.fd>=0);
+            assert(!fstat(temporary.fd,&st) && S_ISREG(st.st_mode) && !st.st_nlink);
+            assert(write(temporary.fd,"temporary",9)==9);
+            assert(fcntl(temporary.fd,F_GETFD)&FD_CLOEXEC);
+            close(temporary.fd);
+        }
+        struct md_fs_result ro_tmp=call(&fs,MD_FS_OPEN,-1,"/readonly",flags,0600,NULL,0);
+        assert(ro_tmp.error==-EROFS && ro_tmp.fd==-1);
+    }
+    struct md_fs_result invalid_tmp=call(&fs,MD_FS_OPEN,-1,"/volume",O_TMPFILE|O_RDONLY,0600,NULL,0);
+    assert(invalid_tmp.error==-EINVAL && invalid_tmp.fd==-1);
+    puts("PASS native temporary files: absolute/relative directories, exclusive creation, IO and read-only mounts");
     struct md_fs_result result = call(&fs, MD_FS_OPEN, directory, "../guest", O_RDONLY, 0, NULL, 0);
     assert(!result.error); char bytes[4096] = {0}; assert(read(result.fd, bytes, 5) == 5 && !strcmp(bytes, "guest")); close(result.fd);
     assert(!symlinkat("/guest", directory, "absolute"));

@@ -39,6 +39,7 @@ void task_terminal_event(struct thread *t,pid_t pid,int status);
 void task_exit_event(struct thread *t,pid_t pid,unsigned event);
 void task_vfork_done_event(struct thread *t,pid_t pid,unsigned event);
 void task_exec_event(struct thread *t,pid_t pid,unsigned event);
+void task_exec_ready(struct thread *t);
 void task_birth_event(struct thread *t,pid_t pid,unsigned event);
 void task_stop_event(struct thread *t,pid_t pid,int status,int sig);
 int task_clone_exit(struct thread *t,pid_t pid);

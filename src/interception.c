@@ -160,18 +160,6 @@ int md_interception_install(int inherited) {
     if (result) return (int)result;
     int listener = -1, capabilities=0;
     if (!inherited) {
-        uintptr_t watch = (uintptr_t)md_guest_watch_return;
-        uintptr_t capture = (uintptr_t)md_guest_anchor_return;
-        uintptr_t task=(uintptr_t)md_guest_task_return, abort_task=(uintptr_t)md_guest_task_abort_return;
-        uintptr_t admit=(uintptr_t)md_guest_buffer_admitted;
-        uintptr_t native=(uintptr_t)md_cooperative_native_return;
-        const uintptr_t sites[]={native,admit,abort_task,task,watch,capture,
-#define SITE(field,symbol) (uintptr_t)symbol+4,
-            MD_CHECKPOINT_SITES(SITE)
-#undef SITE
-        };
-        for (unsigned i=0;i<sizeof(sites)/sizeof(*sites);++i)
-            if (sites[i]>>32!=(uintptr_t)md_guest_ready>>32) return -EINVAL;
         struct md_interception_program code;
         md_interception_program_build(&abi,&code);
         struct sock_fprog program={code.count,code.code};

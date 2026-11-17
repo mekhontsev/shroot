@@ -65,6 +65,7 @@
 #include "task_resources.h"
 #include <linux/audit.h>
 #include <linux/close_range.h>
+#include <stdlib.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 static void fd_policy_release(struct thread *t);
@@ -83,6 +84,52 @@ static void pidfd_result(struct thread *t,struct md_pid_identity *identity,pid_t
 static void pidfd_capture_step(struct thread *t,unsigned command,long value);
 static void pidfd_begin(struct thread *t);
 
+struct foreign_duplicate {
+    struct md_fd_origins *files;
+    struct md_fd_order source;
+    uint64_t generation;
+    pid_t target;
+    int admitted;
+};
+
+static void foreign_duplicate_release(struct thread *t) {
+    struct foreign_duplicate *copy=t->descriptors.foreign;
+    if (!copy) return;
+    if (copy->source.table && md_fd_order_cancel(&copy->source)==1)
+        CHECK(!md_fd_order_complete(&copy->source));
+    md_fd_origins_unpin(copy->files);
+    free(copy); t->descriptors.foreign=NULL;
+}
+
+static int foreign_duplicate_ready(struct thread *t) {
+    struct foreign_duplicate *copy=t->descriptors.foreign;
+    if (copy->admitted) return 1;
+    struct md_fd_origins *tables[2]={t->resources.files,copy->files};
+    struct md_fd_order *turns[2]={&t->descriptors.order,&copy->source};
+    unsigned count=copy->files && copy->files!=t->resources.files ? 2 : 1;
+    if (count==2 && (uintptr_t)tables[0]>(uintptr_t)tables[1]) {
+        tables[0]=copy->files; tables[1]=t->resources.files;
+        turns[0]=&copy->source; turns[1]=&t->descriptors.order;
+    }
+    /* Every cross-table duplicate acquires the same pointer order. No table
+     * is held while resolving an untracked pidfd or capturing its identity. */
+    for (unsigned i=0;i<count;++i) {
+        if (!turns[i]->table) {
+            int ready=md_fd_order_begin(tables[i],turns[i],fd_wakeup);
+            if (ready<0) return ready;
+        }
+        enum md_resource_order_state state=md_fd_order_state(turns[i]);
+        if (state==MD_RESOURCE_ORDER_READY) CHECK(!md_fd_order_start(turns[i]));
+        else if (state!=MD_RESOURCE_ORDER_RUNNING) return 0;
+    }
+    int error=md_fd_origins_validate(&t->descriptors.order,copy->generation);
+    struct thread *target=copy->files ? find_thread(copy->target) : NULL;
+    if (!error && copy->files && (!target || target->resources.files!=copy->files)) error=-EAGAIN;
+    if (error) return error;
+    copy->admitted=1;
+    return 1;
+}
+
 void fd_return(struct thread *t,struct user_pt_regs *regs,long result) {
     if (t->entry.control && t->entry.execution) control_return(t,NULL,result,0);
     else return_value(t,regs,result);
@@ -97,6 +144,7 @@ void fd_discard(struct thread *t) {
     /* A temporary close may borrow this descriptor turn. Reconcile its native
      * receipt before cancellation admits another mutation of the same slot. */
     task_action_discard(t);
+    foreign_duplicate_release(t);
     /* Fork owns the address-space turn even before kernel admission. Early
      * quota/allocation failure must retire it just like a completed clone. */
     if (t->memory_op.action==MEMORY_FORK) {
@@ -162,6 +210,7 @@ void fd_finish(struct thread *t, long result) {
         CHECK(!md_domain_set_cwd(t->descriptors.fs_order.fs,md_domain_restricted(t->descriptors.fs_order.fs) ? NULL : t->descriptors.origin));
     md_fs_anchor_release(t->descriptors.origin); t->descriptors.origin=NULL;
     CHECK(!md_fd_mutation_finish_closed(&t->descriptors.mutation,t->resources.files,result,&t->close.closed));
+    foreign_duplicate_release(t);
     if (t->descriptors.fs_order.fs) CHECK(!md_fs_order_complete(&t->descriptors.fs_order));
     if (t->descriptors.job==MD_FD_DUPLICATE_BEGIN)
         t->descriptors.duplicate_result=nr==SYS_close || result<0 ? -1 : (int)result;
@@ -198,6 +247,13 @@ static int resources_unshare_prepare(struct thread *t,unsigned long flags) {
 
 void fd_start(struct thread *t) {
     retry_clear(t,RETRY_FD);
+    if (t->descriptors.foreign) {
+        int ready=foreign_duplicate_ready(t);
+        if (!ready) { retry_wait(t,RETRY_FD); return; }
+        if (ready<0) {
+            fd_discard(t); control_return(t,&t->descriptors.registers,ready,0); return;
+        }
+    }
     if (!t->descriptors.order.table && t->descriptors.policy_order.queue) {
         enum md_resource_order_state state=md_resource_order_state(&t->descriptors.policy_order);
         if (state==MD_RESOURCE_ORDER_READY) CHECK(!md_resource_order_start(&t->descriptors.policy_order));
@@ -212,7 +268,7 @@ void fd_start(struct thread *t) {
         CHECK(!md_fd_order_start(&t->descriptors.order));
     struct user_pt_regs *r=&t->descriptors.registers;
     const struct seccomp_data *call=&t->descriptors.call;
-    if (t->descriptors.job==MD_FD_DUPLICATE_BEGIN) {
+    if (t->descriptors.job==MD_FD_DUPLICATE_BEGIN && !t->descriptors.foreign) {
         int error=md_fd_origins_validate(&t->descriptors.order,t->descriptors.request.args[0]);
         if (error) {
             CHECK(!md_fd_order_complete(&t->descriptors.order)); t->descriptors.job=0;
@@ -239,8 +295,12 @@ void fd_start(struct thread *t) {
         long result=0;
         if (t->descriptors.job==MD_FD_DUPLICATE_BEGIN) {
             struct md_fd_observation view;
-            result=md_fd_origins_observe(t->resources.files,(int)t->execution.request.args[0],&view);
-            if (!result) result=view.selectors;
+            struct foreign_duplicate *copy=t->descriptors.foreign;
+            struct md_fd_origins *source=copy ? copy->files : t->resources.files;
+            if (source) {
+                result=md_fd_origins_observe(source,(int)t->execution.request.args[copy ? 1 : 0],&view);
+                if (!result) result=view.selectors;
+            }
         }
         if (t->descriptors.job==MD_FD_PAIR_BEGIN) {
             struct md_fd_object *inode=t->execution.request.nr==SYS_pipe2
@@ -263,6 +323,7 @@ void fd_start(struct thread *t) {
             if (!result) result=(long)md_fd_exchange_id(t->descriptors.exchange);
         }
         if (result<0) {
+            foreign_duplicate_release(t);
             CHECK(!md_fd_order_complete(&t->descriptors.order)); t->descriptors.job=0;
         }
         control_return(t,r,result,t->descriptors.request.args[0]);
@@ -357,6 +418,15 @@ static void fd_native_start(struct thread *t) {
     for (unsigned i=0;i<6;++i) args[i]=call->args[i];
     int error=0;
     if (!error) error=md_fd_mutation_prepare(t->resources.files,call->nr,args,&t->descriptors.mutation);
+    if (!error && call->nr==SYS_pidfd_getfd) {
+        struct foreign_duplicate *copy=t->descriptors.foreign;
+        if (!copy || !copy->admitted) error=-EPROTO;
+        else {
+            struct md_fd_object *object=md_fd_origins_object(copy->files,(int)call->args[1],NULL);
+            error=md_fd_origins_prepare_object(t->resources.files,object,FD_CLOEXEC,&t->descriptors.mutation.update);
+            md_fd_object_release(object);
+        }
+    }
     if (!error && call->nr==SYS_epoll_create1) {
         struct md_control_epoll *queue=md_control_epoll_new();
         error=queue ? md_fd_origins_prepare_object(t->resources.files,md_control_epoll_object(queue),
@@ -366,7 +436,8 @@ static void fd_native_start(struct thread *t) {
     if (!error && call->nr==SYS_pidfd_open) {
         struct thread *target=find_thread((pid_t)call->args[0]);
         if (target && target->resources.pid) {
-            struct md_fd_object *object=md_pid_descriptor_new(target->resources.pid_group);
+            struct md_fd_object *object=md_pid_descriptor_new(call->args[1]&MD_PIDFD_THREAD
+                ? target->resources.pid : target->resources.pid_group);
             error=object ? md_fd_origins_prepare_object(t->resources.files,object,FD_CLOEXEC,&t->descriptors.mutation.update) : -ENOMEM;
             md_fd_object_release(object);
         }
@@ -666,14 +737,16 @@ void fd_control(struct thread *t,const struct supervisor_control_request *contro
     } else if (operation==MD_FD_DUPLICATE_BEGIN) {
         long nr=t->execution.request.nr;
         unsigned command=(unsigned)t->execution.request.args[1];
-        int duplicate=nr==SYS_dup || nr==SYS_dup3
+        int duplicate=nr==SYS_dup || nr==SYS_dup3 || nr==SYS_pidfd_getfd
             || (nr==SYS_fcntl && (command==F_DUPFD || command==F_DUPFD_CLOEXEC));
-        if (t->phase!=DISPATCHING || !duplicate || !id || control->args[1] || control->args[2]
+        if (t->phase!=DISPATCHING || !duplicate || (nr==SYS_pidfd_getfd ? id || !t->descriptors.foreign : !id)
+                || control->args[1] || control->args[2]
                 || t->descriptors.order.table || t->descriptors.running || t->descriptors.job) result=-EINVAL;
         else {
             if (r) t->descriptors.registers=*r;
             t->descriptors.request=*control; t->descriptors.job=operation;
             t->descriptors.duplicate_attempted=0; t->descriptors.duplicate_result=-1;
+            if (t->descriptors.foreign) { fd_start(t); return; }
             int ready=md_fd_order_begin(t->resources.files,&t->descriptors.order,fd_wakeup);
             if (ready<0) { t->descriptors.job=0; result=ready; }
             else { if (ready) fd_start(t); else retry_wait(t,RETRY_FD); return; }
@@ -693,6 +766,7 @@ void fd_control(struct thread *t,const struct supervisor_control_request *contro
             return;
         }
         else {
+            foreign_duplicate_release(t);
             CHECK(!md_fd_order_complete(&t->descriptors.order)); t->descriptors.job=0;
             t->descriptors.duplicate_attempted=0; t->descriptors.duplicate_result=-1;
         }
@@ -1055,6 +1129,10 @@ void descriptors_buffer_control(struct thread *t,const struct supervisor_control
     case MD_BUFFER_PIDFD_SIGNAL:
         if (t->phase!=DISPATCHING || t->execution.request.nr!=SYS_pidfd_send_signal || control->args[0] || control->args[1]) break;
         pidfd_begin(t); return;
+    case MD_BUFFER_PIDFD_COPY:
+        if (t->phase!=DISPATCHING || t->execution.request.nr!=SYS_pidfd_getfd
+                || t->descriptors.foreign || control->args[0] || control->args[1]) break;
+        pidfd_begin(t); return;
     case MD_BUFFER_PIDFD_READY:
     case MD_BUFFER_PIDFD_SENT:
     case MD_BUFFER_PIDFD_OBSERVED:
@@ -1142,14 +1220,29 @@ static void pidfd_result(struct thread *t,struct md_pid_identity *identity,pid_t
     struct md_pidfd_frame *frame=span.data;
     int namespace=t->execution.request.nr==SYS_ioctl;
     int joining=t->execution.request.nr==SYS_setns;
+    int copying=t->execution.request.nr==SYS_pidfd_getfd;
     struct thread *target=native>0 ? find_thread(native) : NULL;
     if (!error && joining && !native) error=-EINVAL;
     /* A pidfd's flag contract precedes target liveness and ptrace admission. */
     if (!error && joining) error=md_resources_setns_process_flags((unsigned)t->execution.request.args[1]);
-    if (!error && (native<0 || (identity && (!target || target->resources.pid_group!=identity)))) error=-ESRCH;
+    if (!error && copying && (unsigned)t->execution.request.args[2]) error=-EINVAL;
+    if (!error && copying && !native) error=-EBADF;
+    if (!error && (native<0 || (identity && (!target
+            || (target->resources.pid_group!=identity && target->resources.pid!=identity))))) error=-ESRCH;
     if (!error && target && !target->born) error=-ESRCH;
-    if (!error && !target) error=namespace ? MD_CALL_NATIVE : -ESRCH;
-    else if (!error && joining) {
+    if (!error && !target && !copying) error=namespace ? MD_CALL_NATIVE : -ESRCH;
+    else if (!error && copying) {
+        if (target && !inspect_allowed(t->pid,target->pid,0)) error=-EPERM;
+        struct md_fd_observation view;
+        if (!error) error=md_fd_origins_observe(t->resources.files,(int)t->execution.request.args[0],&view);
+        struct foreign_duplicate *copy=error ? NULL : calloc(1,sizeof(*copy));
+        if (!error && !copy) error=-ENOMEM;
+        if (!error) {
+            copy->target=native; copy->generation=view.generation;
+            copy->files=target ? md_fd_origins_pin(target->resources.files) : NULL;
+            t->descriptors.foreign=copy;
+        }
+    } else if (!error && joining) {
         if (!inspect_allowed(t->pid,target->pid,0)) error=-EPERM;
         else error=md_resources_setns_process_prepare(&t->resources,&t->identity,&target->resources,
             target->identity.user_namespace,(unsigned)t->execution.request.args[1],&t->resource_change);

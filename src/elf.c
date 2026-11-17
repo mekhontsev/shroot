@@ -5,7 +5,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
-struct elf_data { Elf64_Ehdr header; Elf64_Phdr ph[128]; struct stat st; char interpreter[MD_INTERPRETER_MAX]; };
+struct elf_data { Elf64_Ehdr header; Elf64_Phdr ph[MD_ELF_PHDR_LIMIT]; struct stat st; char interpreter[MD_INTERPRETER_MAX]; };
 static uintptr_t down(uintptr_t n) { return n & ~(md_page_size - 1); }
 static uintptr_t up(uintptr_t n) { return (n + md_page_size - 1) & ~(md_page_size - 1); }
 
@@ -20,7 +20,7 @@ static int read_elf(int fd, struct elf_data *data, int loader) {
             || h->e_ident[EI_VERSION] != EV_CURRENT
             || h->e_machine != EM_AARCH64 || h->e_version != EV_CURRENT
             || h->e_ehsize != sizeof(*h) || h->e_phentsize != sizeof(Elf64_Phdr)
-            || !h->e_phnum || h->e_phnum > 128
+            || !h->e_phnum || h->e_phnum > MD_ELF_PHDR_LIMIT
             || (h->e_type != ET_DYN && (loader || h->e_type != ET_EXEC))) return -ENOEXEC;
     size_t size = h->e_phnum * sizeof(Elf64_Phdr);
     if (data->st.st_size < 0 || h->e_phoff > (uint64_t)data->st.st_size
@@ -88,6 +88,18 @@ int md_elf_validate(int fd, int loader) {
     struct elf_layout range;
     int r = read_elf(fd, &data, loader);
     return r ? r : layout(&data, &range);
+}
+int md_elf_layout_read(int fd,int loader,struct md_elf_layout *out) {
+    if (!out) return -EINVAL;
+    struct elf_data data;
+    struct elf_layout range;
+    int error=read_elf(fd,&data,loader);
+    if (!error) error=layout(&data,&range);
+    if (error) return error;
+    out->header=data.header;
+    memcpy(out->segments,data.ph,data.header.e_phnum*sizeof(*data.ph));
+    out->low=range.low; out->high=range.high;
+    return 0;
 }
 int md_elf_load(int fd, int loader, struct md_image *image) {
     struct elf_data data;

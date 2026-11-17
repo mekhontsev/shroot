@@ -175,9 +175,12 @@ static int runtime_open(struct md_fs_worker *w,struct worker_runtime *runtime) {
     int error=md_inode_store_open(w->store,0,&fs->store);
     if (!error) { stage="runtime directories"; error=md_inode_runtime_prepare(fs->store); }
     if (!error && w->admit) { stage="image catalogue"; error=md_image_catalogue_open(fs->store,w->admit,&fs->images); }
-    fs->storage=&runtime->storage; fs->tasks=w->tasks; fs->exchanges=w->exchanges;
+    fs->storage=&runtime->storage; fs->exchanges=w->exchanges;
     fs->cursors=w->cursors; fs->ipc_store=w->store;
     if (!error) { stage="mount attachments"; error=md_fs_mounts_open(fs,w->attachments,w->attachment_count); }
+    /* Startup attachment creation belongs to this store owner, not PID 0.
+     * Publish request authentication after the initial layout is prepared. */
+    fs->tasks=w->tasks;
     if (!error) {
         stage="resolver";
         error=md_network_resolver_prepare(fs,w->network);

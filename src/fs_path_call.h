@@ -1,6 +1,7 @@
 #ifndef MD_FS_PATH_CALL_H
 #define MD_FS_PATH_CALL_H
 #include "fs_operation.h"
+#include "open_request.h"
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/mount.h>
@@ -10,7 +11,7 @@
  * Capturing operands and deciding host boundaries remain their owners' jobs. */
 static inline void md_fs_open_parameters(struct md_fs_request *q,unsigned flags,unsigned mode,uint64_t resolve) {
     q->operation=MD_FS_OPEN; q->flags=flags; q->mode=mode; q->resolve=resolve;
-    q->attributes.creation_mask=(flags&O_CREAT) && !(flags&O_PATH) ? MD_FS_CAPTURE_UMASK : 0;
+    q->attributes.creation_mask=md_open_creates(flags) ? MD_FS_CAPTURE_UMASK : 0;
 }
 static inline int md_fs_fsopen_parameters(struct md_fs_request *q,unsigned flags) {
     if (flags&~FSOPEN_CLOEXEC) return -EINVAL;
@@ -21,7 +22,7 @@ static inline unsigned md_fs_path_call(struct md_fs_request *q,long nr,const uns
     switch (nr) {
     case SYS_openat:
         md_fs_open_parameters(q,(unsigned)args[2],
-            (args[2]&O_CREAT) && !(args[2]&O_PATH) ? args[3]&07777U : 0,0);
+            md_open_creates(args[2]) ? args[3]&07777U : 0,0);
         return 1;
     case SYS_unlinkat:
         q->operation=MD_FS_UNLINK; q->flags=(unsigned)args[2]; return 1;

@@ -82,7 +82,7 @@ long md_namespace_open(const struct md_fs *fs, int base, const char *path, int f
         return RAW4(openat, base, path, flags, mode);
     /* Legacy open ignores file-type bits; openat2 validates its mode separately. */
     struct open_how how = {.flags = (unsigned)flags,
-        .mode = (flags & O_CREAT) && !(flags & O_PATH) ? mode & 07777U : 0};
+        .mode = md_open_creates(flags) ? mode & 07777U : 0};
     return md_namespace_open_resolved(fs, base, path, &how);
 }
 static long open_operand(const struct md_fs *fs, struct md_namespace_operand operand, const char *path,
@@ -381,7 +381,7 @@ long md_namespace_path_call(const struct md_fs *fs, long nr, const unsigned long
     }
     case SYS_openat: {
         struct open_how how={.flags=(unsigned)a[2],
-            .mode=(a[2]&O_CREAT) && !(a[2]&O_PATH) ? a[3]&07777U : 0};
+            .mode=md_open_creates(a[2]) ? a[3]&07777U : 0};
         return open_operand(fs,operand,first,&how);
     }
     case SYS_mknodat: {

@@ -3,6 +3,7 @@
 
 /* Shared launch services and diagnostics; operation protocols live in focused owners. */
 #include "supervisor_thread.h"
+#include "supervisor_image.h"
 #include "signal_abi.h"
 #include "task_checkpoint.h"
 #include "task_filter.h"

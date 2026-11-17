@@ -169,7 +169,8 @@ static long debug_request(struct md_debugger *d, unsigned op, pid_t target, uint
 }
 static void debug_inspect(struct md_debugger *d, pid_t pid, struct user_pt_regs *r, unsigned cookie) {
     if (d) {
-        assert(md_debugger_seccomp(d, pid, r, cookie));
+        struct seccomp_data call=syscall_description(r);
+        assert(md_debugger_seccomp(d,pid,&call,r->sp,cookie));
         int status = 0;
         struct user_pt_regs wait = {.regs = {pid, (uintptr_t)&status, WNOHANG | __WALL}};
         wait.regs[8] = SYS_wait4;
@@ -735,7 +736,8 @@ static int supervise(pid_t leader) {
                 if (type == SECCOMP_RET_TRACE) {
                     assert(owner.debugger);
                     if (scenario == 53) {
-                        assert(!md_debugger_seccomp(owner.debugger, pid, &original, decision & SECCOMP_RET_DATA));
+                        struct seccomp_data call=syscall_description(&original);
+                        assert(!md_debugger_seccomp(owner.debugger,pid,&call,original.sp,decision & SECCOMP_RET_DATA));
                         original.regs[0] = -ENOSYS;
                     } else {
                         debug_inspect(owner.debugger, pid, &original, decision & SECCOMP_RET_DATA);

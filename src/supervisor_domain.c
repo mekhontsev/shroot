@@ -145,6 +145,9 @@ int domain_call(struct thread *t,const struct seccomp_data *call,struct user_pt_
     /* Descriptor-table ioctls retain native validation and FD bookkeeping;
      * a managed/offline socket does not give them network semantics. */
     if (cookie==MD_INTERCEPT_FD && nr==SYS_ioctl) return 0;
+    if (nr==SYS_pidfd_getfd && t->ready && t->phase==IDLE) {
+        execution_begin(t,call,r,"descriptor-copy-mask"); return 1;
+    }
     if (nr==SYS_reboot && t->phase==IDLE) {
         if (entry_context(t,MD_CONTEXT_PROCESS)) return 1;
         struct md_pid_namespace *space=md_pid_identity_namespace(t->resources.pid);

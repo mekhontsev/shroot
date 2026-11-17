@@ -1,9 +1,23 @@
 #include <asm/unistd.h>
+#include "bootstrap_entry.h"
 .text
 #ifndef MD_NO_START
 .global _start
 .type _start, %function
 _start:
+#ifdef MD_BOOTSTRAP_PIE
+    mov x8, #__NR_gettid
+    svc #0
+    .if . - _start != MD_BOOTSTRAP_ENTRY_BYTES
+    .error "bootstrap entry boundary changed"
+    .endif
+    adrp x0, __ehdr_start
+    add x0, x0, :lo12:__ehdr_start
+    adrp x1, _DYNAMIC
+    add x1, x1, :lo12:_DYNAMIC
+    mov x2, sp
+    bl md_boot_relocate
+#endif
     mov x0, sp
     bl md_boot
     brk #0

@@ -50,7 +50,7 @@ struct md_debugger_host {
     void (*complete)(pid_t, long);
     void (*resume)(pid_t,int,const struct md_signal_origin *);
     void (*reaped)(pid_t observer,pid_t child,int native_wait);
-    void (*signal_origin)(pid_t recipient,const siginfo_t *,struct md_signal_origin *);
+    void (*signal_origin)(pid_t recipient,const siginfo_t *,struct md_signal_origin *,int consume);
     void (*signal_translate)(pid_t observer,const struct md_signal_origin *,siginfo_t *);
 };
 /* Sole physical ptrace ownership stays in the supervisor. This owner represents
@@ -66,7 +66,7 @@ int md_debugger_defer_stop(struct md_debugger *, pid_t, const siginfo_t *);
 int md_debugger_exec(struct md_debugger *, pid_t, pid_t);
 int md_debugger_birth(struct md_debugger *, pid_t, pid_t, unsigned);
 int md_debugger_event(struct md_debugger *, pid_t, unsigned, unsigned long);
-int md_debugger_seccomp(struct md_debugger *, pid_t, const struct user_pt_regs *, unsigned);
+int md_debugger_seccomp(struct md_debugger *,pid_t,const struct seccomp_data *,uintptr_t,unsigned);
 void md_debugger_exit(struct md_debugger *, pid_t, int);
 /* Native child group-stop/continue changed wait eligibility. Wake existing
  * waits only; the kernel owns the corresponding SIGCHLD notification. */
@@ -83,6 +83,7 @@ int md_debugger_active(struct md_debugger *);
 int md_debugger_boundary(struct md_debugger *, pid_t);
 int md_debugger_newborn(struct md_debugger *, pid_t);
 int md_debugger_syscall_mode(struct md_debugger *, pid_t);
+int md_debugger_syscall_emulated(struct md_debugger *, pid_t);
 int md_debugger_syscall(struct md_debugger *, pid_t, const struct user_pt_regs *, int);
 /* Optional captured result when the application supplied no output pointer. */
 void md_debugger_wait_complete(struct md_debugger *,pid_t,long,const union md_process_wait *);

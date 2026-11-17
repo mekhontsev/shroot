@@ -504,13 +504,15 @@ int svc_entry_observe(struct thread *t) {
     if (!r) return 1;
     if (md_memory_exposed(t->memory)) return svc_revoke_entry(t);
     int error=0;
-    if (t->debug.options || md_debugger_traced(debugger,t->pid))
+    if (t->debug.options || t->debug.call_active || t->seccomp.trace.stage!=GUEST_TRACE_NONE
+            || md_debugger_traced(debugger,t->pid))
         error=md_svc_registry_pause(r,t->pid,MD_SVC_PAUSE_DEBUGGER);
     else if (r->pause_reasons&MD_SVC_PAUSE_DEBUGGER) {
         /* One inferior can share its mm with untraced threads. Resume lazy
          * admission only after the last debugger owner has left that mm. */
         for (struct thread *p=threads;p;p=p->next)
-            if (p->pid && p->memory==t->memory && (p->debug.options || md_debugger_traced(debugger,p->pid)))
+            if (p->pid && p->memory==t->memory && (p->debug.options || p->debug.call_active
+                    || p->seccomp.trace.stage!=GUEST_TRACE_NONE || md_debugger_traced(debugger,p->pid)))
                 return 1;
         error=md_svc_registry_retire_pending(r,t->pid);
         if (!error) error=md_svc_registry_rearm(r,t->pid,MD_SVC_PAUSE_DEBUGGER);

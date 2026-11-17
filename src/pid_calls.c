@@ -85,6 +85,23 @@ static long pidfd_capture(long state,struct md_pidfd_frame *frame,int fd) {
     state=md_descriptor_capture_inputs(state,&frame->capture,&fd,1,&protocol);
     return state==MD_PIDFD_DONE ? frame->result : state;
 }
+long md_pidfd_copy_begin(const unsigned long *a) {
+    if ((unsigned)a[2]) return -EINVAL;
+    long memory=md_adapter_buffer_take();
+    if (memory<0) return memory;
+    long result;
+    do {
+        result=md_fd_control(MD_FD_USE,0,0,0);
+        if (result) break;
+        result=pidfd_capture(md_guest_buffer_control(MD_BUFFER_PIDFD_COPY,0,0),
+            (void *)memory,(int)a[0]);
+        long released=md_fd_control(MD_FD_RELEASE,0,0,0);
+        if (!result) result=released;
+        if (!result) result=md_fd_control(MD_FD_DUPLICATE_BEGIN,0,0,0);
+    } while (result==-EAGAIN);
+    md_adapter_buffer_release();
+    return result;
+}
 long md_pidfd_signal(const unsigned long *a) {
     siginfo_t info;
     long result=a[2] ? md_read_memory(&info,(void *)a[2],sizeof(info)) : 0;

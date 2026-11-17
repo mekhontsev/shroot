@@ -32,6 +32,7 @@
 #include "supervisor_identity.h"
 #include "supervisor_internal.h"
 #include "supervisor_memory.h"
+#include "supervisor_notifications.h"
 #include "supervisor_robust.h"
 #include "supervisor_seccomp.h"
 #include "supervisor_signals.h"
@@ -79,7 +80,7 @@ void filter_service_gates(struct md_seccomp_gate gates[FILTER_SERVICE_GATES]) {
      * Keep their cookies/listener, including without a resident SVC image. */
     gates[3]=(struct md_seccomp_gate){abi.capture_gate,abi.capture_gate,SYS_openat,SECCOMP_RET_ALLOW};
     gates[4]=(struct md_seccomp_gate){abi.watch_return,abi.watch_return,-1,SECCOMP_RET_ALLOW};
-    gates[FILTER_REQUIRED_GATES]=(struct md_seccomp_gate){abi.code_begin,abi.code_end,-1,SECCOMP_RET_ALLOW};
+    gates[5]=(struct md_seccomp_gate){abi.code_begin,abi.code_end,-1,SECCOMP_RET_ALLOW};
 }
 
 static struct md_seccomp_route filter_service_route(const struct md_seccomp_gate *gates,size_t count,uint64_t image) {
@@ -102,14 +103,141 @@ static int guest_policy_boundary(const struct thread *t,const struct seccomp_dat
         && !(pc>=abi.code_begin && pc<abi.code_end);
 }
 
-int guest_trace_rejected(struct thread *t,const struct seccomp_data *call) {
-    if (!guest_policy_boundary(t,call) || !md_seccomp_policy_may_trace(admission_policy(t))) return 0;
+static uint32_t guest_trace_decision(struct thread *t,const struct seccomp_data *call) {
+    if (!guest_policy_boundary(t,call) || !md_seccomp_policy_may_trace(admission_policy(t)))
+        return SECCOMP_RET_ALLOW;
     uint32_t decision;
     CHECK(!md_seccomp_policy_eval(admission_policy(t),call,&decision));
     /* Guest TRACE cookies are not service selectors. USER_NOTIF also outranks
-     * TRACE, so both interception channels need this original-call decision.
-     * Guest TRACESECCOMP observation is not enabled: Linux returns ENOSYS. */
-    return (decision&SECCOMP_RET_ACTION_FULL)==SECCOMP_RET_TRACE;
+     * TRACE, so both interception channels need this original-call decision. */
+    return decision;
+}
+
+static int guest_trace_stop(struct thread *t,const struct user_pt_regs *regs,
+        enum md_task_call_boundary boundary) {
+    SUPERVISOR_TRACE("PROBE guest-trace-stop pid=%d nr=%d pc=%llx cookie=%u boundary=%u\n",
+        t->pid,t->seccomp.trace.call.nr,(unsigned long long)regs->pc,t->seccomp.trace.data,boundary);
+    t->seccomp.trace.boundary=boundary;
+    t->seccomp.trace.number=t->seccomp.trace.call.nr;
+    t->seccomp.trace.stage=GUEST_TRACE_STOPPED;
+    if (!set_registers(t->pid,(struct user_pt_regs *)regs)) return 1;
+    if (md_debugger_seccomp(debugger,t->pid,&t->seccomp.trace.call,regs->sp,t->seccomp.trace.data)) return 1;
+    t->seccomp.trace.stage=GUEST_TRACE_NONE;
+    struct user_pt_regs result=*regs;
+    return_task_value(t,&result,-ENOSYS,boundary); return 1;
+}
+
+int guest_trace_begin(struct thread *t,const struct seccomp_data *call,const struct user_pt_regs *regs,
+        const struct seccomp_notif *notification,enum md_task_call_boundary boundary) {
+    uint32_t decision=guest_trace_decision(t,call);
+    if ((decision&SECCOMP_RET_ACTION_FULL)!=SECCOMP_RET_TRACE) return 0;
+    if (notification && !(t->debug.options&PTRACE_O_TRACESECCOMP)) {
+        struct seccomp_notif_resp reply={.id=notification->id,.error=-ENOSYS};
+        CHECK(!ioctl(listener,SECCOMP_IOCTL_NOTIF_SEND,&reply) || errno==ENOENT);
+        return 1;
+    }
+    CHECK(t->seccomp.trace.stage==GUEST_TRACE_NONE);
+    t->seccomp.trace.data=decision&SECCOMP_RET_DATA;
+    t->seccomp.trace.call=*call;
+    if (notification) {
+        t->seccomp.trace.stage=GUEST_TRACE_PROMOTING;
+        delegate_begin(t,notification); return 1;
+    }
+    return guest_trace_stop(t,regs,boundary);
+}
+
+void guest_trace_promoted(struct thread *t,const struct user_pt_regs *regs) {
+    CHECK(t->seccomp.trace.stage==GUEST_TRACE_PROMOTING);
+    guest_trace_stop(t,regs,MD_TASK_CALL_USER);
+}
+
+int guest_trace_recheck(struct thread *t,const struct seccomp_data *call) {
+    if (t->seccomp.trace.stage!=GUEST_TRACE_ADMISSION && t->seccomp.trace.stage!=GUEST_TRACE_HOST) return 0;
+    int matches=!memcmp(call,&t->seccomp.trace.call,sizeof(*call));
+    t->seccomp.trace.stage=GUEST_TRACE_NONE;
+    return matches;
+}
+
+int guest_trace_resume(struct thread *t,int signal) {
+    if (t->seccomp.trace.stage!=GUEST_TRACE_STOPPED) return 0;
+    struct user_pt_regs regs;
+    if (!registers(t->pid,&regs)) return 1;
+    int number=t->seccomp.trace.number;
+    SUPERVISOR_TRACE("PROBE guest-trace-resume pid=%d nr=%d pc=%llx x0=%llx boundary=%u\n",
+        t->pid,number,(unsigned long long)regs.pc,(unsigned long long)regs.regs[0],t->seccomp.trace.boundary);
+    t->debug.call_active=1;
+    if (number<0) {
+        t->seccomp.trace.stage=t->seccomp.trace.boundary==MD_TASK_CALL_SECCOMP
+            ? GUEST_TRACE_DRAIN : GUEST_TRACE_NONE;
+        return_task_value(t,&regs,(long)regs.regs[0],t->seccomp.trace.boundary); return 1;
+    }
+    struct seccomp_data call=syscall_description(&regs);
+    call.nr=number;
+    call.args[0]=t->seccomp.trace.call.args[0];
+    t->seccomp.trace.visible_argument=regs.regs[0];
+    if (t->seccomp.trace.boundary==MD_TASK_CALL_SECCOMP
+            && !memcmp(&call,&t->seccomp.trace.call,sizeof(call))) {
+        /* The original kernel admission is still intact. Resume its shared
+         * dispatcher directly; no duplicate SVC or syscall-entry stop. */
+        t->seccomp.trace.stage=GUEST_TRACE_ADMISSION;
+        execution_seccomp_event(t,t->pid,(PTRACE_EVENT_SECCOMP<<16)|(SIGTRAP<<8)|0x7f,&t->usage);
+        return 1;
+    }
+    t->seccomp.trace.call=call;
+    t->seccomp.trace.visible_number=regs.regs[8];
+    regs.regs[0]=call.args[0];
+    regs.regs[8]=number;
+    t->seccomp.trace.stage=GUEST_TRACE_REPLAY;
+    regs.pc=abi.task_return-4;
+    /* Borrow an owned SVC, then restore the tracer-selected PC at syscall
+     * entry, before policy runs. The tracer may change or unmap the original
+     * instruction. Stronger actions still pass through ordinary admission;
+     * only TRACE's second notification is suppressed. */
+    if (t->seccomp.trace.boundary==MD_TASK_CALL_SECCOMP) {
+        int error=md_svc_machine_redirect(native_trace,&t->machine,t->pid,&regs);
+        if (error<0) { CHECK(error==-ESRCH); t->resume_lost=1; return 1; }
+    } else if (!set_registers(t->pid,&regs)) return 1;
+    /* A seccomp event is not a signal-delivery stop. */
+    (void)signal;
+    resume(t->pid,0); return 1;
+}
+
+static int guest_trace_host_pending(void *context,const siginfo_t *info) {
+    const struct seccomp_data *call=context;
+    return info->si_signo==SIGSYS && info->si_code==SYS_SECCOMP
+        && info->si_syscall==call->nr && info->si_arch==call->arch
+        && (uintptr_t)info->si_call_addr==call->instruction_pointer;
+}
+
+int guest_trace_syscall(struct thread *t,const struct ptrace_syscall_info *info,struct user_pt_regs *regs) {
+    if (t->seccomp.trace.stage==GUEST_TRACE_DRAIN && info->op==PTRACE_SYSCALL_INFO_EXIT)
+        t->seccomp.trace.stage=GUEST_TRACE_NONE;
+    if (t->seccomp.trace.stage==GUEST_TRACE_REPLAY && info->op==PTRACE_SYSCALL_INFO_ENTRY) {
+        struct seccomp_data call={.nr=info->entry.nr,.arch=info->arch,
+            .instruction_pointer=t->seccomp.trace.call.instruction_pointer};
+        memcpy(call.args,info->entry.args,sizeof(call.args));
+        int matches=info->instruction_pointer==abi.task_return
+            && !memcmp(&call,&t->seccomp.trace.call,sizeof(call));
+        t->seccomp.trace.stage=matches ? GUEST_TRACE_ADMISSION : GUEST_TRACE_NONE;
+        if (matches) {
+            /* The kernel latched the syscall number on entry. x8 remains an
+             * independent application register, including tracer mutations. */
+            regs->regs[8]=t->seccomp.trace.visible_number;
+            regs->regs[0]=t->seccomp.trace.visible_argument;
+            regs->pc=call.instruction_pointer;
+            if (!set_registers(t->pid,regs)) return 1;
+            t->debug.call_active=1;
+            resume(t->pid,0); return 1;
+        }
+    }
+    if (t->seccomp.trace.stage==GUEST_TRACE_ADMISSION && info->op==PTRACE_SYSCALL_INFO_EXIT) {
+        int pending=t->signals.host ? md_task_pending_scan(native_trace,t->pid,
+            guest_trace_host_pending,&t->seccomp.trace.call) : 0;
+        if (pending<0) { CHECK(pending==-ESRCH); t->resume_lost=1; return 1; }
+        t->seccomp.trace.stage=pending ? GUEST_TRACE_HOST : GUEST_TRACE_NONE;
+        if (pending) { resume(t->pid,0); return 1; }
+    }
+    return 0;
 }
 
 void guest_notification_discard(struct thread *t) {
@@ -147,6 +275,8 @@ int guest_notification_begin(struct thread *t,const struct seccomp_data *data,
     md_fd_object_release(object);
     struct guest_notification *n=queue ? calloc(1,sizeof(*n)) : NULL;
     int error=queue ? n ? 0 : -ENOMEM : -ENOSYS;
+    if (error) SUPERVISOR_TRACE("PROBE guest-notification-unavailable pid=%d nr=%d pc=%llx error=%d\n",
+        t->pid,data->nr,(unsigned long long)data->instruction_pointer,error);
     if (!error) {
         t->seccomp.notification=n; n->queue=queue; n->original=*data;
         SUPERVISOR_TRACE("PROBE guest-notification-start pid=%d nr=%d pc=%llx host=%d\n",
@@ -160,7 +290,9 @@ int guest_notification_begin(struct thread *t,const struct seccomp_data *data,
             delegate_begin(t,kernel);
             return 1;
         }
-        t->phase=GUEST_NOTIFICATION; execution_retain(t,data,regs);
+        struct seccomp_data execution=*data;
+        execution.args[0]=regs->regs[0];
+        t->phase=GUEST_NOTIFICATION; execution_retain(t,&execution,regs);
         error=md_task_checkpoint_suspend(&checkpoints,t->pid);
         if (error>=0) { CHECK(!error); n->checkpoint_suspended=1; }
         if (!error) {
@@ -222,6 +354,7 @@ int guest_notification_event(struct thread *t,int status) {
             && guest_notification_route(t,&n->original)==MD_INTERCEPT_NATIVE) {
         struct md_task_call_arguments args={.number=n->original.nr,.flags=MD_TASK_CALL_INTERRUPTIBLE};
         memcpy(args.value,n->original.args,sizeof(args.value));
+        args.value[0]=t->execution.registers.regs[0];
         n->continuing_native=1;
         int error=md_task_call_again(&n->call,&args);
         if (!error) error=md_task_call_retire_entry(&n->call);
@@ -235,6 +368,7 @@ int guest_notification_event(struct thread *t,int status) {
     if (continued_native) continuing=0;
     siginfo_t host_signal=n->host_signal;
     struct seccomp_data call=n->original;
+    call.args[0]=t->execution.registers.regs[0];
     uint64_t mask=n->call.mask;
     enum md_task_call_boundary boundary=n->call.boundary;
     guest_notification_discard(t); t->phase=IDLE;
@@ -323,7 +457,7 @@ static int host_policy_dispatch(struct thread *t,struct user_pt_regs *regs,const
         return 1;
     }
     unsigned long cookie=action==SECCOMP_RET_USER_NOTIF ? MD_INTERCEPT_DISPATCH : decision&SECCOMP_RET_DATA;
-    regs->pc=call->instruction_pointer; regs->regs[8]=call->nr;
+    regs->pc=call->instruction_pointer;
     execution_retain(t,call,regs); ++calls; ++t->calls;
     if (robust_call(t,call,regs,MD_TASK_CALL_USER)) return 1;
     if (identity_call(t,call,regs,cookie) || domain_call(t,call,regs,cookie)) return 1;
@@ -357,18 +491,25 @@ int host_policy_signal(struct thread *t,struct md_task_signal_stop *stop) {
     struct seccomp_data call={.nr=info.si_syscall,.arch=info.si_arch,
         .instruction_pointer=(uintptr_t)info.si_call_addr};
     memcpy(call.args,regs.regs,sizeof(call.args));
+    if (t->seccomp.trace.stage==GUEST_TRACE_HOST)
+        call.args[0]=t->seccomp.trace.call.args[0];
     uint32_t decision;
     CHECK(!md_seccomp_policy_eval(admission_policy(t),&call,&decision));
     t->seccomp.admission_policy_pending=0;
     unsigned action=decision&SECCOMP_RET_ACTION_FULL;
+    int trace_recheck=guest_trace_recheck(t,&call);
+    if (action==SECCOMP_RET_TRACE) {
+        if (trace_recheck) action=SECCOMP_RET_ALLOW;
+        else return guest_trace_begin(t,&call,&regs,NULL,MD_TASK_CALL_USER);
+    }
     if (action==SECCOMP_RET_TRAP) {
         info.si_errno=decision&SECCOMP_RET_DATA;
         if (!signal_replace_info(t,stop,&info)) return 1;
         return host_policy_deliver(t,&regs,&info,0);
     }
-    if (action==SECCOMP_RET_ERRNO || action==SECCOMP_RET_TRACE) {
+    if (action==SECCOMP_RET_ERRNO) {
         if (t->debug.call_active) t->debug.adapter=1;
-        regs.regs[0]=action==SECCOMP_RET_TRACE ? -ENOSYS : md_seccomp_policy_error(decision);
+        regs.regs[0]=md_seccomp_policy_error(decision);
         if (set_registers(t->pid,&regs)) resume(t->pid,0);
         return 1;
     }
@@ -377,6 +518,7 @@ int host_policy_signal(struct thread *t,struct md_task_signal_stop *stop) {
         return guest_notification_begin(t,&call,&regs,NULL,&info);
     }
     if (action!=SECCOMP_RET_ALLOW && action!=SECCOMP_RET_LOG) return 0;
+    call.args[0]=regs.regs[0];
     return host_policy_dispatch(t,&regs,&call);
 }
 
@@ -721,9 +863,8 @@ void filter_install_progress(struct thread *t) {
         struct md_seccomp_gate *gates=calloc(capacity,sizeof(*gates));
         if (!gates) { filter_install_fail(t,-ENOMEM); return; }
         filter_service_gates(gates);
-        size_t gate_count=FILTER_REQUIRED_GATES;
+        size_t gate_count=FILTER_SERVICE_GATES;
         if (registry) {
-            gate_count=FILTER_SERVICE_GATES;
             for (unsigned i=0;i<registry->pool_count;++i)
                 gates[gate_count++]=(struct md_seccomp_gate){registry->pools[i].address,
                     registry->pools[i].address+MD_SVC_CODE_BYTES,-1,SECCOMP_RET_TRACE|MD_INTERCEPT_TASK};
@@ -734,7 +875,7 @@ void filter_install_progress(struct thread *t) {
             delegated,t->signals.host ? sizeof(delegated)/sizeof(*delegated) : 3,
             MD_INTERCEPT_TASK,&route);
         if (error==-E2BIG && registry) {
-            const struct md_seccomp_route fallback=filter_service_route(gates,FILTER_REQUIRED_GATES,0);
+            const struct md_seccomp_route fallback=filter_service_route(gates,FILTER_SERVICE_GATES,0);
             error=md_seccomp_capture_prepare(&install->capture,md_memory_readonly_buffers(t->memory),
                 md_memory_readonly_base(t->memory),t->seccomp.policy,&program,
                 delegated,t->signals.host ? sizeof(delegated)/sizeof(*delegated) : 3,

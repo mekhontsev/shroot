@@ -528,7 +528,7 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
         int flags = q->operation == MD_FS_CREATE ? O_RDWR | O_CREAT | O_EXCL
             : q->operation == MD_FS_OPEN_IMAGE ? O_RDONLY : (int)q->flags;
         if (flags & ~(O_ACCMODE | O_CLOEXEC | O_APPEND | O_TRUNC | O_NOFOLLOW | O_DIRECTORY | O_PATH
-                | O_CREAT | O_EXCL | O_NONBLOCK | O_NOCTTY | MD_O_LARGEFILE | O_SYNC | O_DSYNC | O_DIRECT | O_NOATIME)) { r = -ENOTSUP; break; }
+                | O_CREAT | O_EXCL | O_NONBLOCK | O_NOCTTY | MD_O_LARGEFILE | O_SYNC | O_DSYNC | O_DIRECT | O_NOATIME | __O_TMPFILE)) { r = -ENOTSUP; break; }
         if ((flags & O_ACCMODE) == O_ACCMODE) { r = -EINVAL; break; }
         if (q->operation == MD_FS_OPEN_IMAGE && (!data || capacity < sizeof(struct md_image_identity))) { r = -ERANGE; break; }
         if (flags & O_PATH) flags &= O_PATH | O_NOFOLLOW | O_DIRECTORY | O_CLOEXEC;
@@ -539,6 +539,16 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
         if (a->metadata_captured) existing=a->captured_metadata;
         else if (a->fd >= 0 && fstat(a->fd, &existing)) { r = -errno; break; }
         if (a->fd>=0 && (r=device_open(a->mount,flags,existing.st_mode))) break;
+        if (flags&__O_TMPFILE) {
+            if (!(flags&O_DIRECTORY) || !(flags&O_ACCMODE)) { r=-EINVAL; break; }
+            if (output && output->native_open_plan) { r=-EXDEV; break; }
+            /* Creation belongs to the selected directory, not its parent or
+             * a proc-FD reopen. Kernel checks retain native filesystem limits. */
+            int fd=openat(a->fd,".",flags|O_CLOEXEC,q->mode&~q->attributes.creation_mask);
+            r=record(&owner,fd,a->mount,out,!output || !output->origin);
+            if (!r) md_view_capture(fs,a->view,a->mount,out,output);
+            break;
+        }
         if (output && output->native_open_plan) {
             /* The walker pins the exact native object and its mount policy.
              * Data-open effects belong to the caller, just as for inode plans.
@@ -634,6 +644,9 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
     if (r) out->error = r;
 }
 static int local_inode_view(struct md_filesystem *fs, const struct md_fs_request *q) {
+    /* Temporary-file support belongs to the selected filesystem. The inode
+     * provider cannot reject it before the path crosses a native mount. */
+    if (q->operation==MD_FS_OPEN && !(q->flags&O_PATH) && (q->flags&__O_TMPFILE)) return 0;
     /* View object IDs are not inode-store IDs, even without a path crossing. */
     if (q->operation==MD_FS_OPEN_OBJECT && md_mount_namespace_attached(fs->mounts)) return 0;
     if (fs->native_root || q->resolve || (fs->mounts

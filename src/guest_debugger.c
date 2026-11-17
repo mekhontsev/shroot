@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "guest_debugger.h"
 #include "pid_calls.h"
+#include "task_pending.h"
 #include <elf.h>
 #include <errno.h>
 #include <stdint.h>
@@ -101,6 +102,35 @@ static pid_t native(struct md_debugger *d,pid_t observer,pid_t number) {
 static uid_t visible_uid(struct md_debugger *d,pid_t observer,pid_t sender,uid_t fallback) {
     return d->host.visible_uid ? d->host.visible_uid(observer,sender,fallback) : fallback;
 }
+static void signal_info_visible(struct md_debugger *d,pid_t observer,
+        const struct md_signal_origin *origin,siginfo_t *info) {
+    if (md_signal_origin_matches(origin,info) && d->host.signal_translate)
+        d->host.signal_translate(observer,origin,info);
+    else if (md_signal_native_sender(info)) {
+        info->si_uid=visible_uid(d,observer,info->si_pid,info->si_uid);
+        info->si_pid=visible(d,observer,info->si_pid);
+    }
+}
+struct pending_peek {
+    struct md_debugger *debugger;
+    pid_t caller,target;
+    uintptr_t output;
+    uint64_t skip;
+    int limit,copied;
+};
+static int pending_peek_copy(void *context,const siginfo_t *info) {
+    struct pending_peek *p=context;
+    if (p->skip) { --p->skip; return 0; }
+    struct md_signal_origin origin={0};
+    struct md_debugger *d=p->debugger;
+    if (d->host.signal_origin) d->host.signal_origin(p->target,info,&origin,0);
+    siginfo_t value=*info;
+    signal_info_visible(d,p->caller,&origin,&value);
+    int error=transfer(p->caller,p->output,&value,sizeof(value),1);
+    if (error) return error;
+    p->output+=sizeof(value);
+    return ++p->copied==p->limit;
+}
 static int selected(struct md_debugger *d,pid_t owner, const struct seccomp_data *call, const struct inferior *p) {
     pid_t pid=p->number, group=visible(d,owner,p->group);
     if (!pid) return 0;
@@ -189,7 +219,7 @@ int md_debugger_stop(struct md_debugger *d, pid_t pid, int status, const siginfo
         .si_code=(unsigned)status>>16 ? status>>8 : SI_KERNEL,.si_pid=pid};
     struct md_signal_origin origin={0};
     p->origin.valid=0;
-    if (d->host.signal_origin) d->host.signal_origin(pid,&p->info,&origin);
+    if (d->host.signal_origin) d->host.signal_origin(pid,&p->info,&origin,1);
     p->origin=origin;
     p->sequence=++d->sequence;
     wake(d,p->owner);
@@ -209,14 +239,15 @@ int md_debugger_event(struct md_debugger *d, pid_t pid, unsigned event, unsigned
     if (!p || !(p->options&(1UL<<event))) return 0;
     return md_debugger_stop(d,pid,(SIGTRAP<<8)|0x7f|(event<<16),NULL,message);
 }
-int md_debugger_seccomp(struct md_debugger *d, pid_t pid, const struct user_pt_regs *r, unsigned data) {
+int md_debugger_seccomp(struct md_debugger *d,pid_t pid,const struct seccomp_data *call,
+        uintptr_t stack,unsigned data) {
     if (!d->host.seccomp_events || !md_debugger_event(d,pid,PTRACE_EVENT_SECCOMP,data)) return 0;
     struct inferior *p=find(d,pid);
     p->syscall=(struct ptrace_syscall_info){.op=PTRACE_SYSCALL_INFO_SECCOMP,
-        .arch=AUDIT_ARCH_AARCH64,.instruction_pointer=r->pc,.stack_pointer=r->sp};
-    p->syscall.seccomp.nr=r->regs[8];
+        .arch=call->arch,.instruction_pointer=call->instruction_pointer,.stack_pointer=stack};
+    p->syscall.seccomp.nr=call->nr;
     p->syscall.seccomp.ret_data=data;
-    memcpy(p->syscall.seccomp.args,r->regs,sizeof(p->syscall.seccomp.args));
+    memcpy(p->syscall.seccomp.args,call->args,sizeof(p->syscall.seccomp.args));
     return 1;
 }
 int md_debugger_birth(struct md_debugger *d, pid_t parent, pid_t child, unsigned event) {
@@ -281,9 +312,13 @@ int md_debugger_syscall_mode(struct md_debugger *d, pid_t pid) {
     struct inferior *p=find(d,pid);
     return p && p->syscall_mode;
 }
+int md_debugger_syscall_emulated(struct md_debugger *d,pid_t pid) {
+    struct inferior *p=find(d,pid);
+    return p && p->syscall_mode==PTRACE_SYSEMU;
+}
 int md_debugger_syscall(struct md_debugger *d, pid_t pid, const struct user_pt_regs *r, int entry) {
     struct inferior *p=find(d,pid);
-    if (!p || !p->syscall_mode) return 0;
+    if (!p || !p->syscall_mode || (!entry && p->syscall_mode==PTRACE_SYSEMU)) return 0;
     int stopped=md_debugger_stop(d,pid,((SIGTRAP|(p->options&PTRACE_O_TRACESYSGOOD ? 0x80 : 0))<<8)|0x7f,NULL,0);
     p->syscall_stop=entry ? 1 : 2;
     p->syscall=(struct ptrace_syscall_info){.op=!(p->options&PTRACE_O_TRACESYSGOOD) ? PTRACE_SYSCALL_INFO_NONE
@@ -418,8 +453,8 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
     if (!p || p->terminal || p->owner!=caller) return -ESRCH;
     if (op==PTRACE_INTERRUPT) {
         if (!p->seized) return -EIO;
-        if (p->stopped) return 0;
-        p->pending=1; return d->host.interrupt(pid);
+        p->pending=1;
+        return p->stopped ? 0 : d->host.interrupt(pid);
     }
     if (op==PTRACE_KILL) return kill(pid,SIGKILL) ? -errno : 0;
     if (!p->stopped) return -ESRCH;
@@ -446,13 +481,20 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
     }
     case PTRACE_GETSIGINFO: {
         siginfo_t info=p->info;
-        if (md_signal_origin_matches(&p->origin,&info) && d->host.signal_translate)
-            d->host.signal_translate(caller,&p->origin,&info);
-        else if (md_signal_native_sender(&info)) {
-            info.si_uid=visible_uid(d,caller,info.si_pid,info.si_uid);
-            info.si_pid=visible(d,caller,info.si_pid);
-        }
+        signal_info_visible(d,caller,&p->origin,&info);
         return transfer(caller,data,&info,sizeof(info),1);
+    }
+    case PTRACE_PEEKSIGINFO: {
+        struct ptrace_peeksiginfo_args args;
+        int error=transfer(caller,address,&args,sizeof(args),0);
+        if (error) return error;
+        if (args.nr<0 || (args.flags&~PTRACE_PEEKSIGINFO_SHARED)) return -EINVAL;
+        if (!args.nr) return 0;
+        if (!d->host.trace) return -ENOSYS;
+        struct pending_peek copy={.debugger=d,.caller=caller,.target=pid,
+            .output=data,.skip=args.off,.limit=args.nr};
+        error=md_task_pending_scan_scope(d->host.trace,pid,args.flags,pending_peek_copy,&copy);
+        return copy.copied ? copy.copied : error<0 ? error : 0;
     }
     case PTRACE_SETSIGINFO: {
         siginfo_t info;
@@ -476,7 +518,7 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
         if (!error) error=(int)request(d,op,pid,0,&info);
         if (!error) {
             p->info=info;
-            if (!origin.valid && d->host.signal_origin) d->host.signal_origin(pid,&info,&origin);
+            if (!origin.valid && d->host.signal_origin) d->host.signal_origin(pid,&info,&origin,1);
             p->origin=origin;
         }
         return error;
@@ -518,12 +560,12 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
     }
     case PTRACE_POKETEXT: case PTRACE_POKEDATA:
         return d->host.allowed(caller,pid) ? request(d,op,pid,address,(void *)data) : -EIO;
-    case PTRACE_CONT: case PTRACE_SINGLESTEP: case PTRACE_SYSCALL: case PTRACE_DETACH: {
+    case PTRACE_CONT: case PTRACE_SINGLESTEP: case PTRACE_SYSCALL: case PTRACE_SYSEMU: case PTRACE_DETACH: {
         if (data>64) return -EIO;
         struct md_signal_origin origin=p->origin;
         p->origin.valid=0;
         p->stopped=0; p->sequence=0; p->step=op==PTRACE_SINGLESTEP;
-        p->syscall_mode=op==PTRACE_SYSCALL;
+        p->syscall_mode=op==PTRACE_SYSCALL || op==PTRACE_SYSEMU ? op : 0;
         if (op==PTRACE_DETACH) {
             struct inferior **at=&d->inferiors;
             while (*at!=p) at=&(*at)->next;

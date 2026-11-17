@@ -200,6 +200,20 @@ static void exercise(const char *proc,const char *directory,int native) {
     }
     snprintf(path,sizeof(path),"%s/uptime",proc);
     int uptime=open(path,O_RDONLY|O_CLOEXEC); assert(uptime>=0);
+    pid_t reader=fork(); assert(reader>=0);
+    if (!reader) {
+        snprintf(alias,sizeof(alias),"%s/%d/fd/%d",proc,getppid(),uptime);
+        char name[256]; ssize_t size=readlink(alias,name,sizeof(name)-1);
+        assert(size>0); name[size]=0;
+        assert(!strcmp(name,path));
+        struct stat original,named;
+        assert(!fstat(uptime,&original) && !stat(alias,&named));
+        assert(original.st_dev==named.st_dev && original.st_ino==named.st_ino);
+        _exit(0);
+    }
+    int reader_status;
+    assert(waitpid(reader,&reader_status,0)==reader);
+    assert(WIFEXITED(reader_status) && !WEXITSTATUS(reader_status));
     char sample[128]={0}; struct timespec before,after;
     assert(!clock_gettime(CLOCK_BOOTTIME,&before));
     assert(read(uptime,sample,sizeof(sample)-1)>0);

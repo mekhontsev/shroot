@@ -11,6 +11,7 @@
 #include "pid_calls.h"
 #include "seccomp_policy.h"
 #include "signal_origin.h"
+#include "signal_pending.h"
 #include "signal_view.h"
 #include "supervisor_actors.h"
 #include "supervisor_debug.h"
@@ -83,11 +84,11 @@ uid_t debugger_visible_uid(pid_t observer,pid_t sender,uid_t fallback) {
     return t ? process_signal_uid(t,sender,fallback) : fallback;
 }
 
-void debugger_signal_origin(pid_t recipient,const siginfo_t *info,struct md_signal_origin *origin) {
+void debugger_signal_origin(pid_t recipient,const siginfo_t *info,struct md_signal_origin *origin,int consume) {
     struct thread *t=find_thread(recipient);
     if (t) {
         signal_origin_capture(t,info,origin);
-        if (origin->valid) signal_origin_consumed(t,info);
+        if (consume && origin->valid) signal_origin_consumed(t,info);
     }
 }
 
@@ -162,6 +163,27 @@ void debugger_complete(pid_t pid,long value) {
     struct thread *t=find_thread(pid);
     SUPERVISOR_TRACE("PROBE debugger result pid=%d value=%ld\n",pid,value);
     if (t) return_value(t,entry_pending(t) ? NULL : &t->execution.registers,value);
+}
+
+long debugger_trace(int request,pid_t pid,void *address,void *data) {
+    struct thread *t=find_thread(pid);
+    if (t && request==PTRACE_PEEKSIGINFO) {
+        const struct ptrace_peeksiginfo_args *args=address;
+        /* Queue positions for a deferred logical SIGSYS need a merged view;
+         * never silently return an incomplete native-only queue. */
+        if (md_signal_pending_has(t->signals.pending,args->flags&PTRACE_PEEKSIGINFO_SHARED
+                ? MD_SIGNAL_SHARED : MD_SIGNAL_PRIVATE)) { errno=EOPNOTSUPP; return -1; }
+    }
+    if (t && t->seccomp.trace.stage==GUEST_TRACE_STOPPED && (uintptr_t)address==NT_ARM_SYSTEM_CALL
+            && (request==PTRACE_GETREGSET || request==PTRACE_SETREGSET)) {
+        struct iovec *io=data;
+        if (io->iov_len%sizeof(int)) { errno=EINVAL; return -1; }
+        if (!io->iov_len) return 0;
+        if (request==PTRACE_GETREGSET) memcpy(io->iov_base,&t->seccomp.trace.number,sizeof(int));
+        else memcpy(&t->seccomp.trace.number,io->iov_base,sizeof(int));
+        io->iov_len=sizeof(int); return 0;
+    }
+    return native_trace(request,pid,address,data);
 }
 
 int debugger_attachable(pid_t caller, pid_t pid) {
@@ -397,12 +419,18 @@ int debug_host_policy_pending(struct thread *t,const struct user_pt_regs *regs) 
 }
 
 int debugger_at_boundary(const struct thread *t) {
+    /* Re-admission after TRACE is still the selected syscall. Debugger
+     * SYSEMU/step/interrupt applies after this owned replay, not to its gate. */
     return t->phase==IDLE && !t->metadata_restart && !t->descriptors.running && !t->descriptors.order.table && !t->descriptors.fs_order.fs
         && !t->descriptors.policy_order.queue && !t->memory_op.order.queue && !t->memory_op.files.table
-        && !t->signals.delivery.active;
+        && !t->signals.delivery.active && t->seccomp.trace.stage!=GUEST_TRACE_REPLAY
+        && t->seccomp.trace.stage!=GUEST_TRACE_ADMISSION;
 }
 
 int debugger_boundary(struct thread *t) {
+    /* A skipped TRACE call still owns its kernel exit. Publish a pending
+     * interrupt only after that exit, not halfway through the continuation. */
+    if (t->seccomp.trace.stage==GUEST_TRACE_DRAIN) return 0;
     struct md_svc_registry *machine=md_memory_svc(t->memory);
     if (machine && md_debugger_traced(debugger,t->pid)) {
         /* An interrupt can land inside a resident entry, outside the syscall

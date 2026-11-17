@@ -21,6 +21,40 @@ struct md_interception_program {
     unsigned short count;
     struct sock_filter code[MD_INTERCEPTION_PROGRAM_INSTRUCTIONS];
 };
+struct md_interception_site { uintptr_t pc; int number; uint32_t result; };
+/* Group exact sites by their high word. PIE may cross a 4 GiB boundary;
+ * the usual single-group layout still rejects ordinary PCs with one check. */
+static inline unsigned md_interception_sites(const struct md_interception_site *sites,
+        unsigned count,struct sock_filter *out) {
+    unsigned used=0;
+    for (unsigned i=0;i<count;++i) {
+        uint32_t high=(uint32_t)(sites[i].pc>>32);
+        unsigned prior=0;
+        while (prior<i && (uint32_t)(sites[prior].pc>>32)!=high) ++prior;
+        if (prior<i) continue;
+        out[used++]=(struct sock_filter)BPF_STMT(BPF_LD|BPF_W|BPF_ABS,
+            offsetof(struct seccomp_data,instruction_pointer)+4);
+        unsigned branch=used++;
+        int low_loaded=0;
+        for (unsigned j=i;j<count;++j) {
+            const struct md_interception_site *s=sites+j;
+            if ((uint32_t)(s->pc>>32)!=high) continue;
+            if (!low_loaded) out[used++]=(struct sock_filter)BPF_STMT(BPF_LD|BPF_W|BPF_ABS,
+                offsetof(struct seccomp_data,instruction_pointer));
+            out[used++]=(struct sock_filter)BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,
+                (uint32_t)s->pc,0,s->number<0 ? 1 : 3);
+            if (s->number>=0) {
+                out[used++]=(struct sock_filter)BPF_STMT(BPF_LD|BPF_W|BPF_ABS,
+                    offsetof(struct seccomp_data,nr));
+                out[used++]=(struct sock_filter)BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,s->number,0,1);
+            }
+            out[used++]=(struct sock_filter)BPF_STMT(BPF_RET|BPF_K,s->result);
+            low_loaded=s->number<0;
+        }
+        out[branch]=(struct sock_filter)BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,high,0,used-branch-1);
+    }
+    return used;
+}
 enum { MD_SIGNAL_SERVICE_INSTRUCTIONS=4*5+1, MD_SIGNAL_QUERY_INSTRUCTIONS=6+MD_SIGNAL_SERVICE_INSTRUCTIONS };
 static inline unsigned md_signal_service_program(const struct md_interception_abi *abi,
         uint32_t fallback,struct sock_filter *out) {
@@ -82,7 +116,7 @@ static inline void md_interception_program_build(const struct md_interception_ab
             BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, value, 0, 1), \
             BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW), \
             BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
-        struct sock_filter filter[] = {
+        struct sock_filter prefix[] = {
             BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
             BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 1, 0),
             BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
@@ -104,16 +138,11 @@ static inline void md_interception_program_build(const struct md_interception_ab
              * starts. Admit its owner before sleeping, but leave zero-time
              * native probes and owned task/adapter calls in the kernel. */
             BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_epoll_pwait2,1,0),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_epoll_pwait,0,15),
-            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,instruction_pointer)+4),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)(gate>>32),0,7),
-            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,instruction_pointer)),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)admit,0,1),
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_USER_NOTIF),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)native,2,0),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)task,1,0),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)gate,0,1),
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_epoll_pwait,0,0)};
+        const struct md_interception_site waits[]={
+            {admit,-1,SECCOMP_RET_USER_NOTIF},{native,-1,SECCOMP_RET_ALLOW},
+            {task,-1,SECCOMP_RET_ALLOW},{gate,-1,SECCOMP_RET_ALLOW}};
+        struct sock_filter wait_tail[]={
             BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
             BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_epoll_pwait2,3,0),
             BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,args[3])),
@@ -121,55 +150,30 @@ static inline void md_interception_program_build(const struct md_interception_ab
             BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW),
             BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE|MD_INTERCEPT_READINESS),
             BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
-            MD_DOMAIN_EXECUTION_CALLS(NATIVE)
-            /* All service gates live in the fixed bootstrap text image.
-             * Ordinary guest code skips this table with one high-IP check. */
-#define COUNT_MARKER(field,symbol) +2
-            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,instruction_pointer)+4),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)(abi->ready>>32),0,
-                27 MD_CHECKPOINT_SITES(COUNT_MARKER)),
-#undef COUNT_MARKER
-            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,instruction_pointer)),
+            MD_DOMAIN_EXECUTION_CALLS(NATIVE)};
+        const struct md_interception_site services[]={
 #define MARKER(field,symbol) \
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)(abi->field+4),0,1), \
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE|MD_INTERCEPT_CHECKPOINT),
+            {abi->field+4,-1,SECCOMP_RET_TRACE|MD_INTERCEPT_CHECKPOINT},
             MD_CHECKPOINT_SITES(MARKER)
 #undef MARKER
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)abi->adapter_native_return,0,1),
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE|MD_INTERCEPT_TASK),
+            {abi->adapter_native_return,-1,SECCOMP_RET_TRACE|MD_INTERCEPT_TASK},
             /* The operation owner has admitted this journaled native effect.
              * Do not maintain a second syscall policy at its execution gate. */
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)native,0,1),
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW),
+            {native,-1,SECCOMP_RET_ALLOW},
             /* Descriptor admission has no dependency on application prctl
              * policy. The installed chain must admit this exact service site. */
-            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,instruction_pointer)),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)admit,0,3),
-            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_gettid,0,1),
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_USER_NOTIF),
+            {admit,SYS_gettid,SECCOMP_RET_USER_NOTIF},
             /* Exact private-helper termination site. Its admitted service
              * policy must not strand the private file table because ordinary
              * guest exit is denied. Guest exits never use this site. */
-            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,instruction_pointer)),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)abort_task,0,1),
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_KILL_THREAD),
-            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,instruction_pointer)),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)task,0,4),
-            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
-            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_gettid,0,1),
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_USER_NOTIF),
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE|MD_INTERCEPT_TASK),
+            {abort_task,-1,SECCOMP_RET_KILL_THREAD},
+            {task,SYS_gettid,SECCOMP_RET_USER_NOTIF},
+            {task,-1,SECCOMP_RET_TRACE|MD_INTERCEPT_TASK},
             /* Declared on the original listener; a later listenerless filter
              * cannot acquire or inherit USER_NOTIF delivery. */
-            BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer)),
-            BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)watch, 0, 1),
-            BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_USER_NOTIF),
-            BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer)),
-            BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)capture, 0, 3),
-            BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
-            BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_openat, 0, 1),
-            BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRACE | MD_INTERCEPT_CAPTURE),
+            {watch,-1,SECCOMP_RET_USER_NOTIF},
+            {capture,SYS_openat,SECCOMP_RET_TRACE|MD_INTERCEPT_CAPTURE}};
+        struct sock_filter filter[]={
             /* Descriptor metadata must remain serviceable after an application
              * installs a higher-precedence filter or becomes nondumpable. */
             BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
@@ -325,11 +329,22 @@ static inline void md_interception_program_build(const struct md_interception_ab
 #undef NATIVE
 #undef DESCRIPTOR
 
-    _Static_assert(sizeof(filter)/sizeof(*filter)+MD_SIGNAL_QUERY_INSTRUCTIONS<=MD_INTERCEPTION_PROGRAM_INSTRUCTIONS,"interception filter capacity");
-    for (unsigned i=0;i<3;++i) out->code[i]=filter[i];
+    _Static_assert((sizeof(prefix)+sizeof(wait_tail)+sizeof(filter))/sizeof(*filter)
+        +7*(sizeof(waits)/sizeof(*waits)+sizeof(services)/sizeof(*services))
+        +MD_SIGNAL_QUERY_INSTRUCTIONS<=MD_INTERCEPTION_PROGRAM_INSTRUCTIONS,"interception filter capacity");
+    _Static_assert(5*sizeof(services)/sizeof(*services)<256,"service group branch capacity");
+    for (unsigned i=0;i<3;++i) out->code[i]=prefix[i];
     unsigned query=md_signal_query_program(abi,SECCOMP_RET_USER_NOTIF,out->code+3);
-    out->count=sizeof(filter)/sizeof(*filter)+query;
-    for (unsigned i=3;i<sizeof(filter)/sizeof(*filter);++i) out->code[i+query]=filter[i];
+    unsigned used=3+query;
+    for (unsigned i=3;i<sizeof(prefix)/sizeof(*prefix);++i) out->code[used++]=prefix[i];
+    unsigned wait_branch=used-1;
+    unsigned wait_count=md_interception_sites(waits,sizeof(waits)/sizeof(*waits),out->code+used);
+    out->code[wait_branch].jf=wait_count+6;
+    used+=wait_count;
+    for (unsigned i=0;i<sizeof(wait_tail)/sizeof(*wait_tail);++i) out->code[used++]=wait_tail[i];
+    used+=md_interception_sites(services,sizeof(services)/sizeof(*services),out->code+used);
+    for (unsigned i=0;i<sizeof(filter)/sizeof(*filter);++i) out->code[used++]=filter[i];
+    out->count=used;
 }
 static inline void md_signal_program_build(const struct md_interception_abi *abi,
         struct md_interception_program *out) {

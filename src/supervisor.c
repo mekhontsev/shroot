@@ -183,6 +183,7 @@ static void cleanup_resume_tracees(void) {
 }
 
 void cleanup(void) {
+    image_layout_release();
     report_statistics();
     cancelling=1;
     if (cancellation_timer>=0) { close(cancellation_timer); cancellation_timer=-1; }
@@ -714,7 +715,7 @@ int main(int argc, char **argv) {
         argument+=2;
     }
     setvbuf(stderr, NULL, _IONBF, 0);
-    struct md_debugger_host debug_host={.trace=native_trace,.parent=debugger_parent,.group=debugger_group,.uid=debugger_uid,.allowed=debugger_allowed,.traceme=debugger_traceme,
+    struct md_debugger_host debug_host={.trace=debugger_trace,.seccomp_events=1,.parent=debugger_parent,.group=debugger_group,.uid=debugger_uid,.allowed=debugger_allowed,.traceme=debugger_traceme,
         .wait_children=private_wait_children,
         .visible_pid=debugger_visible_pid,.native_pid=debugger_native_pid,.visible_uid=debugger_visible_uid,.reaped=debugger_reaped,
         .signal_origin=debugger_signal_origin,.signal_translate=debugger_signal_translate,
@@ -816,6 +817,7 @@ int main(int argc, char **argv) {
     CHECK(inherited_no_new_privs >= 0);
     launch_identity.no_new_privs = (unsigned)inherited_no_new_privs;
     CHECK(argument < argc);
+    CHECK(!image_layout_prepare(argv[argument]));
     struct md_process_signals inherited;
     CHECK(md_process_signals_open(&inherited) >= 0);
     signal_fd = inherited.fd;
@@ -1034,6 +1036,7 @@ int main(int argc, char **argv) {
         t->kernel_stopped=1;
         t->interrupt_pending=0;
         if (md_debugger_active(debugger)) t->usage=usage;
+        if (image_layout_event(t,status)) continue;
         if (filter_install_event(t,status)) continue;
         if (guest_notification_event(t,status)) continue;
         if (signal_control_event(t,status)) continue;

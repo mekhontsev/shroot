@@ -53,7 +53,24 @@ Linux package checks include logical guest root, shell execution, hardlinks and
 file IO; lazy-SVC completion is observed. This is not the full distribution
 GUI/container matrix or a performance comparison. The `linux-5.15` profile tests
 capability fallbacks on these hosts, not a real 5.15 kernel. A musl guest is not
-evidence of building the host runtime against musl; nested Shroot is unqualified.
+evidence of building the host runtime against musl.
+
+### Nested Runtime
+
+`test_nested_runtime.py BUILD --case nested` creates disposable outer and inner
+stores using the same helper binaries. All four Base/lazy combinations cover
+startup, fork/exec/wait, exit status, arguments, environment, hardlink/symlink
+metadata and descriptor isolation. `--depth 3` extends this to eight combinations
+and 24 launches. Both depths pass on the Android Termux host above. Nested
+distribution workloads, Linux/16 KiB placement and performance comparisons are
+not yet qualified.
+
+`--case debugger` exercises the same C scenarios used by
+`test_debugger_runtime.py`: seccomp TRACE and number changes, SYSEMU, pending
+interrupts, pidfd descriptor copies, foreign proc-FD reopen, service admission
+and nondestructive signal-queue inspection. `--native-control` also executes
+these scenarios directly on the host. CTest registers `nested_debugger` and
+`nested_nested`; these supplement, not replace, ordinary runtime and ELF tests.
 
 ## Fixture Transports
 

@@ -23,6 +23,26 @@ static inline struct seccomp_data syscall_observation(const struct ptrace_syscal
     return call;
 }
 
+/* A debugger can change NT_ARM_SYSTEM_CALL independently of x8. Recovered
+ * adapter contexts have a different PC and still use their logical frame. */
+static inline struct seccomp_data syscall_stopped(const struct user_pt_regs *regs,
+        const struct ptrace_syscall_info *info) {
+    struct seccomp_data call=syscall_description(regs);
+    if (info && info->op==PTRACE_SYSCALL_INFO_SECCOMP && regs->pc==info->instruction_pointer)
+        call.nr=info->seccomp.nr;
+    return call;
+}
+
+/* ARM64 keeps orig_x0 separately: policy reads the entry argument even when
+ * ptrace changes visible x0 for execution. The other arguments stay live. */
+static inline struct seccomp_data syscall_policy(const struct user_pt_regs *regs,
+        const struct ptrace_syscall_info *info) {
+    struct seccomp_data call=syscall_stopped(regs,info);
+    if (info && info->op==PTRACE_SYSCALL_INFO_SECCOMP && regs->pc==info->instruction_pointer)
+        call.args[0]=info->seccomp.args[0];
+    return call;
+}
+
 struct supervisor_control_request {
     __u64 command;
     __u64 args[3];

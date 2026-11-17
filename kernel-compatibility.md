@@ -11,6 +11,16 @@ boundary, not a claim of complete host coverage. Native capability checks belong
 to guest launch; embedding applications must not make unrelated services depend
 on their success.
 
+### Bootstrap Placement
+
+`supervisor_image.c` retains a launch's first bootstrap placement across exec
+using baseline mmap with `MAP_FIXED_NOREPLACE`, mremap and munmap. It uses the
+existing ARM64 syscall-regset and syscall-stop contract before guest entry;
+rejected placement terminates and reaps that task rather than running a partial
+image. ELF layout assertions cover 4/16 KiB preflight, while the nested runtime
+fixture covers repeated exec and mixed Base/lazy entry on the tested 4 KiB host.
+No newer-than-5.15 kernel interface is required.
+
 ### Guest FUSE
 
 Guest FUSE advertises protocol 7.31, with older daemon negotiation, through a

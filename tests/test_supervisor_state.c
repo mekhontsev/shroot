@@ -20,11 +20,25 @@
 #include "../src/supervisor_io.c"
 #include "../src/supervisor_debug.c"
 #include "../src/supervisor_robust.c"
+#include "../src/supervisor_image.c"
 #include <assert.h>
 #include "fs_mount_internal.h"
 #include "seccomp_notify.h"
 #include "task_pending.h"
 #include "full_device.h"
+
+static void stopped_call_context(void) {
+    struct user_pt_regs regs={.pc=0x1004,.regs={7,[8]=SYS_getpid}};
+    struct ptrace_syscall_info info={.op=PTRACE_SYSCALL_INFO_SECCOMP,
+        .arch=AUDIT_ARCH_AARCH64,.instruction_pointer=regs.pc};
+    info.seccomp.nr=SYS_getpgid; info.seccomp.args[0]=23;
+    struct seccomp_data execution=syscall_stopped(&regs,&info),policy=syscall_policy(&regs,&info);
+    assert(execution.nr==SYS_getpgid && execution.args[0]==7);
+    assert(policy.nr==SYS_getpgid && policy.args[0]==23);
+    regs.pc+=4;
+    policy=syscall_policy(&regs,&info);
+    assert(policy.nr==SYS_getpid && policy.args[0]==7);
+}
 
 static void filesystem_control_metadata(void) {
     struct stat st={.st_mode=S_IFCHR|0666};
@@ -1160,24 +1174,29 @@ static void trace_policy_admission(void) {
     struct thread t={.signals.host=1,.entered=1,.phase=IDLE};
     assert(!md_seccomp_policy_capture(NULL,&program,&t.seccomp.policy));
     struct seccomp_data call={.arch=AUDIT_ARCH_AARCH64,.nr=SYS_newfstatat,.instruction_pointer=0x12345678};
-    assert(guest_trace_rejected(&t,&call));
-    call.nr=SYS_openat; assert(!guest_trace_rejected(&t,&call));
+    uint32_t traced=SECCOMP_RET_TRACE|MD_INTERCEPT_SIGNAL;
+    assert(guest_trace_decision(&t,&call)==traced);
+    call.nr=SYS_openat; assert(guest_trace_decision(&t,&call)==SECCOMP_RET_ALLOW);
     call.nr=SYS_newfstatat; call.instruction_pointer=RAW_GATE;
-    assert(!guest_trace_rejected(&t,&call));
-    call.instruction_pointer=abi.task_return; assert(!guest_trace_rejected(&t,&call));
+    assert(guest_trace_decision(&t,&call)==SECCOMP_RET_ALLOW);
+    call.instruction_pointer=abi.task_return; assert(guest_trace_decision(&t,&call)==SECCOMP_RET_ALLOW);
     uintptr_t begin=abi.code_begin,end=abi.code_end;
     abi.code_begin=0x20000; abi.code_end=0x30000;
     for (uintptr_t pc=abi.code_begin;pc<abi.code_end;pc+=0x1000) {
         call.instruction_pointer=pc;
-        assert(!guest_policy_boundary(&t,&call) && !guest_trace_rejected(&t,&call));
+        assert(!guest_policy_boundary(&t,&call) && guest_trace_decision(&t,&call)==SECCOMP_RET_ALLOW);
     }
     call.instruction_pointer=abi.code_end;
-    assert(guest_policy_boundary(&t,&call) && guest_trace_rejected(&t,&call));
+    assert(guest_policy_boundary(&t,&call) && guest_trace_decision(&t,&call)==traced);
     abi.code_begin=begin; abi.code_end=end;
     call.instruction_pointer=0x12345678;
-    t.phase=DISPATCHING; assert(!guest_trace_rejected(&t,&call));
-    t.phase=IDLE; t.signals.host=0; assert(guest_trace_rejected(&t,&call));
-    t.signals.host=1; t.entered=0; assert(!guest_trace_rejected(&t,&call));
+    t.phase=DISPATCHING; assert(guest_trace_decision(&t,&call)==SECCOMP_RET_ALLOW);
+    t.phase=IDLE; t.signals.host=0; assert(guest_trace_decision(&t,&call)==traced);
+    assert(debugger_at_boundary(&t));
+    t.seccomp.trace.stage=GUEST_TRACE_REPLAY; assert(!debugger_at_boundary(&t));
+    t.seccomp.trace.stage=GUEST_TRACE_ADMISSION; assert(!debugger_at_boundary(&t));
+    t.seccomp.trace.stage=GUEST_TRACE_NONE; assert(debugger_at_boundary(&t));
+    t.signals.host=1; t.entered=0; assert(guest_trace_decision(&t,&call)==SECCOMP_RET_ALLOW);
     md_seccomp_policy_release(t.seccomp.policy);
     puts("PASS original TRACE admission: notification calls, selector collision and owned-gate isolation");
 }
@@ -5745,7 +5764,9 @@ static void debugger_quiescence(void) {
         assert(debugger_result==(enabled ? 0 : -EIO));
         if (enabled) {
             struct user_pt_regs original={.regs={[8]=SYS_mount,[0]=17,[1]=19},.pc=0x4004,.sp=0x8000};
-            assert(md_debugger_seccomp(debugger,123,&original,0x321));
+            struct seccomp_data call=syscall_description(&original);
+            original.regs[8]=SYS_getpid;
+            assert(md_debugger_seccomp(debugger,123,&call,original.sp,0x321));
             siginfo_t event={0};
             struct seccomp_data wait={.nr=SYS_waitid,.args={P_PID,123,(uintptr_t)&event,WSTOPPED|WNOWAIT}};
             assert(md_debugger_call(debugger,getpid(),wait)==MD_DEBUG_CALL_HANDLED && !debugger_result);
@@ -5769,7 +5790,7 @@ static void debugger_quiescence(void) {
             assert(short_info[0]==PTRACE_SYSCALL_INFO_SECCOMP && short_info[1]==0x5a);
             request.regs[0]=PTRACE_SETOPTIONS; request.regs[2]=request.regs[3]=0;
             assert(md_debugger_call(debugger,getpid(),syscall_description(&request))==MD_DEBUG_CALL_HANDLED && !debugger_result);
-            assert(!md_debugger_seccomp(debugger,123,&original,0x322));
+            assert(!md_debugger_seccomp(debugger,123,&call,original.sp,0x322));
         }
         md_debugger_destroy(debugger); debugger=NULL;
     }
@@ -6195,8 +6216,7 @@ static void service_gate_admission(void) {
     for (unsigned source=0;source<2;++source) for (unsigned resident=0;resident<2;++resident) {
         struct md_seccomp_policy *policy=NULL;
         assert(!md_seccomp_policy_capture(NULL,&sources[source],&policy));
-        struct md_seccomp_route route=filter_service_route(gates,
-            resident ? FILTER_SERVICE_GATES : FILTER_REQUIRED_GATES,resident ? 7 : 0);
+        struct md_seccomp_route route=filter_service_route(gates,FILTER_SERVICE_GATES,resident ? 7 : 0);
         struct sock_filter code[256];
         int size=md_seccomp_policy_route(policy,NULL,0,MD_INTERCEPT_TASK,code,256,&route);
         assert(size>0);
@@ -6208,19 +6228,17 @@ static void service_gate_admission(void) {
             uint32_t value;
             assert(!md_seccomp_program_eval(&routed,&call,&value) && value==SECCOMP_RET_ALLOW);
             call.instruction_pointer+=4;
-            assert(!md_seccomp_program_eval(&routed,&call,&value)
-                && value==(resident ? SECCOMP_RET_ALLOW : SECCOMP_RET_KILL_THREAD));
+            assert(!md_seccomp_program_eval(&routed,&call,&value) && value==SECCOMP_RET_ALLOW);
             call.instruction_pointer=0x3004;
             assert(!md_seccomp_program_eval(&routed,&call,&value) && value==SECCOMP_RET_KILL_THREAD);
         }
         struct seccomp_data wrong={.arch=AUDIT_ARCH_AARCH64,.nr=SYS_read,.instruction_pointer=abi.capture_gate};
         uint32_t value;
-        assert(!md_seccomp_program_eval(&routed,&wrong,&value)
-            && value==(resident ? SECCOMP_RET_ALLOW : SECCOMP_RET_KILL_THREAD));
+        assert(!md_seccomp_program_eval(&routed,&wrong,&value) && value==SECCOMP_RET_ALLOW);
         md_seccomp_policy_release(policy);
     }
     abi=saved;
-    puts("PASS service gate admission: Base, resident and fallback retain exact FD/watch carriers before explicit/implicit guest denials");
+    puts("PASS service gate admission: Base, resident and fallback retain shared service admission before explicit/implicit guest denials");
 }
 static void checkpoint_admission(void) {
     struct thread t={.pid=123,.memory=md_memory_new()}; assert(t.memory);
@@ -6710,6 +6728,38 @@ static void admission_quiescence(void) {
     }
     abi.buffer_admit=saved;
     puts("PASS internal admission: shielded quiescence before/after notification, exact retry, EINTR and one FD publication");
+}
+static void relocated_service_sites(void) {
+    const uintptr_t deltas[]={0,0xfffffec0,0xfffffffc,0x1fffffe40};
+    for (unsigned host=0;host<2;++host) for (unsigned d=0;d<sizeof(deltas)/sizeof(*deltas);++d) {
+        struct md_interception_abi original={.host_policy=host},relocated={.host_policy=host};
+        uintptr_t sites[64],at=UINT64_C(0x2000000000);
+        unsigned count=0;
+#define SITE(field,adjust) \
+        original.field=at; relocated.field=at+deltas[d]; sites[count++]=at+(adjust); at+=16;
+#define CHECKPOINT(field,symbol) SITE(field,4)
+        MD_CHECKPOINT_SITES(CHECKPOINT)
+#undef CHECKPOINT
+        SITE(raw_gate,0) SITE(watch_return,0) SITE(capture_gate,0)
+        SITE(task_return,0) SITE(task_abort_return,0) SITE(buffer_admit,0)
+        SITE(native_return,0) SITE(adapter_native_return,0)
+#undef SITE
+        struct md_interception_program first,second;
+        md_interception_program_build(&original,&first);
+        md_interception_program_build(&relocated,&second);
+        struct sock_fprog a={first.count,first.code},b={second.count,second.code};
+        for (unsigned site=0;site<count;++site) for (unsigned alias=0;alias<3;++alias)
+        for (int nr=0;nr<=460;++nr) {
+            struct seccomp_data call={.nr=nr,.arch=AUDIT_ARCH_AARCH64,.args={[3]=(uint64_t)-1}};
+            call.instruction_pointer=sites[site]+(alias==1 ? 4 : alias==2 ? UINT64_C(3)<<32 : 0);
+            uint32_t expected,actual;
+            assert(!md_seccomp_program_eval(&a,&call,&expected));
+            call.instruction_pointer+=deltas[d];
+            assert(!md_seccomp_program_eval(&b,&call,&actual));
+            assert(actual==expected);
+        }
+    }
+    puts("PASS relocated service sites: full addresses across 4 GiB boundaries, syscall selectors and nonmatching aliases");
 }
 static void descriptor_command_selection(void) {
     const unsigned commands[]={FIOCLEX,FIONCLEX};
@@ -7334,6 +7384,7 @@ int main(void) {
     external_signal_target();
     policy_signal_observation();
     signal_descriptor_rollback();
+    relocated_service_sites();
     descriptor_command_selection();
     descriptor_service_queries();
     retained_child_selection();
@@ -7402,6 +7453,7 @@ int main(void) {
     scalar_stopped_transport();
     signal_group_resource();
     thread_exit_target();
+    stopped_call_context();
     image_entry_identity();
     for (unsigned order=0;order<6;++order) for (int descriptor=0;descriptor<2;++descriptor)
         completed_notification_orders(order,descriptor);

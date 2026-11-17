@@ -84,7 +84,7 @@ static long execute_files(const struct md_fs *fs,const struct md_guest_execution
         return md_ipc_dispatch(nr,args);
     if (nr==SYS_read || nr==SYS_readv || nr==SYS_ioctl || nr==SYS_splice
             || nr==SYS_tee || nr==SYS_sendfile) return md_watch_read_local(fs,nr,args);
-    if (nr==SYS_dup || nr==SYS_dup3 || nr==SYS_fcntl)
+    if (nr==SYS_dup || nr==SYS_dup3 || nr==SYS_fcntl || nr==SYS_pidfd_getfd)
         return md_descriptor_duplicate(fs,nr,args);
     if (nr==SYS_inotify_init1 || nr==SYS_inotify_rm_watch)
         return md_watch_call(fs,nr,args);

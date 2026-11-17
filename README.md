@@ -26,6 +26,8 @@ into another project. Both use the same runtime, environment catalog and storage
 - **Desktop applications:** X11/Wayland desktops, Chromium, Firefox, VS Code,
   selected Flatpak/Snap applications and FUSE document portals.
 - **Development tools:** GDB, LLDB, gdbserver, strace and QEMU's software emulator.
+- **Recursive execution:** run Shroot inside Shroot with the same runtime
+  binaries, without a special nesting mode.
 
 These are supported workflows, not a claim that every package works on every
 host. The [distribution matrix](tests/validation-matrix.md) records application
@@ -86,6 +88,17 @@ the Base seccomp/ptrace path. Base and lazy entry share syscall implementations
 and resource ownership. See [cooperative entry](cooperative-entry.md) for admission,
 signals, sandbox filters and performance controls.
 
+## Recursive Execution
+
+Shroot can run inside a Shroot environment. Each instance uses ordinary Linux
+interfaces to supervise its own guest; neither the inner nor the outer runtime
+needs to recognize the other. Each level owns its supervisor and environment store.
+
+Tests cover two and three levels on Android, including mixed Base/lazy entry,
+fork/exec/wait, exit status, arguments, environment and file metadata. See
+[recursive test coverage](tests/README.md#nested-runtime) for the current scope.
+Recursion does not grant additional host privileges or create a new host UID.
+
 ## Storage And Integration
 
 Each environment has an inode-backed store. SQLite holds guest names, identity,
@@ -100,17 +113,24 @@ internal, and each launch retains its chosen identity and environment.
 
 [MagicDesk](https://github.com/mekhontsev/magicdesk) uses Shroot for its Linux
 environments on Android. It adds terminals, graphics, audio, file exchange and
-automation, and can package a Linux environment as an application with its own
-Android UID and private data. Other integrations can use the same native API and
-explicit host connections.
+automation. Other integrations can use the same native API and explicit host
+connections.
 
 ## Boundaries
 
-Shroot shares the host kernel and supplies a supported subset of Linux semantics;
-it is not a complete kernel or a security boundary for hostile guest code.
-Guest permissions, mount policy, supported Landlock rules and seccomp checks
-remain meaningful, but unadapted calls and inherited descriptors retain host
-authority. Independent Android UIDs provide a separate outer application sandbox.
+Host-enforced isolation is separate from Shroot's guest semantics. On Android,
+a distinct application UID with private storage supplies the kernel-enforced
+[application sandbox](https://source.android.com/docs/security/app-sandbox),
+including UID, SELinux and seccomp protections for native processes. Guest root
+does not grant host root or access to another application's private data.
+
+Shroot itself shares the host kernel and supplies a supported subset of Linux
+semantics. Its logical separation between environments sharing one host UID is
+not a security boundary for hostile code. Guest permissions, mount policy,
+supported Landlock rules and seccomp checks remain meaningful, but unadapted
+calls and inherited descriptors retain that UID's host authority. Explicitly
+shared files, connections and graphics sessions remain shared capabilities;
+different host UIDs do not isolate clients of the same X11 server from one another.
 
 Logical cgroups enforce pids limits and freezer state, but not hard CPU, memory
 or device limits. Snap's reduced confinement does not provide AppArmor isolation.

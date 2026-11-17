@@ -9,9 +9,22 @@
 #include <linux/netlink.h>
 #include <sys/socket.h>
 #include <sys/resource.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+    if (argc == 3 && !strcmp(argv[1], "fork-exec")) {
+        pid_t child = fork();
+        if (child < 0) return 12;
+        if (!child) {
+            char *next[] = {argv[0], argv[2], NULL};
+            execv(next[0], next);
+            _exit(13);
+        }
+        int status;
+        if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) return 14;
+        return WEXITSTATUS(status);
+    }
     if (argc == 3 && !strcmp(argv[1], "path")) {
         const char *path = getenv("PATH");
         return !path || strcmp(path, argv[2]) ? 40 : 0;
@@ -24,7 +37,25 @@ int main(int argc, char **argv) {
         close(fd);
         fd = open(path, O_WRONLY);
         if (fd >= 0 || errno != EROFS) return 32;
+        fd = open(argv[2], O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+        if (fd >= 0 || errno != EROFS) { perror("guest readonly tmpfile"); return 33; }
         puts("PASS guest: created readonly attachment, contents and write denial");
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[1], "native-tmpfile")) {
+        mode_t mask = umask(0077);
+        for (unsigned exclusive = 0; exclusive < 2; ++exclusive) {
+            int fd = open(argv[2], O_TMPFILE | O_RDWR | O_CLOEXEC | (exclusive ? O_EXCL : 0), 0666);
+            struct stat st;
+            if (fd < 0 || fstat(fd, &st)) { perror("guest native tmpfile"); return 34; }
+            if (!S_ISREG(st.st_mode) || (st.st_mode & 0777) != 0600 || st.st_nlink
+                    || fcntl(fd, F_GETFD) != FD_CLOEXEC) return 35;
+            char value = 0;
+            if (write(fd, "x", 1) != 1 || pread(fd, &value, 1, 0) != 1 || value != 'x'
+                    || close(fd)) return 36;
+        }
+        umask(mask);
+        puts("PASS guest: native temporary files, creation mode, umask and anonymous lifetime");
         return 0;
     }
     if (argc == 2 && !strcmp(argv[1], "limits")) {

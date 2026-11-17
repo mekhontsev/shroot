@@ -9,6 +9,7 @@
 #include "watch_calls.h"
 #include "interception.h"
 #include "proc_control.h"
+#include "pid_calls.h"
 #include "raw.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -23,7 +24,11 @@ long md_descriptor_duplicate(const struct md_fs *fs, long nr, const unsigned lon
     if (nr==SYS_fcntl && command!=F_DUPFD && command!=F_DUPFD_CLOEXEC)
         return md_raw(nr,a[0],a[1],a[2],a[3],a[4],a[5]);
     unsigned required;
-    for (;;) {
+    if (nr==SYS_pidfd_getfd) {
+        long prepared=md_pidfd_copy_begin(a);
+        if (prepared<0) return prepared;
+        required=(unsigned)prepared;
+    } else for (;;) {
         struct md_fd_observation view=md_fd_observe((int)a[0]);
         if (view.selectors<0) return view.selectors;
         long watched=view.selectors ? 0 : md_watch_contains(fs,(int)a[0]);

@@ -63,6 +63,12 @@ endforeach()
 add_test(NAME native_suite COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_suite.py" "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(native_suite PROPERTIES LABELS integration TIMEOUT 180)
+add_dependencies(shroot-check-fixtures debugger_guest)
+foreach(case debugger nested)
+    add_test(NAME nested_${case} COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_nested_runtime.py" "${CMAKE_CURRENT_BINARY_DIR}" --case ${case})
+    set_tests_properties(nested_${case} PROPERTIES LABELS integration TIMEOUT 180)
+endforeach()
 if(SHROOT_STATIC_RUNTIME AND SHROOT_SQLITE STREQUAL "bundled")
     add_test(NAME bundle COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bundle.py" "${CMAKE_CURRENT_BINARY_DIR}"

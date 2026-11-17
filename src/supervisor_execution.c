@@ -230,7 +230,8 @@ int lost_stop_event(struct thread *t,unsigned event) {
 int machine_discovery(struct thread *t) {
     struct md_svc_registry *registry=md_memory_svc(t->memory);
     return registry && !registry->disabled && t->entered && filter_entry_eligible(t)
-        && !t->entry.blocked && !t->debug.options && !md_memory_exposed(t->memory)
+        && !t->entry.blocked && !t->debug.options && !t->debug.call_active
+        && t->seccomp.trace.stage==GUEST_TRACE_NONE && !md_memory_exposed(t->memory)
         && !t->seccomp.notification_continued && !t->seccomp.admission_policy_valid && t!=entry_fence_owner;
 }
 
@@ -539,7 +540,8 @@ void return_task_value(struct thread *t,struct user_pt_regs *regs,long value,
         enum md_task_call_boundary boundary) {
     /* A borrowed call can consume the application's kernel exit. Publish that
      * exit exactly once; an intact entry still gets its ordinary native stop. */
-    if (boundary==MD_TASK_CALL_EXIT && t->debug.call_active) t->debug.adapter=1;
+    if ((boundary==MD_TASK_CALL_EXIT || boundary==MD_TASK_CALL_USER) && t->debug.call_active)
+        t->debug.adapter=1;
     return_value(t,regs,value);
 }
 
@@ -1202,7 +1204,7 @@ static void buffer_control(struct thread *t,const struct supervisor_control_requ
             && control->command!=MD_FS_BUFFER_RIGHTS_DONE && control->command!=MD_FS_BUFFER_CHANNEL_OBSERVED
             && control->command!=MD_BUFFER_PID_NUMBER && control->command!=MD_BUFFER_NATIVE_IDENTITY
             && control->command!=MD_BUFFER_DESCRIPTOR_META && control->command!=MD_BUFFER_PIDFD_NAMESPACE
-            && control->command!=MD_BUFFER_PIDFD_SIGNAL
+            && control->command!=MD_BUFFER_PIDFD_SIGNAL && control->command!=MD_BUFFER_PIDFD_COPY
             && control->command!=MD_BUFFER_PIDFD_READY && control->command!=MD_BUFFER_PIDFD_SENT && control->command!=MD_BUFFER_PIDFD_OBSERVED
             && control->command!=MD_BUFFER_CONTROL_IOCTL
             && control->command!=MD_BUFFER_CONTROL_MAP && control->command!=MD_BUFFER_CONTROL_IOCTL_LAYOUT
@@ -1316,6 +1318,7 @@ static void buffer_control(struct thread *t,const struct supervisor_control_requ
     case MD_BUFFER_DESCRIPTOR_META:
     case MD_BUFFER_PIDFD_NAMESPACE:
     case MD_BUFFER_PIDFD_SIGNAL:
+    case MD_BUFFER_PIDFD_COPY:
     case MD_BUFFER_PIDFD_READY:
     case MD_BUFFER_PIDFD_SENT:
     case MD_BUFFER_PIDFD_OBSERVED:
@@ -1589,7 +1592,7 @@ void resume(pid_t pid, int sig) {
             && (t->metadata_restart->stage==METADATA_ENTRY || t->metadata_restart->stage==METADATA_WAIT))
             || t->signals.return_pending || t->machine.syscall_exit || (phase==IDLE && t->machine.retry_svc)
             || t->fs.direct==DIRECT_ADMIT || (t->descriptors.running && !t->entry.effect)
-            || phase == OBSERVING || phase==NATIVE_WAIT || phase==PROCESS_OBSERVING
+            || phase == OBSERVING || phase==NATIVE_WAIT || phase==PROCESS_OBSERVING || phase==IMAGE_RELOCATING
             || phase==PROCESS_INIT_ENTRY || phase==PROCESS_INIT_EXIT || phase == EXPORT_ENTRY || phase == EXPORT_NOTIFY
             || phase == EXPORT_RETURN || phase == EXECUTING || phase == WATCH_CANCEL
             || phase == WATCH_ENTRY || phase == WATCH_READ || phase==ADAPTER_NATIVE || phase==DEBUG_WAIT_ENTRY || phase==DEBUG_WAIT_EXIT
@@ -1602,9 +1605,12 @@ void resume(pid_t pid, int sig) {
             || phase==WAIT_CANCEL_EXIT || phase==CLONE_ENTRY || phase==CLONE_ADMISSION
             || phase==SIGNAL_NATIVE_EXIT
             || phase==RESULT_REPLAY_ENTRY || phase==RESULT_REPLAY_EXIT
+            || t->seccomp.trace.stage==GUEST_TRACE_REPLAY || t->seccomp.trace.stage==GUEST_TRACE_ADMISSION
             || (debugger_at_boundary(t) && t->entered && t->image.process_image
-                && md_debugger_syscall_mode(debugger,pid)) ? PTRACE_SYSCALL
+                && (t->debug.call_active || md_debugger_syscall_mode(debugger,pid))) ? PTRACE_SYSCALL
                 : debugger_at_boundary(t) && t->entered && md_debugger_step(debugger,pid) ? PTRACE_SINGLESTEP : PTRACE_CONT;
+    if (t->kernel_resume==PTRACE_SYSCALL && debugger_at_boundary(t) && t->entered
+            && md_debugger_syscall_emulated(debugger,pid)) t->kernel_resume=PTRACE_SYSEMU;
     if (!native_trace(t->kernel_resume,
             pid, NULL, (void *)(uintptr_t)sig)) { t->kernel_stopped=0; t->signals.retained=0; return; }
     CHECK(errno == ESRCH);
@@ -1808,26 +1814,18 @@ int interrupted_operation(struct thread *t) {
     CHECK(ioctl(listener,SECCOMP_IOCTL_NOTIF_ID_VALID,&q->id)==-1 && errno==ENOENT);
     if (t->metadata_restart) regs=t->metadata_restart->saved;
     else CHECK(context);
-    regs.pc=q->data.instruction_pointer; regs.regs[8]=q->data.nr;
+    regs.pc=q->data.instruction_pointer;
     for (unsigned i=0;i<6;i++) regs.regs[i]=q->data.args[i];
-    if (q->data.nr==SYS_rt_sigprocmask) {
-        uint64_t mask;
-        if (t->metadata_restart) mask=t->metadata_restart->mask;
-        else if (t->signals.delivery.active) mask=t->signals.delivery.mask;
-        else if (!save_signal_mask(t,&mask,"signal-query-admission")) return 1;
+    if (t->seccomp.trace.stage==GUEST_TRACE_PROMOTING) {
         notification_release(t); t->phase=IDLE;
-        /* Cancellation already retired the kernel entry. Reuse ordinary C
-         * query execution with that exact pre-cancellation native mask. */
-        execution_capture(t,&regs); t->execution.mask=mask; ++calls; ++t->calls;
-        if (shield(t)) dispatch_with_stack(t);
-        return 1;
+        guest_trace_promoted(t,&regs); return 1;
     }
     if (t->seccomp.notification && t->seccomp.notification->promoting) {
         struct guest_notification *n=t->seccomp.notification;
         struct ptrace_syscall_info observed={0};
         CHECK(native_trace(PTRACE_GET_SYSCALL_INFO,t->pid,(void *)sizeof(observed),&observed)>=0);
         CHECK(observed.op==PTRACE_SYSCALL_INFO_NONE || observed.op==PTRACE_SYSCALL_INFO_EXIT);
-        notification_release(t); t->phase=GUEST_NOTIFICATION; execution_capture(t,&regs);
+        notification_release(t); t->phase=GUEST_NOTIFICATION; execution_retain(t,&q->data,&regs);
         int error=md_task_checkpoint_suspend(&checkpoints,t->pid);
         CHECK(!error); n->checkpoint_suspended=1; n->promoting=0;
         struct md_task_call_arguments args={.number=SYS_gettid,.value={MD_GUEST_SECCOMP_LISTENER,1},
@@ -1847,7 +1845,19 @@ int interrupted_operation(struct thread *t) {
         if (set_registers(t->pid,&regs)) resume(t->pid,0);
         return 1;
     }
-    int publication=machine_observe(t,regs.pc,regs.regs[8]);
+    if (q->data.nr==SYS_rt_sigprocmask) {
+        uint64_t mask;
+        if (t->metadata_restart) mask=t->metadata_restart->mask;
+        else if (t->signals.delivery.active) mask=t->signals.delivery.mask;
+        else if (!save_signal_mask(t,&mask,"signal-query-admission")) return 1;
+        notification_release(t); t->phase=IDLE;
+        /* Cancellation already retired the kernel entry. Reuse ordinary C
+         * query execution with that exact pre-cancellation native mask. */
+        execution_retain(t,&q->data,&regs); t->execution.mask=mask; ++calls; ++t->calls;
+        if (shield(t)) dispatch_with_stack(t);
+        return 1;
+    }
+    int publication=machine_observe(t,regs.pc,q->data.nr);
     if (publication==-ENOSPC && !t->metadata_restart && !t->entry.fence_result
             && svc_pool_begin(t,&regs,0,NULL)) return 1;
     if (publication==1 && !t->metadata_restart && !t->entry.fence_result) {
@@ -1858,7 +1868,7 @@ int interrupted_operation(struct thread *t) {
         if (set_registers(t->pid,&regs)) resume(t->pid,0);
         return 1;
     }
-    execution_capture(t,&regs); calls++; t->calls++;
+    execution_retain(t,&q->data,&regs); calls++; t->calls++;
     if (receive_entry(t)) return 1;
     if (!save_signal_mask(t,&t->execution.mask,"get-mask") || !shield(t)) return 1;
     dispatch_with_stack(t);
@@ -1887,7 +1897,7 @@ void execution_seccomp_event(struct thread *t,pid_t pid,int status,const struct 
     int captured=native_entry==1 ? 0 : machine_context(t,observed);
     if (captured) {
         if (!registers(pid,&regs)) return;
-        struct seccomp_data call=syscall_description(&regs);
+        struct seccomp_data call=syscall_stopped(&regs,observed);
         if (!native_entry) native_entry=machine_native_entry(t,&call,&cookie);
         if (native_entry && observed) info.seccomp.ret_data=cookie;
         int owned=native_entry ? 0 : md_svc_machine_syscall(native_trace,md_memory_svc(t->memory),&t->machine,pid,&regs);
@@ -1926,17 +1936,20 @@ void execution_seccomp_event(struct thread *t,pid_t pid,int status,const struct 
     if (t->entered && t->phase==IDLE && md_seccomp_policy_may_trace(admission_policy(t))) {
         if (!captured && !registers(pid,&regs)) return;
         captured=1;
-        struct seccomp_data call=syscall_description(&regs);
-        if (guest_trace_rejected(t,&call)) { return_value(t,&regs,-ENOSYS); return; }
+        struct seccomp_data call=syscall_policy(&regs,observed);
+        if (guest_trace_recheck(t,&call)) cookie=guest_notification_route(t,&call);
+        else if (guest_trace_begin(t,&call,&regs,NULL,MD_TASK_CALL_SECCOMP)) return;
     }
     if (t->entered && t->phase==IDLE && md_seccomp_policy_may_notify(admission_policy(t))) {
         if (!captured && !registers(pid,&regs)) return;
         captured=1;
-        struct seccomp_data call=syscall_description(&regs);
+        struct seccomp_data call=syscall_policy(&regs,observed);
         if (t->seccomp.notification_continued) {
             t->seccomp.notification_continued=0; cookie=guest_notification_route(t,&call);
         } else if (guest_notification_begin(t,&call,&regs,NULL,NULL)) return;
     }
+    if (observed && captured && regs.pc==observed->instruction_pointer)
+        info.seccomp.args[0]=regs.regs[0];
     if (observed && t->resources.files && fd_native_io(t,observed)) return;
     if (fd_close_compact(t,cookie,observed)) return;
     if (cookie&MD_INTERCEPT_CLOSE) cookie=MD_INTERCEPT_FD;
@@ -1947,7 +1960,7 @@ void execution_seccomp_event(struct thread *t,pid_t pid,int status,const struct 
                 observed->seccomp.args[1],observed->seccomp.args[2],observed->seccomp.args[3],
                 captured ? &regs : NULL)) return;
     if (!captured && !registers(pid, &regs)) return;
-    const struct seccomp_data request=syscall_description(&regs);
+    const struct seccomp_data request=syscall_stopped(&regs,observed);
     /* An owned nonblocking wait may encounter either the baseline
      * waitid observer or a stacked PID selector. Its exit belongs to
      * the same wait owner; do not start a second observation. */
@@ -2137,6 +2150,7 @@ void execution_syscall_event(struct thread *t,pid_t pid,int status,const struct 
         struct user_pt_regs regs;
         if (!registers(pid,&regs)) return;
         if (!tracee_request(t,PTRACE_GET_SYSCALL_INFO,(void *)sizeof(info),&info,"syscall-exit")) return;
+        if (guest_trace_syscall(t,&info,&regs)) return;
         if (info.op==PTRACE_SYSCALL_INFO_ENTRY) {
             if (t->debug.replay_entry) { t->debug.replay_entry=0; resume(pid,0); return; }
             t->debug.call_active=md_debugger_syscall_mode(debugger,pid);

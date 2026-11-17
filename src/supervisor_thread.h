@@ -35,7 +35,7 @@ enum phase { IDLE, ALLOCATING, DISPATCHING, EXECUTING, OBSERVING, NATIVE_WAIT, T
     MEMORY_WAIT, RESULT_REPLAY_ENTRY, RESULT_REPLAY_EXIT, PROCESS_OBSERVING,
     PROCESS_INIT_ENTRY, PROCESS_INIT_EXIT, PROC_LOOKUP,
     CLONE_ENTRY, CLONE_ADMISSION, FILTER_CAPTURE, SIGNAL_CONTROL, SIGNAL_ENTRY, SIGNAL_NATIVE_EXIT,
-    GUEST_NOTIFICATION, FILTER_MAPPING };
+    GUEST_NOTIFICATION, FILTER_MAPPING, IMAGE_RELOCATING };
 
 enum memory_action { MEMORY_NONE, MEMORY_KERNEL, MEMORY_DETACH, MEMORY_FORK };
 
@@ -187,6 +187,7 @@ struct supervisor_signals_state {
 
 struct supervisor_descriptors_state {
     struct md_fd_capture pidfd_capture;
+    struct foreign_duplicate *foreign;
     struct md_fd_selector *selector;
     struct md_fd_selector *fork_selector;
     struct md_fd_selector *deferred_selector;
@@ -288,6 +289,15 @@ struct supervisor_seccomp_state {
     struct filter_install *install;
     struct guest_notification *notification;
     int notification_continued;
+    struct {
+        enum { GUEST_TRACE_NONE, GUEST_TRACE_PROMOTING, GUEST_TRACE_STOPPED,
+            GUEST_TRACE_REPLAY, GUEST_TRACE_ADMISSION, GUEST_TRACE_HOST, GUEST_TRACE_DRAIN } stage;
+        enum md_task_call_boundary boundary;
+        struct seccomp_data call;
+        int number;
+        uint64_t visible_number, visible_argument;
+        unsigned data;
+    } trace;
     int preflight;
 };
 
@@ -388,6 +398,7 @@ struct thread {
     struct md_fs_anchor *execfd_origin;
     int entered;
     int kernel_stopped;
+    struct bootstrap_move *bootstrap_move;
     int kernel_resume;
     int interrupt_pending;
     int trace_options_dirty;

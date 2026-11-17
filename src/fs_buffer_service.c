@@ -1189,7 +1189,8 @@ static int capture_proc_object(struct md_fs_buffer_request *r,unsigned index) {
         int found=capture_native_path(r,index,&path);
         if (found) return found;
     }
-    if (kind==MD_PROC_FD && !*path.tail && r->request.operation==MD_FS_PATH
+    if (kind==MD_PROC_FD && !*path.tail
+            && (r->request.operation==MD_FS_PATH || r->request.operation==MD_FS_REOPEN)
             && r->service->control_capture) {
         struct md_fd_object *object=NULL;
         int found=r->service->control_capture(r->actor,capture->path,&object);
@@ -1280,7 +1281,12 @@ int md_fs_buffer_progress(struct md_fs_buffer_service *s) {
                 if (found<0) { error=found; break; }
                 if (found) {
                     found=s->control_query(r->control_input,r->request.operation,&r->request.control);
-                    if (found<=0) { error=found ? found : -EOPNOTSUPP; break; }
+                    if (!found) {
+                        r->input[i]=md_fs_anchor_retain(md_fs_anchor_from_object(r->control_input));
+                        if (!r->input[i]) { error=-EOPNOTSUPP; break; }
+                        r->request.origin[i]=r->input[i];
+                        r->request.directory[i]=md_fs_anchor_fd(r->input[i]);
+                    } else if (found<0) { error=found; break; }
                     r->capture_mask&=~(1U<<i);
                     r->request.capture[i]=(struct md_fs_task_capture){0};
                     continue;

@@ -38,6 +38,14 @@ static void check(int error, int loader) {
     int r = md_elf_validate(descriptor, loader);
     if (r != error) fprintf(stderr, "ELF page=%zu: expected=%d actual=%d\n", md_page_size, error, r);
     assert(r == error);
+    struct md_elf_layout description;
+    assert(md_elf_layout_read(descriptor,loader,&description)==error);
+    if (!error) {
+        assert(!memcmp(&description.header,header,sizeof(*header)));
+        assert(!memcmp(description.segments,segments,header->e_phnum*sizeof(*segments)));
+        assert(description.low<description.high && header->e_entry>=description.low
+            && header->e_entry<description.high);
+    }
     if (error) {
         struct md_image image;
         assert(md_elf_load(descriptor, loader, &image) == error);

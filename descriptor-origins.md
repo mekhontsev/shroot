@@ -95,6 +95,10 @@ pin the same anchor without opening or sending a temporary guest descriptor.
 The wire marks cwd inputs separately from SCM_RIGHTS inputs, and the service
 validates that mask against the authenticated exchange. Both transports pass an
 actual captured descriptor to the engine, never the worker's cwd.
+Authenticated descriptor exchanges also distinguish a typed provider's carrier
+from its retained filesystem anchor. Path operations use the anchor; data
+operations retain the actual open description. This rule is shared by RPC and
+mapped requests and does not substitute pathname reopening for descriptor IO.
 
 An unknown origin retains native capture: `/proc/TID/cwd` for direct requests,
 or `.` through the private-table task helper for mapped requests. The helper
@@ -134,6 +138,17 @@ and close_range update annotations from their actual kernel results. Fork,
 unshare and exec use the same ordered ownership transition. The seccomp filter
 and restricted-domain policy share the descriptor-operation list; observation
 does not remove native descriptor capabilities after a proc-root restriction.
+
+`pidfd_getfd` uses the same duplication and selector-publication owner. It retains
+the selected process's table and acquires source/destination turns in a stable
+order, then publishes the copied object's provenance only after native success.
+Same-table copies use one turn. An unmanaged target retains native permission
+checks and unknown provenance. Ordinary data IO gains no additional interception.
+Foreign proc-FD opens classify typed process controls before native capture;
+ordinary objects use the existing filesystem reopen path, not descriptor-number
+borrowing from the caller. Foreign FD directory suffixes use a captured directory
+as their lookup base and retain the guest root. Plain and suffixed opens are
+covered separately; constrained openat2 variants still need dedicated coverage.
 
 Duplicate admission is transport-independent. When all provider selectors are
 already installed, Base and resident entries go directly to the ordered native

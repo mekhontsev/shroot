@@ -3,7 +3,7 @@ import io
 import tarfile
 
 
-def archive_fixture(build, archive):
+def archive_fixture(build, archive, *, binaries=()):
     with tarfile.open(archive, "w:gz", format=tarfile.PAX_FORMAT) as tar:
         for name in ("bin", "tmp", "etc"):
             entry = tarfile.TarInfo(name)
@@ -11,6 +11,8 @@ def archive_fixture(build, archive):
             entry.mode = 0o755
             tar.addfile(entry)
         tar.add(build / "client-guest", arcname="bin/client-guest")
+        for path, name in binaries:
+            tar.add(path, arcname=name)
         payload = b"libshroot payload"
         entry = tarfile.TarInfo("payload")
         entry.mode = 0o644

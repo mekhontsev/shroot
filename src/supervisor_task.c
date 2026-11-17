@@ -193,6 +193,7 @@ void pid_store_add(struct thread *t, uintptr_t address, pid_t value) {
 }
 
 void release_thread(struct thread *t) {
+    image_layout_discard(t);
     int buffered=t->fs.buffer.pool || t->fs.call || t->fs.waiting || t->action || t->debug.wait_output;
     debugger_wait_release(t);
     retained_detach(t);
@@ -1204,6 +1205,8 @@ void task_vfork_done_event(struct thread *t,pid_t pid,unsigned event) {
 }
 
 void task_exec_event(struct thread *t,pid_t pid,unsigned event) {
+    CHECK(event==PTRACE_EVENT_EXEC);
+    image_layout_discard(t);
     md_task_descriptor_release(&t->descriptor_process);
     task_action_discard(t);
     md_svc_machine_forget(&t->machine);
@@ -1301,9 +1304,14 @@ void task_exec_event(struct thread *t,pid_t pid,unsigned event) {
     /* Exec retires the old syscall instruction. Its completion belongs
      * to the executing thread, not a replaced leader's interrupted call. */
     t->debug.replay_entry=0;
+    t->seccomp.trace.stage=GUEST_TRACE_NONE;
     t->debug.adapter=t->debug.call_active;
     CHECK(!t->close.closed.first); t->close.closed=exec_closed;
-    close_event_begin(t,event,old); adapter_progress();
+    if (!image_layout_begin(t)) task_exec_ready(t);
+}
+
+void task_exec_ready(struct thread *t) {
+    close_event_begin(t,PTRACE_EVENT_EXEC,t->debug.exec_old); adapter_progress();
 }
 
 void task_birth_event(struct thread *t,pid_t pid,unsigned event) {

@@ -5,6 +5,10 @@
 #include <errno.h>
 #include <fcntl.h>
 
+static inline int md_open_creates(uint64_t flags) {
+    return !(flags&O_PATH) && ((flags&O_CREAT) || (flags&O_TMPFILE)==O_TMPFILE);
+}
+
 /* Validation is independent of the transport that captured open_how. */
 static inline int md_open_how_validate(const struct open_how *how) {
     const uint64_t allowed=O_ACCMODE|O_CREAT|O_EXCL|O_NOCTTY|O_TRUNC|O_APPEND|

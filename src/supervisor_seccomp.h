@@ -30,15 +30,21 @@ struct guest_notification {
     siginfo_t host_signal;
     int checkpoint_suspended,continuing_native,promoting;
 };
+struct ptrace_syscall_info;
 
 extern struct md_task_quiesce *policy_barrier;
 extern struct thread *policy_installer;
 
 struct md_seccomp_policy *admission_policy(const struct thread *t);
-enum { FILTER_REQUIRED_GATES=5, FILTER_SERVICE_GATES=FILTER_REQUIRED_GATES+1 };
+enum { FILTER_SERVICE_GATES=6 };
 void filter_service_gates(struct md_seccomp_gate gates[FILTER_SERVICE_GATES]);
 
-int guest_trace_rejected(struct thread *t,const struct seccomp_data *call);
+int guest_trace_begin(struct thread *,const struct seccomp_data *,const struct user_pt_regs *,
+        const struct seccomp_notif *,enum md_task_call_boundary);
+void guest_trace_promoted(struct thread *,const struct user_pt_regs *);
+int guest_trace_recheck(struct thread *,const struct seccomp_data *);
+int guest_trace_resume(struct thread *,int signal);
+int guest_trace_syscall(struct thread *,const struct ptrace_syscall_info *,struct user_pt_regs *);
 void guest_notification_discard(struct thread *t);
 int guest_notification_begin(struct thread *t,const struct seccomp_data *data,
         const struct user_pt_regs *regs,const struct seccomp_notif *kernel,const siginfo_t *host_signal);

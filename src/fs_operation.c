@@ -6,6 +6,7 @@
 #include "proc_paths.h"
 #include "filesystem_ioctl.h"
 #include "inode_store.h"
+#include "open_request.h"
 #include "fuse_options.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -70,7 +71,7 @@ int md_fs_request_validate(const struct md_fs_request *q) {
     if ((q->attributes.creation_mask & ~0777U)
             && !(q->attributes.creation_mask==MD_FS_CAPTURE_UMASK
                 && (q->operation==MD_FS_MKDIR || (q->operation==MD_FS_OPEN
-                    && (q->flags&O_CREAT) && !(q->flags&O_PATH))))) return -EINVAL;
+                    && md_open_creates(q->flags))))) return -EINVAL;
     if (q->resolve && q->operation != MD_FS_OPEN) return -EINVAL;
     if (q->value_size>MD_FS_VALUE_MAX || (q->value_size && !q->value)
             || (q->value_size && q->operation!=MD_FS_XATTR && q->operation!=MD_FS_FXATTR && q->operation!=MD_FS_XATTR_OBJECT

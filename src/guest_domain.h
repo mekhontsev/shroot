@@ -11,7 +11,7 @@
 
 /* Kernel descriptor operations with ordered provenance publication. Their
  * observation does not grant pathname access or additional kernel authority. */
-#define MD_DOMAIN_FD_CALLS(X) X(close) X(dup) X(dup3) X(close_range) X(epoll_create1)
+#define MD_DOMAIN_FD_CALLS(X) X(close) X(dup) X(dup3) X(pidfd_getfd) X(close_range) X(epoll_create1)
 #define MD_DOMAIN_FD_ARGUMENTS(X) \
     X(fcntl, 1, F_SETFD) X(fcntl, 1, F_DUPFD) X(fcntl, 1, F_DUPFD_CLOEXEC) \
     X(ioctl, 1, FIOCLEX) X(ioctl, 1, FIONCLEX)

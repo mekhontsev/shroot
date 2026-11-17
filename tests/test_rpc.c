@@ -3,6 +3,7 @@
 #include "fs_service.h"
 #include "fs_engine.h"
 #include "fs_mounts.h"
+#include "fs_mount_internal.h"
 #include "posix_acl.h"
 #include "task_resources.h"
 #include "fd_exchange.h"
@@ -418,13 +419,18 @@ static void *exchange_serve(void *context) {
     return NULL;
 }
 static void *warm_thread(void *context) { return context; }
+struct typed_input { struct md_fd_object object; struct md_fs_anchor *origin; };
+static struct md_fs_anchor *typed_input_origin(struct md_fd_object *object) {
+    return ((struct typed_input *)object)->origin;
+}
+static void typed_input_destroy(struct md_fd_object *object) { (void)object; }
 static void exchange_retirement(void) {
     /* Bionic opens its process-wide trace_marker lazily on pthread_create.
      * Initialize libc before the exact Shroot descriptor-lifetime baseline. */
     pthread_t warm; CHECK(!pthread_create(&warm,NULL,warm_thread,NULL));
     /* EVENT_WAIT: the empty libc thread exits before leak accounting starts. */
     CHECK(!pthread_join(warm,NULL));
-    for (unsigned result=0;result<3;++result) for (unsigned after=0;after<2;++after) {
+    for (unsigned result=0;result<4;++result) for (unsigned after=0;after<2;++after) {
         int baseline=fd_count(getpid());
         struct exchange_service s={.after_reply=after};
         char directory[PATH_MAX], endpoint[96];
@@ -432,6 +438,17 @@ static void exchange_retirement(void) {
         snprintf(endpoint,sizeof(endpoint),"md-fs-exchange-%ld-%u",(long)getpid(),serial);
         CHECK(!md_inode_store_open(directory,1,&s.fs.store));
         CHECK(!md_fs_mounts_open(&s.fs,NULL,0));
+        struct typed_input typed={0};
+        static const struct md_fd_object_type type={.destroy=typed_input_destroy,.origin=typed_input_origin};
+        md_fd_object_init(&typed.object,&type);
+        if (result==3) {
+            struct md_fs_request open={.operation=MD_FS_OPEN,.directory={-1,-1},
+                .path={"/",NULL},.flags=O_PATH|O_DIRECTORY|O_CLOEXEC};
+            struct md_fs_result opened;
+            struct md_fs_output output={.origin=&typed.origin};
+            md_fs_execute(&s.fs,&open,&opened,&output);
+            CHECK(!opened.error && typed.origin && !close(opened.fd));
+        }
         s.fs.tasks=md_task_registry_create(); CHECK(s.fs.tasks);
         s.fs.exchanges=md_fd_exchanges_create(); CHECK(s.fs.exchanges);
         struct md_task_resources resources={.fs=md_domain_new(),.mounts=s.fs.mounts,
@@ -442,11 +459,21 @@ static void exchange_retirement(void) {
         int watch=-1;
         if (result==2) {
             watch=md_inode_watch_create(s.fs.store,IN_NONBLOCK); CHECK(watch>=0);
+            struct md_fs_result captured={.fd=watch};
+            struct md_fs_output output={.origin=&typed.origin};
+            md_view_capture(&s.fs,s.fs.mounts,NULL,&captured,&output);
+            CHECK(!captured.error && typed.origin);
             int dir=md_inode_open(s.fs.store,-1,"/",O_PATH|O_DIRECTORY,0); CHECK(dir>=0);
             CHECK(md_inode_watch_add(s.fs.store,watch,dir,IN_CREATE)>0);
             CHECK(!close(dir));
             int file=md_inode_open(s.fs.store,-1,"event",O_CREAT|O_RDWR,0600); CHECK(file>=0);
             CHECK(!close(file) && md_inode_watch_bytes(s.fs.store,watch)==32);
+        }
+        if (result==3) { watch=eventfd(0,EFD_CLOEXEC); CHECK(watch>=0); }
+        if (result>=2) {
+            struct md_fd_origin_update update;
+            CHECK(!md_fd_origins_prepare_object(resources.files,&typed.object,FD_CLOEXEC,&update));
+            md_fd_origins_finish(&update,watch);
         }
         s.listener=md_fs_listen(endpoint); CHECK(s.listener>=0);
         s.stop=eventfd(0,EFD_CLOEXEC); CHECK(s.stop>=0);
@@ -459,10 +486,10 @@ static void exchange_retirement(void) {
         uint64_t id=md_fd_exchange_id(exchange);
         int client=connect_peer(endpoint);
         struct md_fs_packet q={.magic=MD_FS_MAGIC,.version=MD_FS_VERSION,.actor=getpid(),
-            .operation=result==2 ? MD_FS_WATCH_READ : result ? MD_FS_CREATE : MD_FS_STAT,
+            .operation=result==3 ? MD_FS_PATH : result==2 ? MD_FS_WATCH_READ : result ? MD_FS_CREATE : MD_FS_STAT,
             .mode=result==1 ? 0600 : 0,.capacity=result==2 ? 64 : 0,
-            .length={result==2 ? 1 : result ? 5 : 2,1},.exchange=id};
-        strcpy(q.data,result==2 ? "" : result ? "held" : "/");
+            .length={result>=2 ? 1 : result ? 5 : 2,1},.exchange=id};
+        strcpy(q.data,result>=2 ? "" : result ? "held" : "/");
         struct md_fs_rights rights={0};
         if (watch>=0) { q.descriptors=1; rights.count=1; rights.fd[0]=watch; }
         CHECK(md_fs_send(client,&q,offsetof(struct md_fs_packet,data)+q.length[0]+1,&rights)>0);
@@ -481,10 +508,13 @@ static void exchange_retirement(void) {
         for (;;) {
             long n=md_fs_receive(client,&reply,sizeof(reply),&rights);
             CHECK(n>=0);
+            if (n && !messages) CHECK(!reply.error);
             if (n && after && result==1 && messages==1) {
                 CHECK(rights.count==1 && (fcntl(rights.fd[0],F_GETFD)&FD_CLOEXEC));
                 CHECK(pwrite(rights.fd[0],"kept",4,0)==4);
             }
+            if (n && after && result==3)
+                CHECK(!reply.error && reply.size==2 && !strcmp(reply.data,"/"));
             descriptors+=rights.count; md_fs_close_rights(&rights);
             if (!n) break;
             ++messages;
@@ -497,7 +527,7 @@ static void exchange_retirement(void) {
         CHECK(!pthread_join(thread,NULL));
         md_fs_observe(NULL,NULL);
         if (watch>=0) {
-            CHECK(md_inode_watch_bytes(s.fs.store,watch)==(after ? 0 : 32));
+            if (result==2) CHECK(md_inode_watch_bytes(s.fs.store,watch)==(after ? 0 : 32));
             CHECK(!close(watch));
         }
         CHECK(!close(s.listener) && !close(s.stop));
@@ -506,6 +536,7 @@ static void exchange_retirement(void) {
         md_task_registry_destroy(s.fs.tasks);
         md_fd_exchanges_destroy(s.fs.exchanges);
         md_domain_release(resources.fs); md_fd_origins_release(resources.files);
+        md_fd_object_release(&typed.object); md_fs_anchor_release(typed.origin);
         md_identity_release(&identity); md_fs_mounts_close(&s.fs);
         md_inode_store_close(s.fs.store);
         int remaining=fd_count(getpid());
@@ -1033,6 +1064,8 @@ static void request_contract(void) {
     CHECK(!md_fs_request_validate(&open));
     open.flags=O_CREAT|O_RDWR; open.mode=0644; open.attributes.creation_mask=MD_FS_CAPTURE_UMASK;
     CHECK(!md_fs_request_validate(&open));
+    open.flags|=O_PATH; CHECK(md_fs_request_validate(&open)==-EINVAL);
+    open.flags=O_TMPFILE|O_RDWR; CHECK(!md_fs_request_validate(&open));
     open.flags|=O_PATH; CHECK(md_fs_request_validate(&open)==-EINVAL);
     open.flags=O_RDONLY; CHECK(md_fs_request_validate(&open)==-EINVAL);
     open.operation=MD_FS_MKDIR; open.resolve=0; CHECK(!md_fs_request_validate(&open));

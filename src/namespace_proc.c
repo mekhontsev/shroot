@@ -431,7 +431,8 @@ static long host_call(const struct md_fs *fs, const char *exe, long nr, const un
         else if (nr!=SYS_openat) ref.kind=control;
     }
     if (ref.kind == MD_PROC_FOREIGN) {
-        if (ref.foreign_kind==MD_PROC_ROOT || ref.foreign_kind==MD_PROC_CWD) {
+        if (ref.foreign_kind==MD_PROC_ROOT || ref.foreign_kind==MD_PROC_CWD
+                || (ref.foreign_kind==MD_PROC_FD && *ref.tail)) {
             if (!*ref.tail && link_operation(nr,a)) {
                 unsigned long args[6]; memcpy(args,a,sizeof(args));
                 args[path_index]=(unsigned long)path;
@@ -460,8 +461,14 @@ static long host_call(const struct md_fs *fs, const char *exe, long nr, const un
         if (*ref.tail) return -ENOTSUP;
         if (ref.foreign_kind==MD_PROC_FD
                 || (ref.foreign_kind==MD_PROC_EXE && (nr==SYS_newfstatat || nr==SYS_statx))) {
-            if (nr!=SYS_newfstatat && nr!=SYS_statx && nr!=SYS_readlinkat) return -ENOTSUP;
-            long result=md_proc_control_metadata(&ref,nr,a);
+            if (link_operation(nr,a)) {
+                unsigned long args[6]; memcpy(args,a,sizeof(args));
+                args[path_index]=(unsigned long)path;
+                return native_call(fs,nr,args);
+            }
+            long result=nr==SYS_openat
+                ? md_proc_control_reopen(ref.process,ref.descriptor,(int)a[2]&~(O_CREAT|O_EXCL))
+                : md_proc_control_metadata(&ref,nr,a);
             if (result!=-EXDEV) return result;
             /* Reuse the retained-object path below, without treating another
              * process's descriptor number or executable as caller-owned. */

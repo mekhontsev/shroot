@@ -252,12 +252,20 @@ void handle_notification(const struct seccomp_notif *request) {
             || (ioctl(listener,SECCOMP_IOCTL_NOTIF_ID_VALID,&t->memory_op.notification->id)<0 && errno==ENOENT));
         *t->memory_op.notification=*request; task_continuation_defer(t); return;
     }
-    if (!buffer_admission && guest_trace_rejected(t,&q.data)) {
-        struct seccomp_notif_resp reply={.id=q.id,.error=-ENOSYS};
-        CHECK(!ioctl(listener,SECCOMP_IOCTL_NOTIF_SEND,&reply) || errno==ENOENT);
-        return;
+    /* Guest policy and its continuation must see the original call, never
+     * an alias that will subsequently replay it. Pure mask queries without
+     * guest tracing/notification retain their direct response below. */
+    if (t->phase==IDLE && (q.data.nr!=SYS_rt_sigprocmask
+            || md_seccomp_policy_may_trace(admission_policy(t))
+            || md_seccomp_policy_may_notify(admission_policy(t)))
+            && md_svc_registry_direct_at(md_memory_svc(t->memory),t->pid,q.data.instruction_pointer,0)) {
+        delegate_begin(t,&q); return;
     }
+    int trace_rechecked=!buffer_admission && guest_trace_recheck(t,&q.data);
+    if (!buffer_admission && !trace_rechecked
+            && guest_trace_begin(t,&q.data,NULL,&q,MD_TASK_CALL_USER)) return;
     if (!buffer_admission && guest_notification_begin(t,&q.data,NULL,&q,NULL)) return;
+    if (trace_rechecked) q.data.args[0]=t->seccomp.trace.visible_argument;
     if (q.data.nr==SYS_rt_sigprocmask) {
         CHECK(!q.data.args[1]);
         if (!t->signals.host || (!t->metadata_restart && !t->signals.host_blocked && !t->signals.delivery.active) || !q.data.args[2]
@@ -279,12 +287,6 @@ void handle_notification(const struct seccomp_notif *request) {
             } else delegate_begin(t,&q);
         }
         return;
-    }
-    /* A restarted notification can precede the cancelled carrier's queue
-     * wakeup. No guest FD was published; release that exact old admission. */
-    if (t->phase==IDLE && md_svc_registry_direct_at(md_memory_svc(t->memory),
-            t->pid,q.data.instruction_pointer,0)) {
-        delegate_begin(t,&q); return;
     }
     if (t->proc.delivery.files.table && t->proc.delivery.notification!=q.id) proc_deliver(t);
     if (q.data.nr==SYS_gettid || replay) {
@@ -678,12 +680,12 @@ int completed_notification_event(struct thread *t,int status,const struct rusage
             free(result); t->broker_completion=NULL;
             return 0;
         }
-        regs.pc=result->call.instruction_pointer; regs.regs[8]=result->call.nr;
+        regs.pc=result->call.instruction_pointer;
         for (unsigned i=0;i<6;++i) regs.regs[i]=result->call.args[i];
         if (result->opened.fd>=0) {
             if (t->phase!=IDLE || t->fs.buffer.pool || t->broker_event.held)
                 notification_conflict(t,"completed-notification-adoption",NULL,NULL,__LINE__);
-            execution_capture(t,&regs); t->kernel_stopped=1; t->interrupt_pending=0;
+            execution_retain(t,&result->call,&regs); t->kernel_stopped=1; t->interrupt_pending=0;
             t->broker_event.held=1; t->broker_event.status=status;
             t->broker_event.usage=usage ? *usage : (struct rusage){0};
             t->broker_event.has_info=!event && signal!=(SIGTRAP|0x80);

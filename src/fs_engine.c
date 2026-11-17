@@ -8,6 +8,7 @@
 #include "shm_bridge.h"
 #include "fs_native.h"
 #include "host_open.h"
+#include "open_request.h"
 #include "fd_filesystem.h"
 #include "proc_fdinfo.h"
 #include "procfs_view.h"
@@ -358,8 +359,7 @@ static void context_execute(struct md_fs_context *context,
     if (q->attributes.creation_mask==MD_FS_CAPTURE_UMASK) {
         /* Only creation consumes umask. This applies equally to a caller-side
          * pin and an ordinary worker open; neither may read /proc for it. */
-        int existing=q->operation==MD_FS_OPEN && !(q->flags&O_CREAT)
-            && (q->flags&O_TMPFILE)!=O_TMPFILE;
+        int existing=q->operation==MD_FS_OPEN && !md_open_creates(q->flags);
         long mask=context->authenticated ? (existing ? 0 : md_task_snapshot_umask(&context->task)) : -EPERM;
         if (mask<0) {
             *out=(struct md_fs_result){.fd=-1,.error=(int)mask,
