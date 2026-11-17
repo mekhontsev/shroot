@@ -49,10 +49,11 @@ static void arguments(shroot_context *context, const char *directory) {
     const char *overrides[] = {"VALUE=quotes ' \" $()", NULL};
     const char *subnets[] = {"192.0.2.0/24", "2001:db8::/64", NULL};
     const char *gateways[] = {"192.0.2.1", "2001:db8::1", NULL};
-    struct shroot_bind bind = {SHROOT_BIND_READONLY, "/host a", "/guest a"};
+    struct shroot_bind binds[] = {{SHROOT_BIND_READONLY, "/host a", "/guest a"},
+        {SHROOT_BIND_READONLY_CREATE, "/host b", "/guest b"}};
     struct shroot_socket_route route = {SHROOT_SOCKET_RESOURCE_ABSTRACT, "source", "target"};
     struct shroot_launch_options options = {.kind=SHROOT_EXEC, .arguments=argv, .environment=overrides,
-        .binds=&bind, .bind_count=1, .routes=&route, .route_count=1,
+        .binds=binds, .bind_count=2, .routes=&route, .route_count=1,
         .subnets=subnets, .gateways=gateways};
     shroot_job *job = NULL;
     assert(!shroot_launch(store, &options, &io, &job));
@@ -60,6 +61,7 @@ static void arguments(shroot_context *context, const char *directory) {
     rewind(file); char output[4096] = {0}; assert(fread(output, 1, sizeof(output)-1, file) > 0);
     assert(strstr(output, "--env\nVALUE=quotes ' \" $()\n"));
     assert(strstr(output, "--bind-ro\n/host a\n/guest a\n"));
+    assert(strstr(output, "--bind-ro-create\n/host b\n/guest b\n"));
     assert(strstr(output, "--socket-resource-abstract\nsource\ntarget\n"));
     assert(strstr(output, "--subnet\n192.0.2.0/24\n--subnet\n2001:db8::/64\n"));
     assert(strstr(output, "--gateway\n192.0.2.1\n--gateway\n2001:db8::1\n"));

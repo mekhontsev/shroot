@@ -104,7 +104,8 @@ static int execute(int argc, char **argv) {
         "       image run INSTANCE [--user current|UID[:GID]|NAME[:GROUP]] [--cwd PATH] [--entrypoint PROGRAM] [--env KEY=VALUE] [--statistics] [--diagnostics[=signals]]\n"
         "             [--hostname NAME] [--network host|none|bridge|routed] [-p [IP:]HOST:GUEST[/tcp|/udp]]\n"
         "             [--dns IP] [--subnet CIDR] [--ip IPv4] [--ip6 IPv6] [--gateway IP]\n"
-        "             [--bind HOST GUEST] [--bind-ro HOST GUEST] [--bind-store-ro STORE GUEST]\n"
+        "             [--bind HOST GUEST] [--bind-ro HOST GUEST] [--bind-ro-create HOST GUEST]\n"
+        "             [--bind-store-ro STORE GUEST]\n"
         "             [--magicdesk] [-- COMMAND...]\n");
     return r;
 }

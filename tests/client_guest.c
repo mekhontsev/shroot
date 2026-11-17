@@ -12,6 +12,17 @@
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+    if (argc == 3 && !strcmp(argv[1], "readonly-bind")) {
+        char path[256], data[16] = {0};
+        if (snprintf(path, sizeof(path), "%s/token", argv[2]) >= (int)sizeof(path)) return 30;
+        int fd = open(path, O_RDONLY);
+        if (fd < 0 || read(fd, data, sizeof(data)) != 9 || memcmp(data, "read-only", 9)) return 31;
+        close(fd);
+        fd = open(path, O_WRONLY);
+        if (fd >= 0 || errno != EROFS) return 32;
+        puts("PASS guest: created readonly attachment, contents and write denial");
+        return 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "limits")) {
         struct rlimit limit;
         if (getrlimit(RLIMIT_NOFILE, &limit) || limit.rlim_cur != 128 || limit.rlim_max != 4096) return 20;

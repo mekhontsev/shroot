@@ -31,11 +31,11 @@ static int launch(shroot_store *store, shroot_library *library, const char *name
         if (!strcmp(name, "--magicdesk")) { options.flags |= SHROOT_MAGICDESK_CONNECTION; continue; }
         if (!strcmp(name, "--diagnostics")) { options.flags |= SHROOT_DIAGNOSTICS; continue; }
         if (!strcmp(name, "--diagnostics=signals")) { options.flags |= SHROOT_SIGNAL_DIAGNOSTICS; continue; }
-        const char *bind_names[] = {"--bind", "--bind-ro", "--bind-create", "--bind-store-ro"};
+        const char *bind_names[] = {"--bind", "--bind-ro", "--bind-create", "--bind-store-ro", "--bind-ro-create"};
         const char *route_names[] = {"--socket-path", "--socket-abstract", "--socket-resource-path", "--socket-resource-abstract"};
         int multiple = 0;
-        for (int i = 0; i < 4; ++i) {
-            int bind = !strcmp(name, bind_names[i]), route = !strcmp(name, route_names[i]);
+        for (int i = 0; i < 5; ++i) {
+            int bind = !strcmp(name, bind_names[i]), route = i < 4 && !strcmp(name, route_names[i]);
             if (!bind && !route) continue;
             multiple = 1;
             if (at + 1 >= argc) { r = -EINVAL; break; }
@@ -179,7 +179,7 @@ static void usage(void) {
         "  run STORE [OPTIONS] [-- COMMAND...] | exec STORE [OPTIONS] -- COMMAND...\n"
         "  login STORE [OPTIONS] [-- SHELL...]\n"
         "  Options: --user USER --cwd PATH --env KEY=VALUE --network MODE --dns IP\n"
-        "           --bind HOST GUEST --bind-ro HOST GUEST --statistics\n"
+        "           --bind HOST GUEST --bind-ro HOST GUEST --bind-ro-create HOST GUEST --statistics\n"
         "  --version | format | import-version");
 }
 int main(int argc, char **argv) {

@@ -154,11 +154,13 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
             position += 3; continue;
         }
         if (!strcmp(argv[position], "--bind") || !strcmp(argv[position], "--bind-ro")
-                || !strcmp(argv[position], "--bind-create") || !strcmp(argv[position], "--bind-store-ro")) {
+                || !strcmp(argv[position], "--bind-create") || !strcmp(argv[position], "--bind-store-ro")
+                || !strcmp(argv[position], "--bind-ro-create")) {
             if (position+2 >= argc || attachment_count == MD_FS_MOUNTS_MAX) return -EINVAL;
             attachments[attachment_count++] = (struct md_fs_attachment){.source=argv[position+1],
                 .target=argv[position+2], .flags=!strcmp(argv[position], "--bind-ro") ? MD_FS_ATTACHMENT_READONLY
                     : !strcmp(argv[position], "--bind-store-ro") ? MD_FS_ATTACHMENT_STORE|MD_FS_ATTACHMENT_READONLY
+                    : !strcmp(argv[position], "--bind-ro-create") ? MD_FS_ATTACHMENT_CREATE|MD_FS_ATTACHMENT_READONLY
                     : !strcmp(argv[position], "--bind-create") ? MD_FS_ATTACHMENT_CREATE : 0};
             position += 3; continue;
         }
@@ -275,6 +277,7 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
         }
         for (unsigned i = 0; i < attachment_count; ++i) {
             launch[n++] = attachments[i].flags & MD_FS_ATTACHMENT_STORE ? "--bind-store-ro"
+                : attachments[i].flags == (MD_FS_ATTACHMENT_READONLY|MD_FS_ATTACHMENT_CREATE) ? "--bind-ro-create"
                 : attachments[i].flags & MD_FS_ATTACHMENT_READONLY ? "--bind-ro"
                 : attachments[i].flags & MD_FS_ATTACHMENT_CREATE ? "--bind-create" : "--bind";
             launch[n++] = (char *)attachments[i].source; launch[n++] = (char *)attachments[i].target;

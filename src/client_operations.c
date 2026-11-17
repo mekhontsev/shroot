@@ -122,10 +122,10 @@ static int launch_command(shroot_context *context, const char *library, const ch
     options(&args, "--env", launch->environment);
     options(&args, "--dns", launch->dns);
     options(&args, "-p", launch->ports);
-    const char *binds[] = {"--bind", "--bind-ro", "--bind-create", "--bind-store-ro"};
+    const char *binds[] = {"--bind", "--bind-ro", "--bind-create", "--bind-store-ro", "--bind-ro-create"};
     for (size_t i = 0; i < launch->bind_count; ++i) {
         const struct shroot_bind *bind = &launch->binds[i];
-        if (bind->kind < SHROOT_BIND || bind->kind > SHROOT_BIND_STORE_READONLY) { args.error = -EINVAL; break; }
+        if (bind->kind < SHROOT_BIND || bind->kind > SHROOT_BIND_READONLY_CREATE) { args.error = -EINVAL; break; }
         shroot_argument(&args, binds[bind->kind]);
         shroot_argument(&args, bind->source); shroot_argument(&args, bind->target);
     }

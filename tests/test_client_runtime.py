@@ -68,6 +68,15 @@ def main():
         result = subprocess.run(cli + ["exec", str(instance), "--", "/bin/client-guest", "exit42"],
                                 timeout=30)
         assert result.returncode == 42
+        attachment = root / 'attachment'
+        attachment.mkdir()
+        (attachment / 'token').write_text('read-only')
+        for entry in ('0', '1'):
+            for repeat in range(2):
+                subprocess.run(cli + ['exec', str(instance), '--bind-ro-create', str(attachment),
+                                      '/readonly-' + entry, '--env', 'SHROOT_MACHINE_ENTRY=' + entry,
+                                      '--', '/bin/client-guest', 'readonly-bind', '/readonly-' + entry],
+                               check=True, timeout=30)
         parent_lifetime(cli, instance)
         for parent in ('1', '0', '-1', 'invalid', '2147483648'):
             result = subprocess.run(cli + ['--parent-pid', parent, 'format'], capture_output=True, timeout=10)

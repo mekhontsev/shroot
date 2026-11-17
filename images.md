@@ -312,6 +312,12 @@ resolution handles guest/native symlinks, dirfds, `..` across the boundary and
 openat2 scopes. Cross-view link/rename returns EXDEV; removing a mount root is
 EBUSY. Native permission/SELinux failures remain failures.
 
+`--bind-create HOST GUEST` and `--bind-ro-create HOST GUEST` additionally create
+an absent guest mountpoint under an existing parent. The latter is read-only
+from its first publication. Neither option creates or broadens access to the
+host source; an existing non-directory target remains an error. The C API
+exposes these as `SHROOT_BIND_CREATE` and `SHROOT_BIND_READONLY_CREATE`.
+
 `--bind-store-ro HOST_STORE GUEST` uses the same mount topology and readonly
 policy for another admitted inode store. It retains that store's lifetime and
 dependency leases; the existing mounted-store cache supplies scoped database

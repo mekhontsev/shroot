@@ -105,7 +105,8 @@ int shroot_environment_resolver(shroot_library *, const char *name, const char *
     const struct shroot_io *, shroot_job **);
 
 enum shroot_launch_kind { SHROOT_RUN, SHROOT_EXEC, SHROOT_LOGIN };
-enum shroot_bind_kind { SHROOT_BIND, SHROOT_BIND_READONLY, SHROOT_BIND_CREATE, SHROOT_BIND_STORE_READONLY };
+enum shroot_bind_kind { SHROOT_BIND, SHROOT_BIND_READONLY, SHROOT_BIND_CREATE, SHROOT_BIND_STORE_READONLY,
+    SHROOT_BIND_READONLY_CREATE };
 struct shroot_bind { enum shroot_bind_kind kind; const char *source, *target; };
 enum shroot_socket_kind { SHROOT_SOCKET_PATH, SHROOT_SOCKET_ABSTRACT,
     SHROOT_SOCKET_RESOURCE_PATH, SHROOT_SOCKET_RESOURCE_ABSTRACT };

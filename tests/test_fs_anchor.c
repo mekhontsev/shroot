@@ -365,10 +365,12 @@ void test_fs_anchor(const char *base) {
     struct md_fs_attachment prepared={.source=host[0],.target="/prepared"};
     struct md_filesystem preparation={.store=s};
     assert(md_fs_mounts_open(&preparation,&prepared,1)==-ENOENT);
-    prepared.flags=MD_FS_ATTACHMENT_CREATE;
+    prepared.flags=MD_FS_ATTACHMENT_CREATE|MD_FS_ATTACHMENT_READONLY;
     assert(!md_fs_mounts_open(&preparation,&prepared,1));
     struct md_fs_result imported=request(&preparation,NULL,-1,MD_FS_OPEN,"/prepared/value",O_RDONLY,0,NULL);
     assert(!imported.error && imported.fd>=0); close(imported.fd);
+    imported=request(&preparation,NULL,-1,MD_FS_OPEN,"/prepared/value",O_RDWR,0,NULL);
+    assert(imported.error==-EROFS);
     md_fs_mounts_close(&preparation);
     assert(!md_fs_mounts_open(&preparation,&prepared,1));
     md_fs_mounts_close(&preparation);
