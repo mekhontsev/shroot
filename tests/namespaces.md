@@ -1,6 +1,6 @@
 # Namespace And Sandbox Fixtures
 
-[Fixture guide](README.md) | [Native architecture](../README.md)
+[Fixture guide](README.md) | [Native architecture](../architecture.md)
 
 Stock namespace clients and credential workflows. Logical namespace success must not be reported as native kernel confinement.
 
@@ -366,7 +366,7 @@ nondumpable owners retain the caller-side permission check.
 
 ## Guest Credential Checks
 
-CMake's `MAGICDESK_GUEST_FIXTURES` builds `test_credentials` for the identity,
+CMake's `SHROOT_BUILD_TESTS` builds `test_credentials` for the identity,
 account resolution, registry and inode contracts, plus `credentials_guest` for
 intercepted calls. The device runner accepts a prepared device-side OCI layout:
 

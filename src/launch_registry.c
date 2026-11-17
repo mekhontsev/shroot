@@ -47,7 +47,7 @@ int md_launch_register(struct md_launch_registration *owner, const char *store,
     struct md_launch_info info = {.version=1, .executor_uid=getuid(), .guest_uid=guest_uid,
         .pid=getpid(), .descriptor=owner->record};
     strcpy(info.program, program); strcpy(info.cwd, cwd);
-    const char *label = getenv("MAGICDESK_GUEST_LABEL");
+    const char *label = getenv("SHROOT_GUEST_LABEL");
     if (label && strlen(label) < sizeof(info.label)) strcpy(info.label, label);
     if (!r && write(owner->record, &info, sizeof(info)) != sizeof(info)) r = -EIO;
     if (!r && syscall(SYS_renameat2, fd, temporary, fd, owner->id, RENAME_NOREPLACE)) r = -errno;

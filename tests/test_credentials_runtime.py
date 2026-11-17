@@ -23,17 +23,17 @@ def main():
     try:
         command(['mkdir', base + '/fixtures'])
         for name in ('test_credentials', 'credentials_guest'):
-            filename = 'libmagicdesk_guest_' + name + '.so'
+            filename = 'libshroot_guest_' + name + '.so'
             destination = base + ('/fixtures/' if name == 'credentials_guest' else '/') + filename
             report['uploads'].append(suite.upload(args.build / filename, destination))
             command(['chmod', '700', destination])
-        command([base + '/libmagicdesk_guest_test_credentials.so', base + '/contract'])
+        command([base + '/libshroot_guest_test_credentials.so', base + '/contract'])
         image, run = suite.image, [suite.runner, *suite.entry_options]
         store = suite.prepare('credentials', args.layout)
         command([*run, '--store', store, '--user', '0:0', '--', '/bin/mkdir', '/fixture'])
         command([*run, '--store', store, '--user', '0:0',
                  '--bind-ro', base + '/fixtures', '/fixture',
-                 '--deadline-seconds', '60', '--', '/fixture/libmagicdesk_guest_credentials_guest.so'])
+                 '--deadline-seconds', '60', '--', '/fixture/libshroot_guest_credentials_guest.so'])
         for index, fixture in enumerate(args.fixture):
             name = 'credentials-libc-' + str(index)
             report['uploads'].append(suite.upload(fixture, base + '/fixtures/' + name))

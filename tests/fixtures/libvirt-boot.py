@@ -64,7 +64,7 @@ def main():
         ET.SubElement(boot, 'kernel').text = str(work / 'kernel')
         ET.SubElement(boot, 'initrd').text = str(work / 'initrd')
         ET.SubElement(boot, 'cmdline').text = 'console=ttyAMA0 rdinit=/init ' + (
-            'magicdesk.packet_dhcp=1' if args.network else 'magicdesk.kernel_fixture=1')
+            'shroot.packet_dhcp=1' if args.network else 'shroot.kernel_fixture=1')
         ET.SubElement(domain, 'on_poweroff').text = 'destroy'
         ET.SubElement(domain, 'on_crash').text = 'destroy'
         devices = ET.SubElement(domain, 'devices')

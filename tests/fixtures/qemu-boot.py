@@ -19,7 +19,7 @@ def main():
                    '-accel', 'tcg,thread=multi', '-smp', '2', '-m', '512',
                    '-nographic', '-monitor', 'none', '-nic', 'none', '-no-reboot',
                    '-kernel', str(args.kernel), '-initrd', str(args.initrd),
-                   '-append', 'console=ttyAMA0 rdinit=/init magicdesk.kernel_fixture=1']
+                   '-append', 'console=ttyAMA0 rdinit=/init shroot.kernel_fixture=1']
         report['command'] = command
         # EVENT_WAIT: actual VM poweroff; timeout kills QEMU and fails this run.
         result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

@@ -114,8 +114,7 @@ struct shroot_socket_route { enum shroot_socket_kind kind; const char *source, *
 enum shroot_launch_flags {
     SHROOT_STATISTICS = 1,
     SHROOT_DIAGNOSTICS = 2,
-    SHROOT_SIGNAL_DIAGNOSTICS = 4,
-    SHROOT_MAGICDESK_CONNECTION = 8
+    SHROOT_SIGNAL_DIAGNOSTICS = 4
 };
 struct shroot_launch_options {
     enum shroot_launch_kind kind;
@@ -133,6 +132,13 @@ struct shroot_launch_options {
     size_t bind_count;
     const struct shroot_socket_route *routes;
     size_t route_count;
+    /* Borrowed until submission returns. Private copies remain in the supervisor
+     * until its tree ends; never installed in the guest or read by Shroot.
+     * The caller retains its descriptors and is responsible for closing them. */
+    const int *owner_fds;
+    size_t owner_fd_count;
+    /* Added before the final guest PATH, preserving image and explicit values. */
+    const char *path_prefix;
 };
 /* EXEC starts a new supervised tree in this store, not an exec in a live tree.
  * The runtime, including PTY and process-tree cleanup, remains out of process. */

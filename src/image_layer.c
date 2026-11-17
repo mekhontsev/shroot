@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "image_layer.h"
+#include "image_backup.h"
 #include "image_acl.h"
 #include "image_pool.h"
 #include "inode_internal.h"
@@ -121,7 +122,7 @@ static int entry_file(struct md_inode_store *s, struct archive *ar, struct archi
     archive_entry_xattr_reset(entry);
     while (!archive_entry_xattr_next(entry,&name,&value,&length)) {
         if (mdi_native_private_attribute(name)) return -EPERM;
-        if (backup && !strcmp(name, "magicdesk.backup.mode")) {
+        if (backup && md_backup_mode(name)) {
             if (length != 2) return -EINVAL;
             const unsigned char *b = value;
             unsigned parsed = b[0] | (unsigned)b[1]<<8;
@@ -371,7 +372,7 @@ static int read_tree(struct md_inode_store *s, int fd, uint64_t *bytes, uint64_t
             char path[PATH_MAX];
             const char *name_in = archive_entry_pathname(entry);
             if (backup) {
-                if (name_in && !strcmp(name_in, "magicdesk-backup.json")) {
+                if (md_backup_manifest(name_in)) {
                     if (index != 1) { r = -EINVAL; break; }
                     continue;
                 }

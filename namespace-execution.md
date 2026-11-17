@@ -154,7 +154,7 @@ creating filesystem nodes; independent X11 and Wayland GTK clients use this path
 Native credentials
 and SCM_RIGHTS are retained. Returned addresses restore the original bound name;
 Unix sendmmsg shares this translation with partial-batch and short-stream semantics. See the
-[transport and native shell restriction](README.md#application-integration).
+[transport and native shell restriction](architecture.md#application-integration).
 
 RPC deadlines bound failure, not kernel IO duration or remote cancellation.
 An error after transmission can leave a committed mutation or advanced directory
@@ -285,11 +285,12 @@ retains the same failing hard-link controls as a separate comparison.
 
 This is one fixture lifecycle, not full-distribution compatibility. Separate
 fresh-image APT/APK checks and selected upgrades are documented in the
-[application coverage](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#coverage-and-limits).
+[application coverage](tests/validation-matrix.md).
 Arbitrary maintainer scripts, privileged kernel operations,
 broader GTK/Qt workflows, exact hardlink-dentry notifications, object reclamation,
-power loss and API 34/16 KiB coverage retain their documented limits. Execution-policy checks described in the main
-README still apply; X_OK is not a replacement for full kernel execution policy.
+power loss and Android API 34/16 KiB coverage retain their documented limits.
+[Execution-policy checks](architecture.md#execution-policy) still apply; X_OK
+is not a replacement for full kernel execution policy.
 
 The [software GUI fixture](tests/README.md#prepared-runtime-fixtures)
 also runs from the imported namespace. Its Wayland connection survives the service/guardian/guest launch

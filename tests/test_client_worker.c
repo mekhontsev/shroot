@@ -16,6 +16,10 @@ static void message(unsigned phase, int error) {
 }
 int main(int argc, char **argv) {
     assert(argc >= 3 && !strcmp(argv[1], SHROOT_CLIENT_OPTION));
+    assert(argc >= 4);
+    int owners = atoi(argv[2]);
+    for (int i = 0; i < owners; ++i) assert(fcntl(4 + i, F_GETFD) >= 0);
+    argv[2] = argv[1]; ++argv; --argc;
     struct shroot_client_message admission;
     assert(recv(SHROOT_CLIENT_FD, &admission, sizeof(admission), 0) == sizeof(admission));
     assert(admission.magic == SHROOT_CLIENT_MAGIC && admission.phase == SHROOT_CLIENT_ADMIT);

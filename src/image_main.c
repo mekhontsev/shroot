@@ -26,12 +26,12 @@ int md_image_applications(const char *store, const char *icon);
 #include "process_owner.h"
 
 static int execute(int argc, char **argv) {
-    const char *owner = getenv("MAGICDESK_IMAGE_OWNER_PID");
+    const char *owner = getenv("SHROOT_IMAGE_OWNER_PID");
     if (owner) {
         char *end;
         long pid = strtol(owner, &end, 10);
         if (!*owner || *end || pid <= 1 || prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != pid) return -ECHILD;
-        unsetenv("MAGICDESK_IMAGE_OWNER_PID");
+        unsetenv("SHROOT_IMAGE_OWNER_PID");
     }
     if (!md_launch_identity(getuid(),geteuid(),getgid(),getegid())) return -EACCES;
     umask(0);
@@ -106,7 +106,7 @@ static int execute(int argc, char **argv) {
         "             [--dns IP] [--subnet CIDR] [--ip IPv4] [--ip6 IPv6] [--gateway IP]\n"
         "             [--bind HOST GUEST] [--bind-ro HOST GUEST] [--bind-ro-create HOST GUEST]\n"
         "             [--bind-store-ro STORE GUEST]\n"
-        "             [--magicdesk] [-- COMMAND...]\n");
+        "             [--owner-fd FD] [-- COMMAND...]\n");
     return r;
 }
 static int client_message(unsigned phase, int error) {
@@ -119,19 +119,29 @@ int main(int argc, char **argv) {
     int client = argc > 1 && !strcmp(argv[1], SHROOT_CLIENT_OPTION);
     int r = 0;
     if (client) {
-        int keep = SHROOT_CLIENT_FD;
-        r = fcntl(keep, F_SETFD, FD_CLOEXEC) ? -errno : (int)md_process_close_fds(&keep, 1);
+        if (argc < 4) return 1;
+        char *end; errno = 0;
+        unsigned long count = strtoul(argv[2], &end, 10);
+        if (errno || !*argv[2] || *end || count > INT_MAX - 4) return 1;
+        int *keep = malloc((count + 1) * sizeof(*keep));
+        if (!keep) return 1;
+        for (unsigned long i = 0; i <= count; ++i) {
+            keep[i] = SHROOT_CLIENT_FD + (int)i;
+            if (fcntl(keep[i], F_GETFD) < 0) r = -errno;
+        }
+        if (!r) r = fcntl(SHROOT_CLIENT_FD, F_SETFD, FD_CLOEXEC) ? -errno : (int)md_process_close_fds(keep, (unsigned)count + 1);
+        free(keep);
         if (!r) r = client_message(SHROOT_CLIENT_BEGIN, 0);
         if (r) return 1;
         struct shroot_client_message admission;
         ssize_t n;
         /* EVENT_WAIT: the submitting client retains its child pidfd first.
          * Client disconnect cancels admission without touching the store. */
-        do { n = recv(keep, &admission, sizeof(admission), MSG_TRUNC); } while (n < 0 && errno == EINTR);
+        do { n = recv(SHROOT_CLIENT_FD, &admission, sizeof(admission), MSG_TRUNC); } while (n < 0 && errno == EINTR);
         if (n != sizeof(admission) || admission.magic != SHROOT_CLIENT_MAGIC
                 || admission.phase != SHROOT_CLIENT_ADMIT || admission.error || admission.reserved) return 1;
-        unsetenv("MAGICDESK_IMAGE_OWNER_PID");
-        argv[1] = argv[0]; ++argv; --argc;
+        unsetenv("SHROOT_IMAGE_OWNER_PID");
+        argv[2] = argv[0]; argv += 2; argc -= 2;
     }
     r = execute(argc, argv);
     if (r) fprintf(stderr, "Guest image: %s (errno=%d)\n", strerror(-r), -r);

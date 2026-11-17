@@ -14,7 +14,7 @@
 
 int test_kernel_profile_guest(void) {
     alarm(30);
-    assert(!getenv("MAGICDESK_TEST_KERNEL_PROFILE"));
+    assert(!getenv("SHROOT_TEST_KERNEL_PROFILE"));
     assert(!prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0));
     const char *path="/tmp/kernel-profile-file";
     int fd=open(path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600); assert(fd>=0);
@@ -40,7 +40,7 @@ int test_kernel_profile_guest(void) {
     return 0;
 }
 int test_kernel_profile_child(void) {
-    assert(!getenv("MAGICDESK_TEST_KERNEL_PROFILE"));
+    assert(!getenv("SHROOT_TEST_KERNEL_PROFILE"));
     assert(prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0)==1);
     return 0;
 }

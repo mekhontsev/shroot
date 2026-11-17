@@ -39,7 +39,7 @@ def main():
     if not args.program:
         parser.error("missing guest program")
     if args.executor == 'local' and args.installed:
-        parser.error('--installed requires the MagicDesk shell/app adapter')
+        parser.error('--installed requires an external shell/app test adapter')
     tag = uuid.uuid4().hex
     executor = FixtureExecutor.connect(args.build, args.executor, 'browser')
     remote = executor.root
@@ -63,15 +63,15 @@ def main():
         report["identity"] = command("id")["output"]
         report["kernel"] = command("uname -a")["output"]
         if not args.installed:
-            for name in ("libmagicdesk_guest_supervisor.so", "libmagicdesk_guest_run.so",
-                         "libmagicdesk_guest_bootstrap.so", "libmagicdesk_guest_service.so"):
+            for name in ("libshroot_guest_supervisor.so", "libshroot_guest_run.so",
+                         "libshroot_guest_bootstrap.so", "libshroot_guest_service.so"):
                 report["uploads"].append(executor.upload(args.build / name, remote + "/" + name))
             if args.executor != 'app':
                 command("chmod 700 " + remote + "/*")
             report["hashes"] = command("sha256sum " + remote + "/*")["output"]
         report["installed"] = args.installed
-        runner = ((executor.libraries + '/libmagicdesk_guest_run.so' if args.executor == 'app' else 'shroot')
-                  if args.installed else executor.native_path(remote + "/libmagicdesk_guest_run.so"))
+        runner = ((executor.libraries + '/libshroot_guest_run.so' if args.executor == 'app' else 'shroot')
+                  if args.installed else executor.native_path(remote + "/libshroot_guest_run.so"))
         baseline = [runner, "--store", args.store, *(['--user', args.user] if args.user else []), "--"]
         if args.expect_artifact:
             command(shlex.join(baseline + ["/usr/bin/test", "!", "-e", args.expect_artifact]))

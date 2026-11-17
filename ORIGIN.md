@@ -4,7 +4,6 @@ The initial history is extracted from
 https://github.com/mekhontsev/magicdesk at
 `e03e124f`, retaining author and commit history for the native runtime, its
 fixtures and the optional native command-channel wire implementation.
-The extraction does not rewrite the MagicDesk repository's history.
 
 `include/resource_protocol.h` is the versioned resource-attachment wire
 declaration from https://github.com/mekhontsev/magicdesk-x11 at

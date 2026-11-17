@@ -14,7 +14,7 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--build', type=Path, help='Native runtime bundle; required for local execution')
     environment = parser.add_mutually_exclusive_group(required=True)
-    environment.add_argument('--environment', help='Installed MagicDesk environment with a Linux C toolchain')
+    environment.add_argument('--environment', help='Installed Linux environment with a C toolchain')
     environment.add_argument('--store', help='Explicit inode store with a Linux C toolchain')
     FixtureExecutor.add_argument(parser)
     args = parser.parse_args()

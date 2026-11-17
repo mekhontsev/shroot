@@ -12,6 +12,10 @@
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+    if (argc == 3 && !strcmp(argv[1], "path")) {
+        const char *path = getenv("PATH");
+        return !path || strcmp(path, argv[2]) ? 40 : 0;
+    }
     if (argc == 3 && !strcmp(argv[1], "readonly-bind")) {
         char path[256], data[16] = {0};
         if (snprintf(path, sizeof(path), "%s/token", argv[2]) >= (int)sizeof(path)) return 30;
@@ -38,7 +42,9 @@ int main(int argc, char **argv) {
         puts("PASS guest limits: inherited soft/hard, raised soft, independent service budget");
         return 0;
     }
-    if (argc == 2 && !strcmp(argv[1], "hold")) {
+    if (argc == 2 && (!strcmp(argv[1], "hold") || !strcmp(argv[1], "hold-owner"))) {
+        if (!strcmp(argv[1], "hold-owner")) for (int i = 4; i <= 5; ++i)
+            if (fcntl(i, F_GETFD) >= 0 || errno != EBADF) return 41;
         if (fork() < 0) return 10;
         if (write(1, "ready\n", 6) != 6) return 11;
         for (;;) pause();

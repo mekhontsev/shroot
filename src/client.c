@@ -34,7 +34,7 @@ int shroot_context_open(const char *directory, shroot_context **out) {
     if (!canonical) return -errno;
     shroot_context *context = calloc(1, sizeof(*context));
     int r = context ? 0 : -ENOMEM;
-    if (!r && asprintf(&context->worker, "%s/libmagicdesk_guest_image.so", canonical) < 0) r = -ENOMEM;
+    if (!r && asprintf(&context->worker, "%s/libshroot_guest_image.so", canonical) < 0) r = -ENOMEM;
     free(canonical);
     struct stat st;
     if (!r && stat(context->worker, &st)) r = -errno;
@@ -101,7 +101,7 @@ void shroot_argument(struct shroot_arguments *args, const char *value) {
 void shroot_option(struct shroot_arguments *args, const char *name, const char *value) {
     if (value) { shroot_argument(args, name); shroot_argument(args, value); }
 }
-static int owned_io(int fd, int output) {
+static int owned_io(int fd, int output, int minimum) {
     int opened = -1;
     if (fd < -1) return -EINVAL;
     if (fd < 0) {
@@ -109,7 +109,7 @@ static int owned_io(int fd, int output) {
         if (opened < 0) return -errno;
         fd = opened;
     }
-    int copy = fcntl(fd, F_DUPFD_CLOEXEC, 4), r = copy < 0 ? -errno : copy;
+    int copy = fcntl(fd, F_DUPFD_CLOEXEC, minimum), r = copy < 0 ? -errno : copy;
     if (opened >= 0) close(opened);
     return r;
 }
@@ -118,12 +118,20 @@ int shroot_client_start(shroot_context *context, struct shroot_arguments *args,
     int r = !context || !out ? -EINVAL : args->error;
     if (out) *out = NULL;
     if (!r && (!args->count || !args->values[0])) r = -EINVAL;
+    if (!r && args->owner_fd_count > INT_MAX - 4) r = -E2BIG;
+    for (size_t i = 0; !r && i < args->owner_fd_count; ++i)
+        if (args->owner_fds[i] < 0 || fcntl(args->owner_fds[i], F_GETFD) < 0) r = -EBADF;
     struct sigaction child_action;
     if (!r && sigaction(SIGCHLD, NULL, &child_action)) r = -errno;
     if (!r && (child_action.sa_handler == SIG_IGN || (child_action.sa_flags & SA_NOCLDWAIT))) r = -ENOTSUP;
     shroot_job *job = r ? NULL : calloc(1, sizeof(*job));
     if (!r && !job) r = -ENOMEM;
     struct shroot_arguments command = {0};
+    char owner_count[32];
+    char (*owner_names)[32] = !r && args->owner_fd_count ? calloc(args->owner_fd_count, 32) : NULL;
+    int *owner_copies = !r && args->owner_fd_count ? malloc(args->owner_fd_count * sizeof(int)) : NULL;
+    if (!r && args->owner_fd_count && (!owner_names || !owner_copies)) r = -ENOMEM;
+    size_t copied = 0;
     if (!r) {
         atomic_init(&job->finished, 0);
         job->process = job->channel = -1;
@@ -132,7 +140,15 @@ int shroot_client_start(shroot_context *context, struct shroot_arguments *args,
         job->launch = !strcmp(operation, "run") || !strcmp(operation, "exec") || !strcmp(operation, "login");
         shroot_argument(&command, context->worker);
         shroot_argument(&command, SHROOT_CLIENT_OPTION);
-        for (size_t i = 0; i < args->count; ++i) shroot_argument(&command, args->values[i]);
+        snprintf(owner_count, sizeof(owner_count), "%zu", args->owner_fd_count);
+        shroot_argument(&command, owner_count);
+        for (size_t i = 0; i < args->count; ++i) {
+            if (i == args->owner_argument) for (size_t j = 0; j < args->owner_fd_count; ++j) {
+                snprintf(owner_names[j], 32, "%zu", j + 4);
+                shroot_option(&command, "--owner-fd", owner_names[j]);
+            }
+            shroot_argument(&command, args->values[i]);
+        }
         r = command.error;
     }
     int channel[2] = {-1, -1}, descriptors[4] = {-1, -1, -1, -1};
@@ -140,17 +156,23 @@ int shroot_client_start(shroot_context *context, struct shroot_arguments *args,
      * must not accidentally become the newly allocated control channel. */
     for (int i = 0; !r && i < 3; ++i) {
         int fd = io ? i == 0 ? io->input : i == 1 ? io->output : io->error : i;
-        descriptors[i] = owned_io(fd, i != 0);
+        descriptors[i] = owned_io(fd, i != 0, 4 + (int)args->owner_fd_count);
         if (descriptors[i] < 0) r = descriptors[i];
     }
     if (!r && socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, channel)) r = -errno;
-    if (!r && (descriptors[3] = owned_io(channel[1], 1)) < 0) r = descriptors[3];
+    if (!r && (descriptors[3] = owned_io(channel[1], 1, 4 + (int)args->owner_fd_count)) < 0) r = descriptors[3];
+    for (; !r && copied < args->owner_fd_count; ++copied) {
+        owner_copies[copied] = owned_io(args->owner_fds[copied], 0, 4 + (int)args->owner_fd_count);
+        if (owner_copies[copied] < 0) r = owner_copies[copied];
+    }
     posix_spawn_file_actions_t actions;
     posix_spawnattr_t attributes;
     int actions_open = 0, attributes_open = 0;
     if (!r) { r = -posix_spawn_file_actions_init(&actions); actions_open = !r; }
     if (!r) { r = -posix_spawnattr_init(&attributes); attributes_open = !r; }
     for (int i = 0; !r && i < 4; ++i) r = -posix_spawn_file_actions_adddup2(&actions, descriptors[i], i);
+    for (size_t i = 0; !r && i < copied; ++i)
+        r = -posix_spawn_file_actions_adddup2(&actions, owner_copies[i], 4 + (int)i);
     sigset_t mask, defaults;
     sigemptyset(&mask); sigemptyset(&defaults);
     const int signals[] = {SIGCHLD, SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGPIPE};
@@ -163,6 +185,8 @@ int shroot_client_start(shroot_context *context, struct shroot_arguments *args,
     if (actions_open) posix_spawn_file_actions_destroy(&actions);
     if (attributes_open) posix_spawnattr_destroy(&attributes);
     for (int i = 0; i < 4; ++i) if (descriptors[i] >= 0) close(descriptors[i]);
+    for (size_t i = 0; i < copied; ++i) if (owner_copies[i] >= 0) close(owner_copies[i]);
+    free(owner_copies); free(owner_names);
     if (channel[1] >= 0) close(channel[1]);
     if (!r) {
         job->process = syscall(SYS_pidfd_open, job->pid, 0);

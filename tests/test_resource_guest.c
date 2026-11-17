@@ -1095,7 +1095,7 @@ static unsigned export_fds(unsigned char *snapshot) {
 static int capture_source(int fd) {
     /* The host-only profile denies this slot; guest filters and dumpability
      * remain independent, and bootstrap listener capture stays available. */
-    assert(fd>=0 && !getenv("MAGICDESK_TEST_CAPTURE_FALLBACK"));
+    assert(fd>=0 && !getenv("SHROOT_TEST_CAPTURE_FALLBACK"));
     if (fd!=STDIN_FILENO)
         assert(dup3(fd,STDIN_FILENO,O_CLOEXEC)==STDIN_FILENO && !close(fd));
     return STDIN_FILENO;
@@ -1821,7 +1821,7 @@ static void watch_slots(void) {
     puts("PASS watch paths without private FDs: protected callers, admitted transport, full table and symlink selection");
 }
 static void xattr_at(void) {
-    const char *name="user.magicdesk.at", *text="metadata";
+    const char *name="user.shroot.at", *text="metadata";
     int fd=open("xattr-at",O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600); assert(fd>=0);
     int dir=open(".",O_PATH|O_DIRECTORY|O_CLOEXEC); assert(dir>=0);
     int pathfd=open("xattr-at",O_PATH|O_CLOEXEC); assert(pathfd>=0);
@@ -1912,7 +1912,7 @@ static void xattr_slots(int guest) {
     int fd=open("xattr-slots",O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600); assert(fd>=0);
     char alias[80]; snprintf(alias,sizeof(alias),"/proc/thread-self/fd/%d",fd);
     assert(!mkdir("xattr-directory",0700) && !symlink("xattr-slots","xattr-link"));
-    const char *name="user.magicdesk.slots";
+    const char *name="user.shroot.slots";
     unsigned char value[64]; char received[256];
     for (unsigned i=0;i<sizeof(value);++i) value[i]=(unsigned char)i;
     assert(!setxattr("xattr-slots",name,value,sizeof(value),XATTR_CREATE));

@@ -83,7 +83,7 @@ def main():
 
     try:
         suite.command(run('mkdir -m 700 ' + shlex.quote(root)))
-        fixture='libmagicdesk_guest_service_runtime.so'
+        fixture='libshroot_guest_service_runtime.so'
         suite.upload(args.build / fixture,suite.base + '/' + fixture)
         suite.chmod('700', suite.base + '/' + fixture)
         suite.command([suite.runner,'--store',args.store,'--user','0:0',

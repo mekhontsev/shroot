@@ -4,7 +4,7 @@ This guide describes the machine-entry contract and its regression fixtures.
 
 - [Product Boundary](#product-boundary)
 - [Regression Commands](#regression-commands)
-- [Task-Channel Acceptance](#task-channel-acceptance)
+- [Common-Entry Acceptance](#common-entry-acceptance)
 - [Admission Limits](#admission-limits)
 
 ## Product Boundary
@@ -283,7 +283,7 @@ change. Neither should be presented as the other.
 
 ## Regression Commands
 
-Build with `MAGICDESK_GUEST_FIXTURES=ON`. Tests use the normal native artifacts,
+Build with `SHROOT_BUILD_TESTS=ON`. Tests use the normal native artifacts,
 not an alternative proof build. They run through the configured MagicDesk MCP
 connection under the selected executor and retain exact receipts in `build/`.
 

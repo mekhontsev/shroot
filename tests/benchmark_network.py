@@ -66,7 +66,7 @@ def main():
             modes[mode] = (mode, suite.runner)
             group = [mode]
             if args.reference:
-                modes['reference-' + mode] = (mode, reference + '/libmagicdesk_guest_run.so')
+                modes['reference-' + mode] = (mode, reference + '/libshroot_guest_run.so')
                 group.append('reference-' + mode)
             groups.append(group)
         samples = {name: [] for name in modes}

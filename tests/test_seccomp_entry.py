@@ -33,8 +33,8 @@ def main():
     try:
         root, store = suite.base + '/root', suite.base + '/store'
         suite.command(['mkdir', '-p', root + '/bin', root + '/tmp', root + '/filters'])
-        uploads = [(args.build / 'libmagicdesk_guest_test_seccomp_entry.so', root + '/bin/entry'),
-                   (args.build / 'libmagicdesk_guest_service.so', suite.base + '/service'),
+        uploads = [(args.build / 'libshroot_guest_test_seccomp_entry.so', root + '/bin/entry'),
+                   (args.build / 'libshroot_guest_service.so', suite.base + '/service'),
                    (args.file_filter, root + '/filters/files'), (args.fd_filter, root + '/filters/fds')]
         for source, destination in uploads:
             digest = hashlib.sha256(source.read_bytes()).hexdigest()

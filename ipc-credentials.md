@@ -33,7 +33,7 @@ duplicating descriptors; the scope retains the epoch lease and the store's
 shared maintenance lock. Database/gate resources close independently. The last
 scope owner releases both leases; a new owner can then retire old associations.
 No service or kernel probe is added to
-MagicDesk startup, and ordinary filesystem calls do not open this database.
+host-application startup, and ordinary filesystem calls do not open this database.
 
 Kernel `SO_COOKIE` identifies a socket across dup, fork and SCM_RIGHTS. Listen,
 connect and socketpair capture effective guest UID/GID and supplementary groups.
@@ -366,7 +366,7 @@ syscalls and full/protected callers. On a shell policy denying native socket-fil
 creation, the native-anchor fixture verifies final kernel rejection and release;
 successful delivery to a fixture-created native path is explicitly unavailable.
 The same captured-send helper also has a native pathname delivery fixture
-(`libmagicdesk_guest_task_helper_fd.so DIRECTORY --native-anchor`): under the
+(`libshroot_guest_task_helper_fd.so DIRECTORY --native-anchor`): under the
 Termux app UID it delivers 253 mixed/O_PATH rights from ordinary and protected
 callers with exact FD cleanup. This verifies the mechanism, not shell permission.
 The native-consumer cases exercise inherited/exported sockets, rejected adapted
@@ -653,8 +653,9 @@ SO_ERROR, read, recv and a forked peer. It is separate from the unresolved
 adapter-publication fault above. `rights-publication-error` repeats those four
 error consumers for all three adapter publication boundaries and remains failing.
 
-A daemon may warn that its requested FD limit exceeds the executor's hard limit;
-this does not justify fabricating a successful setrlimit. A working session bus
+A daemon's logical FD limit can exceed the executor's native ceiling; actual
+descriptor allocation remains bounded by the host. See
+[process limits](process-resources.md#process-limits). A working session bus
 does not imply system-bus policy, arbitrary package configuration or full Linux
 service startup. Device/build coverage remains that of the
-[guest runtime](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md).
+[distribution matrix](tests/validation-matrix.md).

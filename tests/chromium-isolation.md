@@ -4,7 +4,7 @@ These fixtures distinguish native Android kernel authority, bounded broker
 experiments and production Shroot browser execution. They concern Linux
 browsers, not the Android Chrome APK. For current launch routes and acceptance
 criteria use [the browser guide](browser/README.md); for implemented isolation
-limits use [Shroot](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#boundaries).
+limits use the [runtime boundary](../README.md#boundaries).
 
 ## Native Kernel Baseline
 
@@ -13,7 +13,7 @@ ptrace and its seccomp filters:
 
 ```sh
 sh tests/build-isolation-fixture.sh BUILD
-python tests/test_isolation.py BUILD
+python "$APP_TESTS/test_isolation.py" BUILD
 ```
 
 It records the actual UID, capabilities, no_new_privs and seccomp state, kernel
@@ -67,7 +67,7 @@ distribution's browser build.
 
 ```sh
 sh tests/build-domain-fixture.sh BUILD
-python tests/test_domain.py BUILD --repeat 10
+python "$APP_TESTS/test_domain.py" BUILD --repeat 10
 ```
 
 A default-deny filter and external USER_NOTIF broker expose a bounded read-only
@@ -94,8 +94,8 @@ cannot be inferred away from successful ERRNO/TRAP controls.
 
 ```sh
 python tests/build-suid-context.py BUILD
-python tests/test_domain.py BUILD --fixture suid-context --repeat 10
-python tests/test_domain.py BUILD --fixture suid-context --suid-main --repeat 10
+python "$APP_TESTS/test_domain.py" BUILD --fixture suid-context --repeat 10
+python "$APP_TESTS/test_domain.py" BUILD --fixture suid-context --suid-main --repeat 10
 ```
 
 This static Bionic fixture combines retained root/cwd ownership with protected

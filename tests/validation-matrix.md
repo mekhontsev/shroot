@@ -1,8 +1,9 @@
 # Shroot Distribution Validation Matrix
 
-This is the per-distribution acceptance ledger, not a supported-applications list
-or a claim that all tests are automated. Keep every distribution printed by
-`sh scripts/install_linux.sh --list` in every table. Results do not transfer
+This is the per-distribution acceptance ledger for MagicDesk's Linux recipes,
+not a supported-applications list or a claim that all tests are automated. Keep
+every distribution printed by `sh "$MAGICDESK_SOURCE/scripts/install_linux.sh" --list`
+in every table. Results do not transfer
 between distributions sharing a package manager, libc or init system.
 
 Device evidence uses NX809J, Android 16, Linux 6.12.23 and 4 KiB pages.
@@ -24,181 +25,108 @@ other, the minimum supported kernel 5.15, other firmware or Android root executi
 
 ## Current Release Qualification
 
-Version 2.3 is in stabilization. The source baseline is
-`1514781fea469b5d3f7302d6a5217bb0dae626f6`; new features are outside this pass.
-The saved non-fixture APK has SHA-256
+These tables record MagicDesk integration coverage by installed distribution,
+executor and entry mode. They are not Shroot's independent release version or
+the standalone Linux acceptance matrix. Standalone native/API/package coverage
+is recorded under [qualified hosts](README.md#qualified-hosts); generated Android
+application coverage belongs to
+[MagicDesk's application guide](https://github.com/mekhontsev/magicdesk/blob/develop/docs/linux-applications.md).
+
+Receipts under `build/release-2.3/` retain exact APK and native hashes. Results
+from staged or fixture-enabled helpers do not replace final packaged-APK
+acceptance. The saved comparison baseline is source
+`1514781fea469b5d3f7302d6a5217bb0dae626f6`, ordinary APK SHA-256
 `21e764c0e3eded3a96791985c9435411b28adae85d292e8f32d374307a26aef7`.
-Artifacts for this pass live in `build/release-2.3/`. Receipts retain each test's
-APK identity and native hashes. Resource, policy and full machine-entry coverage
-uses the optimized fixture build
-`a7bd2f65418c95082a27a1b5edf5500be5106e94acfdf227eb0520ecbb651ab1`;
-channel-admission follow-up uses
-`f8ec4cb283b49b7c3d9ef3cee45e70fe4887664bef3f4b468965199fb276b0fb`.
-Fixture results do not replace final packaged-APK acceptance or performance
-measurements without test instrumentation.
+A passing receipt is not silently promoted to another runtime build.
 
-Channel-lifetime acceptance uses fixture APK build ID
-`e04aab43c2f2f8d532bacd153917748a0a338b05d916c84b286fb821e7107aa1`.
-Its common supervisor-state checks pass under User and Shell. Full machine-entry
-coverage passes under both executors, including overflow registration, native TID reuse,
-paused admission, fork/exec, mappings and stock Go with/without guest seccomp.
-Receipts: `results/client-lease-state-{app,shell}.json` and
-`results/client-lease-svc-{app,shell}.json`. Earlier results below retain their own build
-identities; they are not silently promoted to this runtime.
+### Runtime Coverage
 
-Stock k3s `v1.37.1+k3s1` passes the complete one-node VXLAN scenario on Alpine
-under User: CoreDNS, cross-pod service traffic, NetworkPolicy updates,
-deployment scaling/rolling update, PVC, Traefik/ServiceLB ingress, server restart,
-workload preservation, deletion and clean shutdown. Receipt:
-`k3s-alpine-app/oci-services-bda35ccb81454ea384111df170176bde.json`.
-Debian User passes the same complete scenario with fixture build ID
-`854f715343a3787749a4a21dd38b83af3a5a273f0e8ae0ab73aa1ac4d4add0f6`:
-`k3s-debian-app/oci-services-3283cb286e1b4603b753356d86c71e6f.json`.
-The shared filesystem transport and supervisor-state suites pass under both
-executors, including queued open-result retirement and cancellation. Filesystem
-result coverage also passes under the Linux 5.15 capability profile for both.
-Receipts: `results/fs-owner-fix-{app,shell}.json`,
-`results/fs-owner-state-{app,shell}.json` and
-`results/fs-owner-kernel515-{app,shell}.json`.
-Current per-distribution k3s coverage is listed below; unrun executor/OS pairs
-and other application workloads remain pending.
-
-- The complete resource suite passes: 461 checks under User and 472 under Shell.
-  Native controls depend on the executor's capabilities; guest assertions are
-  shared. Coverage includes descriptor custody in Base/lazy entry, signal-stress
-  memory operations, namespaces, IPC, storage recovery and supervisor ownership.
-  All 44 shared-memory signal combinations pass under each executor, including
-  guest seccomp with 100-us signals and STOP/CONT, within unchanged deadlines.
+- **Resources:** 461 User and 472 Shell checks cover descriptor custody,
+  namespaces, IPC, storage and supervisor ownership. All 44 shared-memory
+  signal combinations pass under both identities, including guest seccomp,
+  100-us signals and STOP/CONT. Native controls retain executor-specific
+  capabilities; guest assertions are shared.
   Receipts: `results/signal-owner-resources-{app,shell}.json`.
-- Guest policy and signal suites pass all 258 cases per executor in Base/lazy
-  entry, including TSYNC, notification listeners and signal-mask virtualization.
-  Supervisor-state checks also pass independently under both identities.
-  Receipts: `signal-owner-policy-{app,shell}/` and
+- **Policy and signals:** 258 cases per executor cover Base/lazy entry, TSYNC,
+  notification listeners and signal-mask virtualization. Supervisor-state checks
+  pass separately. Receipts: `signal-owner-policy-{app,shell}/` and
   `results/signal-owner-state-{app,shell}.json`.
-- Full machine-entry suites pass under User and Shell: original/Base/lazy
-  controls, distant sites, growing channels, debugger rearm, inherited filters,
-  TSYNC, mapping changes, protected process inspection and five Go rounds with
-  and without guest seccomp. Receipts: `results/signal-owner-entry-{app,shell}.json`.
-- Cooperative API and shared model suites pass under User and Shell, with
-  independent Base/lazy runs. Coverage includes channels, TSYNC and inherited
-  filters, FD effects, signal reentry, JIT, cancellation and concurrent mutations.
-  Cold channel growth/reuse also passes three repeats per executor and entry
-  mode; ownership tests cover queued/ready cancellation and successor progress.
-  Receipts: `results/qualified-entry-cooperative-*.json`,
-  `logs/channel-queue-capacity-*.log` and `results/channel-queue-state-*.json`.
-- Watch suites and filesystem-result suites under the Linux 5.15 capability
-  profile pass for User and Shell. They retain selective ordinary-read handling,
-  parallel-read completion, descriptor counts, watch lifetimes and quotas.
+- **Machine entry and cooperative execution:** User and Shell pass original,
+  Base and lazy controls, distant sites, growing/reused channels, debugger rearm,
+  inherited filters, mapping changes, protected inspection, signals and stock
+  Go with/without guest seccomp. Coverage includes queued/ready cancellation,
+  native TID reuse and admission pauses.
+  Receipts: `results/client-lease-{state,svc}-{app,shell}.json`,
+  `results/qualified-entry-cooperative-*.json` and
+  `results/channel-queue-state-*.json`. The client-lease fixture APK is
+  `e04aab43c2f2f8d532bacd153917748a0a338b05d916c84b286fb821e7107aa1`.
+- **Watches and kernel fallbacks:** User/Shell watch and filesystem-result suites
+  cover selective reads, parallel completion, FD balance, lifetimes and quotas,
+  including the Linux 5.15 capability profile.
   Receipts: `results/qualified-entry-watch-*.json` and
   `results/qualified-entry-kernel515-fs-*.json`.
-- Stock-libc ABI suites pass on Alpine/Shell and Debian/User in lazy and Base:
-  dynamic, static and freestanding execution, exec/spawn/vfork, TLS, threads,
-  signals, protected pointers and failed-exec resource lifetimes. Fixtures were
-  rebuilt from the current sources. Receipts: `results/abi-*.json`.
-- Packaged debugger suites pass on Alpine/Shell and Debian/User in lazy and Base:
-  GDB, LLDB, gdbserver, strace, Callgrind and the shared debugger lifecycle
-  assertions. Alpine lacks the toolchain's `gcrt1.o`; User cannot open native
-  perf events. These two explicit unavailable controls are not passes.
-  Receipts: `debugger-alpine-shell/`, `debugger-debian-app-complete/` and
-  `results/debugger-base-*.json`. Broader kernel-profile qualification remains
-  pending.
-  Current debugger-delivery acceptance uses fixture build ID
-  `d2b1187a3a9ed0335bd9edc865f17583264f4553b5d1034a1d2230b0042d5440`:
-  Debian/User passes 38 debugger/tool workflows (native perf remains unavailable).
-  Active multithreaded IO and blocked pipe/socket/poll/epoll targets pass repeated
-  GDB breakpoint/continue/detach in Alpine/Shell and Debian/User, in lazy and Base.
-  Receipts: `debugger-delivery-{alpine-shell,alpine-base,debian-app,debian-base}/`.
-  Shared supervisor-state checks and untraced filesystem/memory signal stress
-  also pass under both executors, including STOP/CONT and guest filters:
-  `results/debugger-delivery-{supervisor-state,fs-signals}-{app,shell}.json`.
-  Inherited-filter image-entry acceptance additionally passes 32 combinations:
-  direct TRACEME exec, syscall exec and both nonleader exec forms, with and
-  without an inherited filter, on Debian/User and Alpine/Shell in Base and lazy.
-  These use ordinary APK build ID
-  `3b8f74366bf0f899233f47531177e22dfa2d04e025e727233e72724228013b6a`.
-  Receipts: `filtered-exec-{debian-app,alpine-shell}-{base,lazy}/`.
-- All 13 recipe distributions require current User and Shell application
-  qualification. Existing cells below describe their recorded builds, not a
-  completed 2.3 pass. Reuse installed stores sequentially; access handoffs are
-  not copies and must retain their restoration journals.
-- Landlock filesystem and mounted-store contracts pass on Arch/User and
-  Alpine/Shell, independently in Base and lazy, on ordinary APK build ID
-  `5f6872198dabcfea56eb3554c6d60c4855766fe43f21edaaab246972b68e2d02`.
-  Coverage includes nested tmpfs/ramfs, bind-source ancestry boundaries,
-  directory-relative/proc-FD reopening and policy-layer intersection, with
-  positive and negative assertions. Receipts:
-  `landlock-after-{arch-app,alpine-shell}-{base,lazy}/`.
-- Default-library installation/resume/discovery and final APK checks are pending.
-- Quiescence and lifecycle follow-up uses optimized fixture APK build ID
-  `a4327dde84609813f7aad05d9effb6e32b5acd1f5819211d503833585f414b62`.
-  Supervisor-state, robust-futex, private-memory and launch-cancellation suites
-  pass under User and Shell: `results/quiesce-*-{app,shell}.json`. This covers
-  unavailable interrupt targets, cleanup admission, retained FD custody,
-  protected mappings and exact process-tree cancellation.
-- Teardown acceptance uses fixture APK build ID
-  `db8f47632bd543c15ec744dd21a68706ef3e4f7641405d01312e786cca4f73c7`.
-  Supervisor-state, filesystem worker transport (504 O_PATH cases) and launch
-  cancellation pass under User and Shell. Pending broker continuations and
-  channels retain their ownership through worker join. Receipts:
+- **Stock-libc ABI:** Alpine/Shell and Debian/User pass dynamic, static and
+  freestanding execution, exec/spawn/vfork, TLS, threads, signals, protected
+  pointers and failed-exec lifetimes in Base and lazy modes.
+  Receipts: `results/abi-*.json`.
+- **Debuggers:** Alpine/Shell and Debian/User cover GDB, LLDB, gdbserver, strace,
+  Callgrind, multithreaded IO, blocked waits and repeated attach/detach.
+  Inherited-filter exec checks cover 32 combinations in Base/lazy entry,
+  including nonleader exec. Native perf under User and Alpine's missing
+  `gcrt1.o` remain unavailable controls, not passes.
+  Receipts: `debugger-delivery-{alpine-shell,alpine-base,debian-app,debian-base}/`
+  and `filtered-exec-{debian-app,alpine-shell}-{base,lazy}/`.
+- **Landlock and mounts:** Arch/User and Alpine/Shell pass nested tmpfs/ramfs,
+  bind ancestry, directory/proc-FD reopening and policy intersection, with
+  positive and negative Base/lazy assertions.
+  Receipts: `landlock-after-{arch-app,alpine-shell}-{base,lazy}/`.
+- **Lifetime and recovery:** User/Shell checks cover quiescence, robust futexes,
+  private memory, cancellation, worker join, 504 O_PATH transport cases,
+  transient-store leases, queued rights, overlays and FD balance.
+  Receipts: `results/quiesce-*-{app,shell}.json`,
   `supervisor-cleanup-{app,shell}.json`,
-  `supervisor-cleanup-fs-{app,shell}.json` and
-  `supervisor-cleanup-cancel-{app,shell}.json`. Ordinary APK build ID
-  `4a3a98185f48139184853c4a687b720617f57458efdd1cdb9e83e3627340e957`
-  also completes an uninstrumented, approximately 20-minute offscreen SteamOS
-  Shell session with status 143 and full graphics cleanup. Browser, editor and
-  portal workflows complete before shutdown. Receipt:
-  `steamos-reboot-acceptance/session.json`. This is lifecycle evidence, not final
-  APK performance or qualification of every desktop startup service.
-- Temporary-tree recovery and the full transient-store suite pass under Shell
-  and User with fixture build ID
-  `6c792d8433ad8050483534ff8a48fd95a9bdfe0ad3a6032b3029d94d54f22ac7`.
-  Coverage includes damaged markers, final release, admission-time collection,
-  queued rights, live leases, overlay views and descriptor balance. User invokes
-  the same packaged fixture through an App console; its receipt records the
-  untrusted-app identity and matching native hash. Receipts:
-  `results/transient-recovery-shell.json`,
-  `results/transient-recovery-app-direct.json` and
-  `results/transient-custody-shell.json`. These checks do not simulate arbitrary
-  power-loss damage to persistent guest files.
-- Uninstrumented, unpinned Shell timing compares the saved source baseline with
-  the clean runtime below. Eight alternating rounds retain file-stat, open/close,
-  file-cycle, poll and epoll measurements; a separate twelve-round stat/epoll
-  repeat uses longer file blocks. Median paired time changes in that repeat are
-  stat +1.7% and epoll -1.5%; first-series open/close, file-cycle and poll changes
-  are -0.7%, -1.4% and -0.8%. Both series retain all samples, frequency observations
-  and caller CPU endpoints in `results/qualification-performance.json` and
-  `results/qualified-performance-repeat.json`. These are short-loop measurements,
-  not final packaged-APK, User performance or SteamOS video/audio acceptance.
-  Those checks and the supervisor CPU targets remain pending.
-- The non-fixture native build matching APK `5f687219...` passes an eight-round
-  unpinned Shell comparison: median paired loop changes are stat +1.3%,
-  open/close +0.6%, file-cycle -0.5%, poll +6.3% and epoll +4.0%. A separate
-  sixteen-pair poll/epoll repeat gives +0.8%/-6.0%. CPU migration and individual
-  pair variation prevent a speedup claim; there is no consistent slowdown across
-  the repeats. File tests retain sixteen blocks per launch; poll/epoll retain
-  one million iterations. All samples, frequency residency and thermal state
-  remain in `performance-landlock/oci-services-7cd51fac29cc4b9dbbeaf67f15f0ea1c.json`
-  and `performance-readiness-landlock/oci-services-11315e46fbc743209a59db02fa1af124.json`.
-  Both candidates use the same guest binary with verified lazy completions;
-  timing runs have no runtime instrumentation or concurrent GUI workload.
-  A separate counter-only run confirms native poll/epoll loops: both builds
-  retain 38 startup/teardown stops per launch, not per-iteration interception.
-  Receipt: `diagnostic-readiness-landlock/oci-services-8e44465e46274a9fbb62f5455e7dd9c8.json`.
-- The non-fixture native build matching ordinary APK build ID
-  `fc0042a5dd9aee463d2d48ff4d17821df5caa7a4c08349d4f0f44c40d7bf4763`
-  passes an eight-round uninstrumented Shell comparison against the same
-  source baseline. Median paired time changes are stat +5.2%, open/close -0.2%,
-  file-cycle -1.6%, poll +0.8% and epoll +0.1%. The battery stays at 34 C;
-  frequency residency and individual pairs vary substantially. This is a
-  regression screen, not a precision speedup claim. Receipt, including all
-  thermal/frequency observations:
-  `performance-cleanup/oci-services-b44b51dbb8994abdac21ea87d06ef3b3.json`.
+  `supervisor-cleanup-fs-{app,shell}.json`,
+  `supervisor-cleanup-cancel-{app,shell}.json` and
+  `results/transient-{recovery-shell,recovery-app-direct,custody-shell}.json`.
+  These checks do not establish arbitrary power-loss recovery of guest files.
 
-Honor changes are limited to fixes driven by remote-device feedback. Changes to
-shared launch, graphics, audio or executor boundaries require affected workflow
-reruns; isolated firmware-window changes do not invalidate native-only receipts.
-Keep confirmed upstream failures and unavailable prerequisites distinct from
-Shroot defects. The Linux 5.15 capability profile is not a physical 5.15 device.
+### Integration And Remaining Scope
+
+Alpine/User and Debian/User pass stock k3s `v1.37.1+k3s1` one-node VXLAN:
+CoreDNS, cross-pod Services, NetworkPolicy, scaling/rolling update, PVC,
+Traefik/ServiceLB ingress, server restart, deletion and clean shutdown.
+Receipts: `k3s-alpine-app/oci-services-bda35ccb81454ea384111df170176bde.json`
+and `k3s-debian-app/oci-services-3283cb286e1b4603b753356d86c71e6f.json`.
+Other OS/executor combinations retain their separate [k3s cells](#k3s).
+
+An ordinary APK completes an approximately 20-minute offscreen SteamOS Shell
+session with browser, editor and portal workflows, status 143 and full graphics
+cleanup. Receipt: `steamos-reboot-acceptance/session.json`, build
+`4a3a98185f48139184853c4a687b720617f57458efdd1cdb9e83e3627340e957`.
+This is lifecycle evidence, not sustained video/audio performance or complete
+startup-service qualification.
+
+Uninstrumented Shell comparisons retain all samples, thermal observations,
+frequency residency and exact helper hashes. The eight-round
+`performance-cleanup/oci-services-b44b51dbb8994abdac21ea87d06ef3b3.json`
+records paired median changes of stat +5.2%, open/close -0.2%, file-cycle -1.6%,
+poll +0.8% and epoll +0.1% against the saved baseline, with APK build
+`fc0042a5dd9aee463d2d48ff4d17821df5caa7a4c08349d4f0f44c40d7bf4763`.
+This is a regression screen with visible scheduling variation, not a precision
+speedup claim. [Networking acceptance](#current-rootless-containers) records its
+own matched performance controls.
+
+Remaining acceptance includes unrun User/Shell and Base combinations for the
+13 installer distributions, the ordinary default-library installer/resume/UI
+workflow, final packaged-APK checks and sustained SteamOS video/audio targets.
+Native catalog tests and standalone bundle acceptance do not complete those
+frontend scenarios. Reuse installed stores sequentially and retain restoration
+journals during access handoffs; do not create distribution copies.
+
+Changes to shared launch, graphics, audio or executor boundaries require
+affected workflow reruns. Window-policy-only changes do not invalidate
+native-only receipts. Keep upstream failures and missing prerequisites distinct
+from Shroot defects. The Linux 5.15 capability profile is not a physical 5.15 host.
 
 ### Current Application Pass
 

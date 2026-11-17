@@ -2,6 +2,7 @@
 """Native client integration; no Android application or automation service."""
 import argparse
 import json
+import os
 import resource
 import select
 import signal
@@ -11,6 +12,27 @@ import subprocess
 import sys
 import tempfile
 from client_fixture import archive_fixture
+
+
+def owner_lifetime(command):
+    reader, owner = socket.socketpair()
+    process = None
+    try:
+        process = subprocess.Popen(command + ['--owner-fd', str(owner.fileno()), '--', '/bin/client-guest', 'hold'],
+                                   pass_fds=(owner.fileno(),), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        owner.close()
+        assert select.select([process.stdout], [], [], 30)[0], 'guest did not start'
+        assert os.read(process.stdout.fileno(), 6) == b'ready\n'
+        assert not select.select([reader], [], [], 0)[0], 'owner FD closed before tree exit'
+        process.terminate()
+        output, error = process.communicate(timeout=30)
+        assert process.returncode in (128 + signal.SIGTERM, -signal.SIGTERM), error
+        assert select.select([reader], [], [], 5)[0], 'owner FD survived tree exit'
+        assert reader.recv(1) == b''
+    finally:
+        owner.close(); reader.close()
+        if process and process.poll() is None:
+            process.kill(); process.communicate(timeout=15)
 
 
 def parent_lifetime(cli, instance):
@@ -78,6 +100,11 @@ def main():
                                       '--', '/bin/client-guest', 'readonly-bind', '/readonly-' + entry],
                                check=True, timeout=30)
         parent_lifetime(cli, instance)
+        for command in ([*cli, 'exec', str(instance)], [str(runtime / 'libshroot_guest_run.so'), '--store', str(instance)]):
+            subprocess.run(command + ['--env', 'PATH=/custom:/bin', '--path-prefix', '/integration',
+                                     '--', '/bin/client-guest', 'path', '/integration:/custom:/bin'],
+                           check=True, timeout=30)
+            owner_lifetime(command)
         for parent in ('1', '0', '-1', 'invalid', '2147483648'):
             result = subprocess.run(cli + ['--parent-pid', parent, 'format'], capture_output=True, timeout=10)
             assert result.returncode == 125, result

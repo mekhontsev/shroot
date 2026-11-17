@@ -22,7 +22,7 @@ def main():
         suite.report['suiteMode'] = 'copy-fault' if args.copy_fault else 'checkpoints'
         suite.report['kernel'] = suite.command(['uname', '-r'], quiet=True).strip()
         binary = suite.base + '/signal-checkpoint'
-        source = args.build / 'libmagicdesk_guest_test_signal_checkpoint.so'
+        source = args.build / 'libshroot_guest_test_signal_checkpoint.so'
         with source.open('rb') as stream:
             suite.report['fixtureSha256'] = hashlib.file_digest(stream, 'sha256').hexdigest()
         suite.upload(source, binary)

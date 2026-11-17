@@ -3,7 +3,7 @@
 #include "kernel_profile.h"
 #endif
 #include "cgroup.h"
-#include "command_access.h"
+#include "launch_resources.h"
 #include "descriptor_inode.h"
 #include "elf_admission.h"
 #include "event_signal.h"
@@ -683,13 +683,17 @@ int main(int argc, char **argv) {
     md_page_size = (size_t)sysconf(_SC_PAGESIZE);
     CHECK(md_page_size >= 4096 && md_page_size <= 65536 && !(md_page_size & (md_page_size - 1)));
     int argument = 1;
-    int command_access = 0, command_owner = -1;
-    char command_directory[PATH_MAX];
+    struct md_arguments owners;
+    md_arguments_init(&owners);
     long seconds = 0;
     while (argument < argc) {
         if (!strcmp(argv[argument], "--diagnostics")) diagnostics = 1;
         else if (!strcmp(argv[argument], "--diagnostics=signals")) signal_diagnostics = 1;
-        else if (!strcmp(argv[argument], "--magicdesk") && !command_access) command_access = 1;
+        else if (!strcmp(argv[argument], "--owner-fd")) {
+            CHECK(argument + 1 < argc);
+            CHECK(!md_owner_fds_add(&owners, argv[++argument]));
+            CHECK(!fcntl(md_owner_fd(argv[argument]), F_SETFD, FD_CLOEXEC));
+        }
         else if (!strcmp(argv[argument], "--statistics")) {
             CHECK(!statistics);
             statistics = calloc(1, sizeof(*statistics));
@@ -812,14 +816,6 @@ int main(int argc, char **argv) {
     CHECK(inherited_no_new_privs >= 0);
     launch_identity.no_new_privs = (unsigned)inherited_no_new_privs;
     CHECK(argument < argc);
-    if (command_access) {
-        CHECK(attachment_count < MD_FS_MOUNTS_MAX);
-        command_owner = md_guest_command_access(store, &attachments[attachment_count], command_directory);
-        if (command_owner < 0) { errno = -command_owner; perror("MagicDesk command access"); return 125; }
-        ++attachment_count;
-    } else {
-        unsetenv("MAGICDESK_COMMAND_ENDPOINT"); unsetenv("MAGICDESK_COMMAND_BUILD");
-    }
     struct md_process_signals inherited;
     CHECK(md_process_signals_open(&inherited) >= 0);
     signal_fd = inherited.fd;
@@ -835,7 +831,7 @@ int main(int argc, char **argv) {
     CHECK(!md_process_limits_read(&limits));
     leader = fork(); CHECK(leader >= 0);
     if (!leader) {
-        if (command_owner >= 0) close(command_owner);
+        md_owner_fds_close(&owners);
         close(channel[0]); close(signal_fd);
         CHECK(!md_process_signals_restore(&inherited));
         CHECK(!prctl(PR_SET_PDEATHSIG, SIGKILL) && getppid() == parent);
@@ -862,8 +858,11 @@ int main(int argc, char **argv) {
      * markers, so use the same pre-filter protocol as guest-installed filters. */
     thread(leader)->seccomp.application_filter=!!inherited_no_new_privs;
     close(channel[1]);
-    int keep[] = {signal_fd, channel[0], command_owner};
-    CHECK(!md_process_close_fds(keep, command_owner >= 0 ? 3 : 2));
+    int *keep = malloc((owners.count + 2) * sizeof(*keep)); CHECK(keep);
+    keep[0] = signal_fd; keep[1] = channel[0];
+    for (size_t i = 0; i < owners.count; ++i) keep[i + 2] = md_owner_fd(owners.values[i]);
+    CHECK(!md_process_close_fds(keep, (unsigned)owners.count + 2));
+    free(keep); md_arguments_close(&owners);
     if (store) entry_wake_fd=md_entry_wakeup_open();
     fd_exchanges=md_fd_exchanges_create(); CHECK(fd_exchanges);
     const struct md_task_helper_callbacks helper_callbacks={.trace=native_trace,.newborn=helper_newborn,.wait=&task_wait};

@@ -340,7 +340,7 @@ def main():
         if args.native_tests:
             assert args.build
             for target in ('test_task_resources', 'test_mounts', 'fs_dispatch'):
-                filename = 'libmagicdesk_guest_' + target + '.so'
+                filename = 'libshroot_guest_' + target + '.so'
                 suite.upload(args.build / filename, suite.base + '/' + filename)
                 suite.chmod('700', suite.base + '/' + filename)
                 arguments = [] if target == 'test_task_resources' else [suite.base + '/' + target]

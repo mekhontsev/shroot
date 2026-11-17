@@ -43,7 +43,7 @@ def main():
         suite.command(base + ['/usr/bin/runuser', '-u', 'alpm', '--', '/usr/bin/id'])
         suite.report['cases'].append({'name': 'stock-alpm-identity', 'passed': True})
 
-        source = args.build / 'libmagicdesk_guest_landlock_guest.so'
+        source = args.build / 'libshroot_guest_landlock_guest.so'
         with source.open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
         native_fixture = suite.base + '/landlock-contract'

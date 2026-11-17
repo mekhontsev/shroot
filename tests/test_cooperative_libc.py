@@ -53,7 +53,7 @@ def main():
         suite.command(['mkdir', '-p', root + '/bin', root + '/lib', native])
         if args.directory_mode == 'imported':
             suite.command(['mkdir', root + '/bench'])
-        files = [(args.build / 'libmagicdesk_guest_service.so', suite.base + '/service')]
+        files = [(args.build / 'libshroot_guest_service.so', suite.base + '/service')]
         if args.libc_kind == 'musl':
             files += [(args.musl / 'sysroot/lib/libc.so', root + loader)]
         else:
@@ -89,7 +89,7 @@ def main():
             suite.command(['mkdir', directory])
             suite.report['referenceNativeHashes'] = suite.stage_runtime(args.reference_build, directory)
             suite.report['referenceBuild'] = str(args.reference_build)
-            reference = directory + '/libmagicdesk_guest_run.so'
+            reference = directory + '/libshroot_guest_run.so'
         if args.directory_mode == 'logical':
             suite.command([*guest, '/bin/static', '/bench', 'prepare'])
         suite.report['directoryKind'] = args.directory_mode

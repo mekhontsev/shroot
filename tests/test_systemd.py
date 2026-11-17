@@ -179,7 +179,7 @@ exec /usr/lib/systemd/systemd --system --unit=md-test.target --show-status=no --
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--store', required=True)
-    parser.add_argument('--build', type=Path)
+    parser.add_argument('--build', type=Path, required=True)
     parser.add_argument('--output', type=Path, default=Path('build/systemd-results'))
     parser.add_argument('--trace', action='store_true', help='Requires strace in the guest')
     parser.add_argument('--property', action='append', default=[],
@@ -195,8 +195,8 @@ def main():
     prefix = suite.guest(args.store, '--user', '0:0', '--network', 'routed')
     created = False
     try:
-        build = args.build or Path('app/build/shroot')
-        suite.upload(build / 'libmagicdesk_guest_notify_guest.so',
+        build = args.build
+        suite.upload(build / 'libshroot_guest_notify_guest.so',
                                suite.base + '/notify-guest')
         suite.chmod('700', suite.base + '/notify-guest')
         with socket.socket() as reservation:

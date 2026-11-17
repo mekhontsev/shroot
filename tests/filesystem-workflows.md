@@ -1,6 +1,6 @@
 # Filesystem And OCI Fixtures
 
-[Fixture guide](README.md) | [Native architecture](../README.md)
+[Fixture guide](README.md) | [Native architecture](../architecture.md)
 
 OCI images, mount views, storage semantics and file-watch workflows. Use disposable environments for mutation and failure-injection tests.
 
@@ -80,7 +80,7 @@ its sandbox enabled; it is not replaced by filesystem component assertions.
 ## Resource Ownership Checks
 
 Build `resource_guest` and `test_task_resources` with
-`MAGICDESK_GUEST_FIXTURES=ON`. Run the resource owner directly for component
+`SHROOT_BUILD_TESTS=ON`. Run the resource owner directly for component
 checks; the device runner compares actual shell UID 2000 with intercepted guests:
 
 ```sh
@@ -140,7 +140,7 @@ retains candidate semantics, rejected alternatives and quota comparisons.
 
 ## OCI And Service Workflows
 
-Configure `native/shroot` with `-DMAGICDESK_GUEST_FIXTURES=ON` and build
+Configure Shroot with `-DSHROOT_BUILD_TESTS=ON` and build
 `bootstrap supervisor run service image test_snapshot test_mounts`.
 `test_mounts --path-walk NEW_DIRECTORY` isolates logical path traversal and its
 depth-independent FD/transaction bounds. The full mount suite includes it.
@@ -167,7 +167,7 @@ reproducible inputs. Run independent Alpine and Debian layouts through actual
 shell UID 2000:
 
 ```sh
-python tests/test_oci_runtime.py BUILD_DIRECTORY ALPINE_LAYOUT DEBIAN_LAYOUT
+python "$APP_TESTS/test_oci_runtime.py" BUILD_DIRECTORY ALPINE_LAYOUT DEBIAN_LAYOUT
 ```
 
 The runner stages production helpers, tests snapshot and mount contracts, then
@@ -182,7 +182,7 @@ standalone helper coverage alone does not verify APK packaging and dispatch.
 The installed named manager has a separate workflow:
 
 ```sh
-python tests/test_environment_cli.py --apk app/build/outputs/apk/debug/app-debug.apk
+python "$APP_TESTS/test_environment_cli.py" --apk app/build/outputs/apk/debug/app-debug.apk
 ```
 
 It downloads public Alpine and Debian images through the APK's registry client,
@@ -251,7 +251,7 @@ an upstream ARM64 register bug. Timeouts fail their cases and the launch owner
 cancels remaining descendants. Shroot fixtures persist only in the explicitly
 selected disposable store. See the [debugger contract and measured coverage](../debugging.md).
 
-`test_kernel_contract.py OUTPUT --fixture BUILD/libmagicdesk_guest_kernel_contract.so
+`test_kernel_contract.py OUTPUT --fixture BUILD/libshroot_guest_kernel_contract.so
 --instance STORE [--build BUILD]` compares normalized observations from the same
 static executable directly under shell and inside Shroot. Cases cover wait and
 ptrace contracts, signal delivery, descriptor lifetime, openat2 and concurrent
@@ -316,7 +316,7 @@ UID 2000, but does not mistake that probe for enforcement coverage.
 cmake --build BUILD --target bootstrap supervisor run image landlock_guest vm_init
 python tests/test_arch_runtime.py BUILD ARCH_STORE --install-package
 python tests/test_kernel_vm.py BUILD --kernel ARM64_KERNEL \
-  --fixture BUILD/libmagicdesk_guest_landlock_guest.so
+  --fixture BUILD/libshroot_guest_landlock_guest.so
 ```
 
 The static `landlock_guest` fixture uses ABI 1 rights: permitted/denied paths,
@@ -365,7 +365,7 @@ python tests/test_watch_runtime.py build/shroot-image-tests --contracts
 ```
 
 The production watch runner also executes the Bionic transport controls built
-by CMake's `MAGICDESK_GUEST_FIXTURES`: `watch_queue`, `watch_read` and
+by CMake's `SHROOT_BUILD_TESTS`: `watch_queue`, `watch_read` and
 `watch_activation`. They run through the shared executor selected by
 `--executor app|shell` or `SHROOT_TEST_EXECUTOR`. App execution requires the
 matching fixture-enabled debug APK; release APKs do not package these tests.
@@ -404,7 +404,7 @@ its ownership limits are described in the [watch contract](../watches.md).
 
 ## Production Watch Checks
 
-Configure `native/shroot` with `-DMAGICDESK_GUEST_FIXTURES=ON`, then build
+Configure Shroot with `-DSHROOT_BUILD_TESTS=ON`, then build
 `bootstrap supervisor run service watch_guest watch_launch watch_store
 watch_queue watch_read watch_activation`.
 `test_watch_runtime.py BUILD_DIRECTORY` stages immutable production binaries

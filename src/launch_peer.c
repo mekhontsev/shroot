@@ -25,7 +25,7 @@ static int owner(const struct md_launch_registration *local) {
 static int address(const char *id, struct sockaddr_un *out) {
     if (!id || strlen(id)!=32 || strspn(id,"0123456789abcdef")!=32) return -EINVAL;
     char name[80];
-    snprintf(name,sizeof(name),"magicdesk.shroot.peer.%u.%s",(unsigned)getuid(),id);
+    snprintf(name,sizeof(name),"shroot.peer.%u.%s",(unsigned)getuid(),id);
     return (int)md_fs_address(name,out);
 }
 static int check_process(int socket, int process, const struct md_launch_info *info) {

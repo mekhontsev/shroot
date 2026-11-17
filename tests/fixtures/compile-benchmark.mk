@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O3 -flto -frandom-seed=magicdesk-benchmark -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_RTREE
+CFLAGS = -O3 -flto -frandom-seed=shroot-benchmark -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_RTREE
 LDLIBS = -lm -ldl -lpthread
 
 all: sqlite3 libsqlite3.so verify-library

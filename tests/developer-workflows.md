@@ -1,6 +1,6 @@
 # Debugging And Performance Fixtures
 
-[Fixture guide](README.md) | [Native architecture](../README.md)
+[Fixture guide](README.md) | [Native architecture](../architecture.md)
 
 Debugger workflows and matched measurements. Keep tracing overhead, fixture completion and production workload success separate.
 
@@ -95,7 +95,7 @@ Prepare a new build-only sysroot with the authenticated package helper:
 ```sh
 node tests/prepare.mjs build/guest-compile \
     --suite trixie --package gcc --package make --package time --package coreutils
-python tests/benchmark_compile.py build/guest-compile \
+python "$APP_TESTS/benchmark_compile.py" build/guest-compile \
     --sqlite PATH_TO_SQLITE_AMALGAMATION --runtime INSTALLED_GUEST_BUNDLE
 ```
 
@@ -195,8 +195,8 @@ synchronous-wakeup flag does not establish an effective scheduling improvement.
 Verify the outcome. Private affinity masks must not become an implicit policy
 for every guest: they can reduce parallel throughput and alter CPU discovery.
 
-Configure the native CMake build with `-DMAGICDESK_GUEST_FIXTURES=ON` to build
-`libmagicdesk_guest_benchmark_namespace.so`. Run it under the same shell identity
+Configure the native CMake build with `-DSHROOT_BUILD_TESTS=ON` to build
+`libshroot_guest_benchmark_namespace.so`. Run it under the same shell identity
 with the prepared benchmark store as its sole argument. It executes the metadata
 workload directly through the namespace engine, retaining inode/content checks
 but excluding syscall interception and RPC. Its first sample warms the store;

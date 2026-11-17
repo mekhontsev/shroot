@@ -11,7 +11,7 @@ exercise it independently of machine-code discovery.
 
 ## Runtime Checks
 
-Configure `MAGICDESK_GUEST_FIXTURES=ON` as described in the fixture guide:
+Configure `SHROOT_BUILD_TESTS=ON` as described in the fixture guide:
 
 ```sh
 python tests/test_cooperative_runtime.py BUILD --base

@@ -34,7 +34,7 @@ def main():
     try:
         command(['mkdir', base + '/fixtures'])
         for name in ('ipc_credentials_guest', 'ipc_credentials_launch'):
-            filename = 'libmagicdesk_guest_' + name + '.so'
+            filename = 'libshroot_guest_' + name + '.so'
             destination = base + ('/fixtures/' if name == 'ipc_credentials_guest' else '/') + filename
             suite.upload(args.build / filename, destination)
             suite.chmod('700', destination)
@@ -42,8 +42,8 @@ def main():
         command(run + ['--', '/bin/mkdir', '-p', '/fixture'])
         if args.custody:
             failures = []
-            fixture = '/fixture/libmagicdesk_guest_ipc_credentials_guest.so'
-            native = [base + '/fixtures/libmagicdesk_guest_ipc_credentials_guest.so', '--custody-native']
+            fixture = '/fixture/libshroot_guest_ipc_credentials_guest.so'
+            native = [base + '/fixtures/libshroot_guest_ipc_credentials_guest.so', '--custody-native']
             guest = run + ['--bind-ro', base + '/fixtures', '/fixture', '--', fixture, '--custody']
             for name, argv in custody_cases(native, guest):
                 try:
@@ -54,12 +54,12 @@ def main():
             report['passed'] = not failures
             assert not failures, failures
             return
-        command(run + ['--bind-ro', base + '/fixtures', '/fixture', '--', '/fixture/libmagicdesk_guest_ipc_credentials_guest.so'])
+        command(run + ['--bind-ro', base + '/fixtures', '/fixture', '--', '/fixture/libshroot_guest_ipc_credentials_guest.so'])
         if args.activation:
             suite.upload(args.activation, base + '/fixtures/ipc-dbus')
             command(['chmod', '700', base + '/fixtures/ipc-dbus'])
-            service = '/usr/share/dbus-1/services/io.github.magicdesk.CredentialsFixture.service'
-            content = '[D-BUS Service]\nName=io.github.magicdesk.CredentialsFixture\nExec=/fixture/ipc-dbus service\n'
+            service = '/usr/share/dbus-1/services/org.shroot.CredentialsFixture.service'
+            content = '[D-BUS Service]\nName=org.shroot.CredentialsFixture\nExec=/fixture/ipc-dbus service\n'
             command(run + ['--', '/bin/sh', '-c', 'printf %s ' + shlex.quote(content) + ' >' + shlex.quote(service)])
             try:
                 command(run + ['--bind-ro', base + '/fixtures', '/fixture', '--', '/usr/bin/dbus-run-session', '--', '/fixture/ipc-dbus'])
@@ -71,7 +71,7 @@ def main():
             command(run + ['--', '/usr/bin/dbus-run-session', '--', '/usr/bin/gdbus', 'call', '--session',
                            '--dest', 'org.freedesktop.DBus', '--object-path', '/org/freedesktop/DBus',
                            '--method', 'org.freedesktop.DBus.ListNames'])
-        command([base + '/libmagicdesk_guest_ipc_credentials_launch.so', run[0], args.store, base + '/fixtures'])
+        command([base + '/libshroot_guest_ipc_credentials_launch.so', run[0], args.store, base + '/fixtures'])
         report['passed'] = True
     finally:
         try:

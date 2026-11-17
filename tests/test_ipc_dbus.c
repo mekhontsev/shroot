@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#define NAME "io.github.magicdesk.CredentialsFixture"
+#define NAME "org.shroot.CredentialsFixture"
 static GMainLoop *loop;
 static void fail(GError *error) { fprintf(stderr,"dbus fixture: %s\n",error?error->message:"failed"); exit(1); }
 static void method(GDBusConnection *bus,const gchar *sender,const gchar *path,const gchar *interface,

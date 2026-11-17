@@ -43,7 +43,7 @@ def main():
     work = (args.build / ('kernel-vm-' + uuid.uuid4().hex)).resolve()
     report = {'passed': False, 'kernelOracleOnly': True}
     try:
-        init = args.build / 'libmagicdesk_guest_vm_init.so'
+        init = args.build / 'libshroot_guest_vm_init.so'
         archive = contract_archive(work, init, args.fixture)
         report.update({'kernelSha256': sha256(args.kernel), 'fixtureSha256': sha256(args.fixture),
                        'initSha256': sha256(init)})
@@ -51,7 +51,7 @@ def main():
                    '-accel', 'tcg,thread=multi', '-smp', '2', '-m', '512',
                    '-nographic', '-monitor', 'none', '-nic', 'none', '-no-reboot',
                    '-kernel', str(args.kernel.resolve()), '-initrd', str(archive),
-                   '-append', 'console=ttyAMA0 rdinit=/init magicdesk.kernel_fixture=1']
+                   '-append', 'console=ttyAMA0 rdinit=/init shroot.kernel_fixture=1']
         report['command'] = command
         # EVENT_WAIT: VM powers off after its exact test child; timeout kills QEMU.
         with (work / 'serial.log').open('wb') as log:

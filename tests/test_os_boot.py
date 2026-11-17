@@ -362,7 +362,7 @@ printf ':md-boot:E::mdboot::/bin/true:P\\n' > /run/binfmt.d/md-boot.conf
                     'trace=' + TRACE_SYSCALLS,
                     '-o', target + '/boot.trace'] + boot
         # EVENT_WAIT: PTY and PID1 completion, never an elapsed-time boot verdict.
-        command = prefix + diagnostic_options(args.diagnostics) + ['--env', 'MAGICDESK_GUEST_LABEL=' + label,
+        command = prefix + diagnostic_options(args.diagnostics) + ['--env', 'SHROOT_GUEST_LABEL=' + label,
                             '--bind', suite.base, target, '--deadline-seconds', '180', '--',
                             '/usr/bin/script', '-q', '-e', '-c', shlex.join(boot), '/dev/null']
         if args.init == 'systemd':

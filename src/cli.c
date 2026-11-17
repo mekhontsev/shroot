@@ -21,14 +21,14 @@ static int launch(shroot_store *store, shroot_library *library, const char *name
     const char **gateways = calloc((size_t)argc + 1, sizeof(*gateways));
     struct shroot_bind *binds = calloc((size_t)argc + 1, sizeof(*binds));
     struct shroot_socket_route *routes = calloc((size_t)argc + 1, sizeof(*routes));
-    int r = env && dns && ports && subnets && gateways && binds && routes ? 0 : -ENOMEM;
+    int *owners = calloc((size_t)argc + 1, sizeof(*owners));
+    int r = env && dns && ports && subnets && gateways && binds && routes && owners ? 0 : -ENOMEM;
     size_t env_count = 0, dns_count = 0, port_count = 0;
     size_t subnet_count = 0, gateway_count = 0;
     int at = 0;
     while (!r && at < argc && strcmp(argv[at], "--")) {
         const char *name = argv[at++];
         if (!strcmp(name, "--statistics")) { options.flags |= SHROOT_STATISTICS; continue; }
-        if (!strcmp(name, "--magicdesk")) { options.flags |= SHROOT_MAGICDESK_CONNECTION; continue; }
         if (!strcmp(name, "--diagnostics")) { options.flags |= SHROOT_DIAGNOSTICS; continue; }
         if (!strcmp(name, "--diagnostics=signals")) { options.flags |= SHROOT_SIGNAL_DIAGNOSTICS; continue; }
         const char *bind_names[] = {"--bind", "--bind-ro", "--bind-create", "--bind-store-ro", "--bind-ro-create"};
@@ -47,6 +47,12 @@ static int launch(shroot_store *store, shroot_library *library, const char *name
         if (at >= argc) { r = -EINVAL; break; }
         const char *value = argv[at++];
         if (!strcmp(name, "--env")) env[env_count++] = value;
+        else if (!strcmp(name, "--owner-fd")) {
+            char *end; errno = 0;
+            long fd = strtol(value, &end, 10);
+            if (errno || !*value || *end || fd < 3 || fd > INT_MAX) r = -EINVAL;
+            else owners[options.owner_fd_count++] = (int)fd;
+        }
         else if (!strcmp(name, "--dns")) dns[dns_count++] = value;
         else if (!strcmp(name, "-p") || !strcmp(name, "--publish")) ports[port_count++] = value;
         else if (!strcmp(name, "--subnet")) subnets[subnet_count++] = value;
@@ -55,6 +61,7 @@ static int launch(shroot_store *store, shroot_library *library, const char *name
             struct { const char *name; const char **value; } scalars[] = {
                 {"--user", &options.user}, {"--cwd", &options.cwd}, {"--entrypoint", &options.entrypoint},
                 {"--hostname", &options.hostname}, {"--gamepad-endpoint", &options.gamepad_endpoint},
+                {"--path-prefix", &options.path_prefix},
                 {"--network", &options.network}, {"--ip", &options.ip}, {"--ip6", &options.ip6}
             };
             r = -EINVAL;
@@ -69,8 +76,9 @@ static int launch(shroot_store *store, shroot_library *library, const char *name
     options.environment = env; options.dns = dns; options.ports = ports;
     options.subnets = subnets; options.gateways = gateways;
     options.binds = binds; options.routes = routes;
+    options.owner_fds = owners;
     if (!r) r = library ? shroot_environment_launch(library,name,&options,NULL,out) : shroot_launch(store, &options, NULL, out);
-    free(env); free(dns); free(ports); free(subnets); free(gateways); free(binds); free(routes); return r;
+    free(env); free(dns); free(ports); free(subnets); free(gateways); free(binds); free(routes); free(owners); return r;
 }
 static int library_submit(shroot_context *context,int argc,char **argv,shroot_job **out) {
     if (argc<2) return -EINVAL;
@@ -160,7 +168,7 @@ static int runtime_directory(char path[PATH_MAX]) {
     if (!last) return -EINVAL;
     *last = 0;
     char worker[PATH_MAX];
-    if (snprintf(worker, sizeof(worker), "%s/libmagicdesk_guest_image.so", path) >= (int)sizeof(worker)) return -ENAMETOOLONG;
+    if (snprintf(worker, sizeof(worker), "%s/libshroot_guest_image.so", path) >= (int)sizeof(worker)) return -ENAMETOOLONG;
     if (!access(worker, X_OK)) return 0;
     if (strlen(path) + sizeof("/../libexec/shroot") > PATH_MAX) return -ENAMETOOLONG;
     strcat(path, "/../libexec/shroot"); return 0;

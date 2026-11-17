@@ -12,7 +12,7 @@ def main():
     suite = Suite(Path('build/svc-direct-signals'), None)
     try:
         binary = suite.base + '/signals'
-        suite.upload(args.build / 'libmagicdesk_guest_test_svc_direct_signal.so', binary)
+        suite.upload(args.build / 'libshroot_guest_test_svc_direct_signal.so', binary)
         suite.chmod('700', binary)
         output = suite.command([binary], timeout=250)
         assert 'PASS SVC arbitrary boundary:' in output

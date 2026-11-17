@@ -4,7 +4,7 @@ Shroot uses one native engine for ordinary ARM64 Linux and Android application
 and shell identities. Every launch retains its explicitly selected executor.
 Shared fixtures use `--executor local|app|shell` or `SHROOT_TEST_EXECUTOR`;
 guest credentials are a separate setting. The default `local` transport keeps
-the calling process's identity without MagicDesk. The `app` and `shell` adapters
+the calling process's identity. The `app` and `shell` integration adapters
 select MagicDesk's real Android contexts; see [fixture transports](README.md#fixture-transports).
 
 ## Ownership
@@ -28,14 +28,34 @@ select MagicDesk's real Android contexts; see [fixture transports](README.md#fix
   lookup of the retained directory itself remains atomic. Unsupported
   resolve constraints fail explicitly, never becoming an unconstrained open.
 - The debug service requires MANAGE_ACTIVITY_TASKS. The driver uses the
-  authorized console to start it and retrieve artifacts. `run-as` only stages
-  an inert archive and reads reports; it never runs the guest.
+  authorized command console to start it. Artifact IO uses a separate app-UID
+  console and authenticated loopback file transfer, with no `run-as` or identity
+  switch. The guest itself runs in the Zygote-launched fixture service.
 
 UID 2000 does not enable host-SIGSYS translation. There is no global
 syscall-entry tracing fallback: its per-syscall ptrace cost defeats the
 efficiency requirement.
 
 ## Integration Status
+
+### Native API And Application Delivery
+
+Standalone [host qualification](README.md#qualified-hosts) covers Android/Termux
+and ordinary ARM64 Linux. MagicDesk's prepared-userspace integration separately
+passes 79 User and 70 Shell checks on Android 16: package transactions, signals,
+descriptor transfer, cancellation and recovery. User checks also exercise the
+exact immutable execution helpers packaged in the APK. Native hardlink and
+pathname-socket controls retain each executor's actual restrictions.
+
+Catalog integration under both identities covers installation, metadata, DNS
+updates, backup/restore, concurrent launches, targeted cancellation and removal.
+Storage-update checks preserve installed inode identities, metadata and hardlinks
+in Base and lazy modes. X11/Wayland checks cover D-Bus, arguments, environment,
+process exit and cleanup. Cross-UID connection and independent-package delivery
+have their own [application acceptance](https://github.com/mekhontsev/magicdesk/blob/develop/docs/linux-applications.md#verification).
+These results do not qualify every distribution or Android release.
+
+### Runtime Boundaries
 
 | Boundary | Implemented in the production engine | Not established |
 | --- | --- | --- |
@@ -224,13 +244,16 @@ Use an awake, unlocked device with MagicDesk MCP configured. Close an active
 Desktop through production cleanup before replacing the APK.
 
 ```sh
-export MAGICDESK_SOURCE=/path/to/magicdesk-android
-(cd "$MAGICDESK_SOURCE" && ./gradlew :app:assembleDebug -PMAGICDESK_GUEST_FIXTURES=true)
-python tests/fixture_app.py \
-  --apk "$MAGICDESK_SOURCE/app/build/outputs/apk/debug/app-debug.apk" --command 'id; shroot list'
+app=/path/to/magicdesk-android
+export PYTHONPATH="$app/tests/shroot"
+export SHROOT_SOURCE="$PWD"
+export SHROOT_TEST_ADAPTER=magicdesk_executor
+(cd "$app" && ./gradlew :app:assembleDebug -PMAGICDESK_GUEST_FIXTURES=true)
+python "$app/tests/shroot/fixture_app.py" \
+  --apk "$app/app/build/outputs/apk/debug/app-debug.apk" --command 'id; shroot list'
 
 export SHROOT_TEST_EXECUTOR=app
-build="$MAGICDESK_SOURCE/app/build/shroot"
+build="$app/app/build/shroot"
 python tests/test_resources.py "$build" --case all
 python tests/test_resources.py "$build" --case private-memory
 python tests/test_guest_policy.py --build "$build" --name alpine
@@ -252,11 +275,13 @@ another app-only suite.
 For the `app` adapter, fixtures are debug-only APK executables. It verifies their exact
 ELF digests before use. Native tests execute immutable packaged ELFs; guest
 mounts receive regular byte copies. Writable app data is never made directly
-executable and `run-as` is used only for inert transfers.
+executable. The file adapter transports inert bytes and verifies SHA-256; it
+does not supply the fixture's execution identity.
 
 Reports retain real UID, SELinux domain, kernel, firmware, build identity,
-commands and results. Full logs use the existing ranged, SHA-256-verified
-transfer. The transport verifies that the main MagicDesk process survives.
+commands and results. Full logs use authenticated, SHA-256-checked loopback
+transfer, which requires the runner on the same device. The transport verifies
+that the main MagicDesk process survives.
 An observation timeout is not completion or permission to replay a command.
 Recover the exact launch with `fixture_app.py --observe-run RUN_ID`.
 The executor cleans that run's private artifacts after verified download and
@@ -270,7 +295,7 @@ shared `FixtureExecutor` still owns guest execution; `su` prepares host access
 only. Production User and Shell libraries remain separate.
 
 ```sh
-python tests/test_borrowed_environment.py \
+python "$APP_TESTS/test_borrowed_environment.py" \
   --name steamos --command 'cat /etc/os-release; id' \
   --output build/borrowed-steamos
 ```

@@ -21,7 +21,7 @@ def main():
         info = suite.installed_environment(args.name) if args.name else dict(store=args.store)
         suite.report['environment'] = info
         store = info['store']
-        binary = 'libmagicdesk_guest_clone3_guest.so'
+        binary = 'libshroot_guest_clone3_guest.so'
         suite.upload(args.build / binary, suite.base + '/' + binary)
         suite.chmod('755', suite.base + '/' + binary)
         suite.command([suite.base + '/' + binary, '--native'])

@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
     struct xdg_toplevel *top = xdg_surface_get_toplevel(xdg);
     xdg_toplevel_add_listener(top, &top_listener, NULL);
     xdg_toplevel_set_title(top, argv[1]);
-    xdg_toplevel_set_app_id(top, "org.magicdesk.GuestExecutionLab");
+    xdg_toplevel_set_app_id(top, "org.shroot.RuntimeFixture");
     xdg_toplevel_set_min_size(top, WIDTH, HEIGHT);
     xdg_toplevel_set_max_size(top, WIDTH, HEIGHT);
     wl_surface_commit(surface);

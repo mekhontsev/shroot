@@ -47,8 +47,8 @@ def main():
         root, native = suite.base + '/root', suite.base + '/native'
         suite.command(['mkdir', '-p', root + '/bin', root + '/tmp', root + '/lib', native])
         files = [(args.stock, root + '/bin/stock'),
-                 (args.build / 'libmagicdesk_guest_service.so', suite.base + '/service'),
-                 (args.build / 'libmagicdesk_guest_test_signal_delivery.so', suite.base + '/signals')]
+                 (args.build / 'libshroot_guest_service.so', suite.base + '/service'),
+                 (args.build / 'libshroot_guest_test_signal_delivery.so', suite.base + '/signals')]
         if args.dynamic_loader:
             assert args.dynamic_libc and '/' not in args.interpreter
             files += [(args.dynamic_loader, root + '/lib/' + args.interpreter),
@@ -77,7 +77,7 @@ def main():
             suite.report['baselineBuild'] = str(args.baseline_build)
             suite.report['baselineHashes'] = suite.stage_runtime(args.baseline_build, baseline)
             for mode in ('base', 'machine'):
-                launches['baseline-' + mode] = [baseline + '/libmagicdesk_guest_run.so', *launches[mode][1:]]
+                launches['baseline-' + mode] = [baseline + '/libshroot_guest_run.so', *launches[mode][1:]]
         def machine_evidence(output):
             items = records(output, 'SVC_RUNTIME_STATS ')
             assert items and not any(item['unknown'] for item in items), output

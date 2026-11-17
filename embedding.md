@@ -1,8 +1,8 @@
 # Embedding Shroot
 
 `libshroot` is the native C management API. The `shroot` command is a client of
-that API. Both use the same native storage, image and runtime owners; neither
-requires Java, ART, an Android APK or an installed MagicDesk application.
+that API. Both use the same native storage, image and runtime owners. The library
+can be linked into native applications or used from a language binding.
 
 ## Process Boundary
 
@@ -21,11 +21,12 @@ completion remain separate from application-specific readiness.
 There is no resident management daemon or library-created background thread.
 The private completion channel is used at operation admission and completion,
 not for guest syscalls or data IO. Only the image worker gains this management
-entry; supervisor, bootstrap and cooperative-entry dispatch remain unchanged.
+entry; supervisor, bootstrap and cooperative-entry dispatch retain their own
+execution contracts.
 
 The host's actual credentials remain authoritative. Library calls never select
-another Android UID, invoke `su`, modify SELinux policy or implicitly attach
-MagicDesk's command service. Each independent Android application must own its
+another Android UID, invoke `su`, modify SELinux policy or implicitly attach a
+privileged service. Each independent Android application must own its
 runtime and private store. Logical guest credentials are not an outer security
 boundary for hostile code.
 
@@ -93,7 +94,7 @@ are rejected. This checks packaging, not execution capability on a target device
 
 ### Continuous Integration
 
-The [native workflow](.github/workflows/ci.yml) is independent of MagicDesk:
+The [native workflow](.github/workflows/ci.yml) covers:
 
 | Job | Contract |
 | --- | --- |
@@ -199,6 +200,19 @@ environment overrides are separate from the worker's host environment.
 Unlisted inherited descriptors are closed before the worker begins storage
 operations. Arguments are passed directly to `exec`, never through a shell.
 
+`shroot_launch_options.owner_fds` supplies optional opaque lifetime resources.
+Submission duplicates them without changing the caller's descriptors or flags;
+the supervisor retains its copies until the guest tree ends. They are neither
+read nor installed in guest processes. The direct runner equivalent is repeatable
+`--owner-fd FD`, transferring inherited descriptors to the supervisor. This is
+resource custody, not a protocol, readiness check or new background thread.
+
+`path_prefix` (CLI `--path-prefix`) prepends an explicitly attached command
+directory to the final guest `PATH`, preserving image and user overrides.
+It does not expose host paths or authorize commands by itself. Integrators own
+their authorization and can supply ordinary attachments, environment values
+and lifetime descriptors through this common launch contract.
+
 The library does not alter its caller's cwd, umask, environment, credentials or
 signal handlers/masks. The application must retain normal child reaping and must
 not reap library-owned children through another `waitpid` owner. Submission
@@ -235,7 +249,6 @@ spawning thread's lifetime. The CLI verifies its actual parent before submitting
 work and forwards parent death through ordinary job cancellation. Use a stable
 spawning thread for this opt-in Linux contract; it is not implicit behavior of
 `libshroot`, and destroying a library handle does not cancel submitted jobs.
-MagicDesk's one-shot management adapter uses this contract for offline commands.
 Ordinary CLI execution does not require it.
 
 `SHROOT_EXEC` starts a new supervised tree in the selected store, not a command
@@ -257,7 +270,7 @@ ctest --test-dir build --output-on-failure
 python3 tests/test_client_runtime.py build
 ```
 
-These workflows run outside MagicDesk on Android under Termux's app UID and on
+These standalone workflows run on Android under Termux's app UID and on
 Raspberry Pi 5 under an unprivileged Linux user with 16 KiB pages. The Pi checks
 also execute a separately installed production bundle and stock Alpine/Debian
 programs. See [qualified hosts](tests/README.md#qualified-hosts) for the exact

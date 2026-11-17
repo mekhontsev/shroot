@@ -23,7 +23,7 @@ int main(void) {
     int fd = open("/proc/cmdline", O_RDONLY); assert(fd >= 0);
     char command[1024]; ssize_t n = read(fd, command, sizeof(command)-1); assert(n > 0);
     command[n] = 0; close(fd);
-    assert(strstr(command, "magicdesk.kernel_fixture=1"));
+    assert(strstr(command, "shroot.kernel_fixture=1"));
     assert(!chown("/work", 1000, 1000));
     pid_t child = fork(); assert(child >= 0);
     if (!child) {

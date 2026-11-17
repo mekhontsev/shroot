@@ -1,6 +1,6 @@
 # Descriptor Origins And Publication
 
-[Native architecture](README.md) | [Resource model](process-resources.md)
+[Native architecture](architecture.md) | [Resource model](process-resources.md)
 
 File-table annotations and the publication boundary between kernel descriptors and logical filesystem state.
 

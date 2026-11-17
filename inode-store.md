@@ -138,7 +138,7 @@ The revision admits the complete persistent interpretation, not just SQL DDL:
 changing a native metadata encoding or source-reference meaning also requires
 explicit admission. Do not add independent feature flags or version counters
 for runtime optimizations. Frozen SQL and native-metadata literals live in
-`guest-exec-lab/fixtures/storage/format17.h`; they are not generated from the
+`tests/fixtures/storage/format17.h`; they are not generated from the
 current writer. New revisions append fixtures instead of changing old ones.
 
 Ordinary cold admission prepares supported revisions before exposing the store.
@@ -869,7 +869,7 @@ RPC descriptor transfer does not supply storage reclamation policy.
 Host ownership stays the real executor identity; guest ownership is logical.
 
 Installed distributions, package-manager transactions and OCI image workflows
-use this same namespace. Their [coverage](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#coverage-and-limits)
+use this same namespace. Their [coverage](tests/validation-matrix.md)
 does not imply a complete Linux ABI or filesystem isolation. Direct-backend
 hardlink controls retain the host's independent restrictions. SQLite stays in
 native namespace owners, outside guest execution.

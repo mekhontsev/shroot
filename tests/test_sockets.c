@@ -227,7 +227,7 @@ static int routed_driver(const char *root) {
     CHECK(server >= 0 && bind(server, (struct sockaddr *)&addr, length) == 0 && listen(server, 8) == 0);
     snprintf(fd_text, sizeof(fd_text), "%d", server);
     snprintf(pid_text, sizeof(pid_text), "%d", getpid());
-    sibling(launcher, sizeof(launcher), "libmagicdesk_guest_run.so");
+    sibling(launcher, sizeof(launcher), "libshroot_guest_run.so");
     CHECK(snprintf(store, sizeof(store), "%s/tmp/imported-rootfs", root) < (int)sizeof(store));
     char *args[] = {launcher, "--store", store,
         "--socket-path", "/tmp/virtual-display/s", addr.sun_path + 1,
@@ -294,7 +294,7 @@ static int driver(int argc, char **argv) {
     }
     char launcher[4096], bootstrap[4096], store[4096], base[96], numbers[4][32];
     sibling(launcher, sizeof(launcher), !strcmp(mode, "direct")
-        ? "libmagicdesk_guest_supervisor.so" : "libmagicdesk_guest_run.so");
+        ? "libshroot_guest_supervisor.so" : "libshroot_guest_run.so");
     if (abstract) snprintf(base, sizeof(base), "%s", endpoints);
     else if (!strcmp(mode, "direct")) snprintf(base, sizeof(base), "/tmp/md-sockets-direct");
     else snprintf(base, sizeof(base), "%s", host);
@@ -305,7 +305,7 @@ static int driver(int argc, char **argv) {
         CHECK(snprintf(store, sizeof(store), "%s/tmp/imported-rootfs", root) < (int)sizeof(store));
         args[n++] = "--store"; args[n++] = store; args[n++] = "--";
     } else {
-        sibling(bootstrap, sizeof(bootstrap), "libmagicdesk_guest_bootstrap.so");
+        sibling(bootstrap, sizeof(bootstrap), "libshroot_guest_bootstrap.so");
         args[n++] = bootstrap; args[n++] = (char *)root;
     }
     args[n++] = "/usr/bin/md-socket-fixture"; args[n++] = "client"; args[n++] = base; args[n++] = host;

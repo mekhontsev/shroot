@@ -6,7 +6,7 @@ import shlex
 
 class KernelProfile:
     choices = ('native', 'linux-5.15')
-    variable = 'MAGICDESK_TEST_KERNEL_PROFILE'
+    variable = 'SHROOT_TEST_KERNEL_PROFILE'
     marker = 'SHROOT_KERNEL_PROFILE '
 
     def __init__(self, name=None):
@@ -53,7 +53,7 @@ class KernelProfile:
         if not self.options:
             return
         assert state.get('nativeBuild'), 'Profiled session requires fixture helpers'
-        image = state['directory'] + '/libmagicdesk_guest_image.so'
+        image = state['directory'] + '/libshroot_guest_image.so'
         launches = [json.loads(line) for line in command(
             [image, 'launches', state['environment']['store']]).splitlines() if line]
         owned = [item for item in launches if item.get('label') == state['id']]

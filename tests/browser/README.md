@@ -1,25 +1,25 @@
 # Guest Browser Fixtures
 
-These fixtures build and test the production native runtime in
-`native/shroot`. They do not contain a second syscall implementation.
+These fixtures build and test the production Shroot runtime. Guest assertions
+are shared across the local and optional external executor adapters.
 Use a prepared disposable Debian or Alpine store with matching browsers, libraries, fonts
 and helper fixtures, never a personal browser profile.
 
 The runtime supports application filters but is **not a complete security
-sandbox**. `--executor shell|app` selects the real Android identity without
-changing guest assertions; the store must belong to that executor. The
+sandbox**. `--executor local|shell|app` selects the host identity without changing guest
+assertions; the store must belong to that executor. The
 [interception contract](../../interception.md) defines ownership,
 logical image admission and remaining isolation limits.
 
 ## Build And Run
 
-`build.sh` builds the production execution helpers. SQLite uses the pinned
-production dependency, with `MD_SQLITE_BUILD` optionally selecting its existing
-build directory.
+`build.sh` builds the production execution helpers and accepts the project's
+CMake options. SQLite uses the bundled dependency by default; see the
+[provider requirements](../../embedding.md#sqlite-provider) for external SQLite.
 
 ```sh
 sh tests/browser/build.sh build/guest-browser
-python tests/browser/run.py --build build/guest-browser --store DEVICE_GUEST_STORE --expect-artifact /tmp/NEW_FIREFOX_PROFILE/page.png -- /bin/sh -ec 'mkdir /tmp/NEW_FIREFOX_PROFILE; exec /usr/bin/firefox-esr --headless --no-remote --profile /tmp/NEW_FIREFOX_PROFILE --window-size 800,600 --screenshot /tmp/NEW_FIREFOX_PROFILE/page.png "data:text/html,<h1>MagicDesk guest browser</h1>"'
+python tests/browser/run.py --build build/guest-browser --store DEVICE_GUEST_STORE --expect-artifact /tmp/NEW_FIREFOX_PROFILE/page.png -- /bin/sh -ec 'mkdir /tmp/NEW_FIREFOX_PROFILE; exec /usr/bin/firefox-esr --headless --no-remote --profile /tmp/NEW_FIREFOX_PROFILE --window-size 800,600 --screenshot /tmp/NEW_FIREFOX_PROFILE/page.png "data:text/html,<h1>Shroot guest browser</h1>"'
 python tests/browser/test_browser.py --build build/guest-browser --store DEVICE_GUEST_STORE
 ```
 
@@ -130,7 +130,7 @@ are overridden. See Chromium's
 [runtime feature selection](https://chromium.googlesource.com/chromium/src/+/HEAD/content/child/runtime_features.cc).
 
 ```sh
-python tests/browser/benchmark.py --build BUILD --store DEVICE_GUEST_STORE --executor app --video LOCAL_VIDEO.webm --output build/browser-video --seconds 45 --rounds 2
+python "$APP_TESTS/benchmark_browser.py" --build BUILD --store DEVICE_GUEST_STORE --executor app --video LOCAL_VIDEO.webm --output build/browser-video --seconds 45 --rounds 2
 ```
 
 `--chromium` selects the installed ELF. Use `--executor shell` with a Shell-owned

@@ -1154,7 +1154,7 @@ static void transfer_guest_send(const char *path, const char *runner, unsigned m
         char scenario[8], protection[8];
         snprintf(scenario,sizeof(scenario),"%u",mode); snprintf(protection,sizeof(protection),"%u",protected);
         execl(runner,runner,"--store",path,"--user","0:0","--deadline-seconds","20",
-            "--env","MAGICDESK_TEST_CAPTURE_FALLBACK=1",
+            "--env","SHROOT_TEST_CAPTURE_FALLBACK=1",
             "--","/bin/test","--origin-send",scenario,protection,(char *)NULL);
         _exit(90);
     }
@@ -1247,7 +1247,7 @@ void md_test_ipc_origin_guest(const char *path, const char *runner) {
             snprintf(scenario,sizeof(scenario),"%u",mode);
             snprintf(protection,sizeof(protection),"%u",protected);
             execl(runner,runner,"--store",path,"--user","0:0","--deadline-seconds","20",
-                "--env","MAGICDESK_TEST_CAPTURE_FALLBACK=1",
+                "--env","SHROOT_TEST_CAPTURE_FALLBACK=1",
                 "--","/bin/test","--origin-receive",scenario,protection,(char *)NULL);
             _exit(90);
         }

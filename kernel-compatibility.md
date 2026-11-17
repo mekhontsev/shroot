@@ -7,10 +7,9 @@
 ## Baseline
 
 Shroot's minimum supported kernel is **Linux 5.15**. This is a design/support
-boundary, not a claim of complete device coverage. The MagicDesk APK remains
-Android 14 / API 34 and managed Desktop remains Android 15 / API 35; neither
-acquires Shroot's kernel requirements. Shell tools, Termux, prepared chroot and
-graphics services remain independent when guest execution is unavailable.
+boundary, not a claim of complete host coverage. Native capability checks belong
+to guest launch; embedding applications must not make unrelated services depend
+on their success.
 
 ### Guest FUSE
 
@@ -150,7 +149,7 @@ rejected, not advertised as enforced. Native host queries retain the kernel's
 own result. `landlock_guest` and `test_arch_runtime.py` distinguish that query
 from actual guest permission checks. The same ABI 1 assertions run under UID
 1000 in a reference Linux 6.18 QEMU VM; that reference does not raise Shroot's
-minimum. See [filesystem restrictions](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#filesystem-restrictions)
+minimum. See [guest policy](architecture.md#guest-policy)
 for provider limits and the difference from native security confinement.
 
 ### Syscall Entry And FD Publication
@@ -1141,8 +1140,8 @@ and [Linux 6.14 exec flags](https://github.com/torvalds/linux/blob/v6.14/include
 
 Android device coverage includes actual UID 2000 on RM11/NX809J, Linux 6.12.23,
 API 36, 4 KiB pages. Standalone native/runtime and package coverage additionally
-includes Raspberry Pi 5, Debian 13, UID 1000 without capabilities, Linux
-6.18.50+rpt-rpi-2712 and 16 KiB pages; see [qualified hosts](tests/README.md#qualified-hosts).
+includes Raspberry Pi 5, Debian 13, UID 1000 without capabilities and 16 KiB pages;
+see [qualified hosts](tests/README.md#qualified-hosts) for the kernel and exact scope.
 A real 5.15 kernel and API 34 remain unverified.
 Missing-operation injection on a newer kernel tests explicit failure/fallback,
 not the scheduling, ABI or security policy of an older kernel.
@@ -1347,7 +1346,7 @@ ARM64 PTRACE_SYSEMU and its pre-seccomp ordering exist in Android common 5.15;
 PTRACE_INTERRUPT/SEIZE and GET_SYSCALL_INFO predate the minimum. There is no
 newer-than-5.15 dependency. The guest-only startup private-helper probe exercises
 the restricted owner; rejection is a native runtime failure, never a reason to
-disable another MagicDesk service or silently fall back to signal-forcing BRKs.
+disable an unrelated host service or silently fall back to signal-forcing BRKs.
 UID-2000 device coverage is Linux 6.12 on 4 KiB pages. The shared checkpoint
 controls also pass on Raspberry Pi 5 with Linux 6.18 and 16 KiB pages, but not
 on a real 5.15 device. Strict IP/number KILL, TSYNC, protected

@@ -36,7 +36,7 @@ jobs:
           python3 tests/test_bundle_layout.py
           python3 tests/test_lwip_prepare.py
           python3 tests/test_local_executor.py
-          python3 tests/test_fixture_executor.py
+          python3 tests/test_host_integration.py
       - name: Compile independent installed consumer
         run: |
           cmake --install build/client --prefix "$RUNNER_TEMP/shroot client" --component Shroot --strip

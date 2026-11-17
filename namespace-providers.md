@@ -1,6 +1,6 @@
 # Namespace Providers
 
-[Native architecture](README.md) | [Resource model](process-resources.md)
+[Native architecture](architecture.md) | [Resource model](process-resources.md)
 
 UTS, IPC, PID/proc, logical filesystems, terminals and cgroups. These userspace contracts do not grant host kernel namespace authority.
 

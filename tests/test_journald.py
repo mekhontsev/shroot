@@ -78,7 +78,7 @@ def main():
     created = False
     suite.report['probeOnly'] = args.probe_only
     try:
-        suite.upload(args.build / 'libmagicdesk_guest_readiness_guest.so',
+        suite.upload(args.build / 'libshroot_guest_readiness_guest.so',
                                suite.base + '/readiness')
         suite.chmod('700', suite.base + '/readiness')
         suite.command(prefix + ['--', '/bin/mkdir', target])
@@ -91,7 +91,7 @@ def main():
                     '-o', target + '/trace.log'] + boot
         # EVENT_WAIT: PID1 returns after the service job; the deadline cancels
         # a stalled launch, never substitutes for service readiness.
-        command = prefix + ['--env', 'MAGICDESK_GUEST_LABEL=' + label,
+        command = prefix + ['--env', 'SHROOT_GUEST_LABEL=' + label,
                             '--bind', suite.base, target, '--deadline-seconds', '90', '--',
                             '/usr/bin/script', '-q', '-e', '-c', shlex.join(boot), '/dev/null']
         suite.command(['/system/bin/sh', '-c', 'log=$1; shift; exec "$@" >"$log" 2>&1',

@@ -18,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build", type=Path)
     parser.add_argument("--config", type=Path, default=Path.home() / ".codex/config.toml")
-    parser.add_argument("--server", default="magicdesk")
+    parser.add_argument("--server")
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--diagnostics", action="store_true")
     parser.add_argument("--case", choices=("all", "process-resources", "roots", "cgroup", "namespaces", "devpts", "mount-flags", "supervisor-state", "robust-futex", "control-event", "launch-cancel", "event-fairness", "kernel-baseline", "mapping-task", "private-memory", "pidfd-table", "fd-observation", "proc-custody", "exec-custody", "open-job", "ofd-order", "fd-handoff", "fd-parcel", "fd-messages", "ipc-peer", "ipc-origins", "ipc-origin-guest", "ipc-paths", "ipc-ancillary", "ipc-custody", "mount-policy", "mount-graph", "mount-namespace", "inode-custody", "origin-transfer", "transient-store", "fd-custody", "fd-custody-dirfd", "fd-custody-nofollow", "fd-lifecycle", "restricted-descriptors", "fs-dispatch", "fs-buffer", "fs-signals", "fs-results", "fs-export", "fs-return", "fs-directory", "fs-capture", "fs-provider", "xattr", "input-session", "rpc", "stores", "durability"), default="all",
@@ -34,14 +34,14 @@ def main():
     if args.case != "all" and args.compare_installed:
         parser.error("--compare-installed requires the full resource suite")
     if args.executor == 'local' and args.compare_installed:
-        parser.error('--compare-installed compares MagicDesk helpers; select --executor shell/app')
+        parser.error('--compare-installed requires an external shell/app test adapter')
     executor = FixtureExecutor.connect(args.build, args.executor, 'resources',
                                        config=args.config, server=args.server)
     executor.keep = args.keep
     root = executor.root
     def executable(name):
         directory = executor.libraries if args.executor == 'app' else root
-        return directory + '/libmagicdesk_guest_' + name + '.so'
+        return directory + '/libshroot_guest_' + name + '.so'
     guest_run = executable("run")
     supervisor_run = shlex.join([*profile.environment, executable("supervisor")])
     result = {**executor.state, "root": root, "case": args.case, "checks": []}
@@ -457,7 +457,7 @@ def main():
         check("native metadata export control", executable("resource_guest") + " metadata-export-native "
               + root + "/native", "PASS metadata export custody")
         check("relative root alias", "ln -s source " + root + "/source-alias")
-        check("direct guest protected metadata export", "MAGICDESK_TEST_CAPTURE_FALLBACK=1 "
+        check("direct guest protected metadata export", "SHROOT_TEST_CAPTURE_FALLBACK=1 "
               + supervisor_run + " --diagnostics "
               + executable("bootstrap") + " " + root + "/source-alias /bin/test metadata-export /tmp",
               "PASS metadata export custody",
@@ -468,7 +468,7 @@ def main():
                   + "/store --deadline-seconds 90 -- /bin/test metadata-export-managed /tmp", "PASS metadata export custody")
         check("native protected export control", executable("resource_guest") + " buffer-export-native "
               + root + "/native", "PASS protected export")
-        check("guest protected export", guest_run + " --env MAGICDESK_TEST_CAPTURE_FALLBACK=1 --diagnostics --store " + root
+        check("guest protected export", guest_run + " --env SHROOT_TEST_CAPTURE_FALLBACK=1 --diagnostics --store " + root
               + "/store --deadline-seconds 90 -- /bin/test buffer-export /tmp", "PASS protected export",
               patterns=(r"SHROOT_CAPTURE_PROFILE host-only pidfd-getfd=denied descriptors=0,900",))
 
@@ -614,7 +614,7 @@ def main():
         elif args.case == "all":
             names += ("test_robust_futex",)
         for name in names:
-            file = "libmagicdesk_guest_" + name + ".so"
+            file = "libshroot_guest_" + name + ".so"
             executor.upload(args.build / file, root + "/" + file)
         if args.executor != 'app':
             check("prepare fixtures", "chmod 700 " + root + "/*.so")

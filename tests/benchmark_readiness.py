@@ -60,7 +60,7 @@ def main():
             reference = suite.base + '/reference'
             suite.command(['mkdir', reference])
             suite.report['referenceHashes'] = suite.stage_runtime(args.reference, reference)
-            candidates.append(('reference', reference + '/libmagicdesk_guest_run.so'))
+            candidates.append(('reference', reference + '/libshroot_guest_run.so'))
         suite.report['scope'] = dict(store=args.store,
             fixture='same guest binary and installed userspace',
             instrumented=args.statistics,

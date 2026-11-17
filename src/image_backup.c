@@ -151,7 +151,7 @@ static int write_tree(struct md_inode_store *s, struct archive *ar) {
         /* Libarchive represents ACL GROUP_OBJ in its mode field, whereas Linux
          * stat uses the ACL mask. Preserve the independent guest mode explicitly. */
         unsigned char mode[2] = {st.st_mode & 255, (st.st_mode & 07777) >> 8};
-        if (!linked) archive_entry_xattr_add_entry(e, "magicdesk.backup.mode", mode, sizeof(mode));
+        if (!linked) archive_entry_xattr_add_entry(e, SHROOT_BACKUP_MODE, mode, sizeof(mode));
         if (!r && archive_write_header(ar, e) != ARCHIVE_OK) r = -EIO;
         char buffer[65536];
         for (off_t offset = 0; !r && fd >= 0 && offset < st.st_size;) {
@@ -196,7 +196,7 @@ int md_image_backup(const char *store, const char *destination) {
     if (!ar && !r) r = -ENOMEM;
     if (!r && (archive_write_set_format_pax(ar) != ARCHIVE_OK || archive_write_add_filter_zstd(ar) != ARCHIVE_OK
             || archive_write_open_fd(ar, fd) != ARCHIVE_OK)) r = -EIO;
-    if (!r) r = header(ar, "magicdesk-backup.json", metadata, strlen(metadata));
+    if (!r) r = header(ar, SHROOT_BACKUP_MANIFEST, metadata, strlen(metadata));
     if (!r) r = write_tree(s, ar);
     if (ar) { if (archive_write_close(ar) != ARCHIVE_OK && !r) r = -EIO; archive_write_free(ar); }
     if (!r && fsync(fd)) r = -errno;
@@ -212,7 +212,7 @@ static int backup_config(int fd, sqlite3 *db, char **out, int *guest_users) {
     struct archive_entry *entry = NULL;
     int r = archive_read_open_fd(ar, fd, 65536) == ARCHIVE_OK ? 0 : -EBADMSG;
     if (!r && (archive_read_next_header(ar, &entry) != ARCHIVE_OK
-            || strcmp(archive_entry_pathname(entry), "magicdesk-backup.json")
+            || !md_backup_manifest(archive_entry_pathname(entry))
             || archive_entry_filetype(entry) != S_IFREG || archive_entry_hardlink(entry)
             || archive_entry_size(entry) <= 0 || archive_entry_size(entry) > 8*1024*1024)) r = -EBADMSG;
     char *data = NULL;

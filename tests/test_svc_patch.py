@@ -45,7 +45,7 @@ def main():
                              ('test_svc_mapping', root + '/bin/mapping'),
                              ('test_process_image', root + '/bin/process-image'),
                              ('service', suite.base + '/service')]:
-            binary = args.build / ('libmagicdesk_guest_' + name + '.so')
+            binary = args.build / ('libshroot_guest_' + name + '.so')
             suite.report['fixtureHashes'][name] = hashlib.sha256(binary.read_bytes()).hexdigest()
             suite.upload(binary, target)
             assert suite.command(['sha256sum', target], quiet=True).split()[0] == suite.report['fixtureHashes'][name]

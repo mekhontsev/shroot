@@ -21,7 +21,7 @@ class LocalCommands(unittest.TestCase):
     def setUp(self):
         self.output = tempfile.TemporaryDirectory(prefix='shroot-transport-')
         self.addCleanup(self.output.cleanup)
-        with mock.patch('executors.magicdesk.connect', side_effect=AssertionError('MCP used')):
+        with mock.patch('fixture_executor.adapter', side_effect=AssertionError('External host used')):
             self.executor = FixtureExecutor.connect(self.output.name, 'local')
         self.addCleanup(self.executor.close)
 

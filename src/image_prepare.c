@@ -30,7 +30,7 @@ int md_image_resolver(const char *path, const char *text, int replace) {
         if (r == -EEXIST) r = 0;
     }
     char temporary[96];
-    snprintf(temporary, sizeof(temporary), "/etc/.magicdesk-resolv-%ld", (long)getpid());
+    snprintf(temporary, sizeof(temporary), "/etc/.shroot-resolv-%ld", (long)getpid());
     int fd = !r ? md_inode_create(s, -1, temporary, 0644) : -1;
     if (!r && fd < 0) r = fd;
     if (!r) r = md_image_write(fd, text, strlen(text));

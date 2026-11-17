@@ -101,18 +101,23 @@ static void options(struct shroot_arguments *args, const char *name, const char 
 static int launch_command(shroot_context *context, const char *library, const char *selector,
         const struct shroot_launch_options *launch, const struct shroot_io *io, shroot_job **out) {
     struct shroot_arguments args = {0};
-    if (!launch || launch->kind < SHROOT_RUN || launch->kind > SHROOT_LOGIN || launch->flags & ~15u
-            || (launch->bind_count && !launch->binds) || (launch->route_count && !launch->routes)) {
+    if (!launch || launch->kind < SHROOT_RUN || launch->kind > SHROOT_LOGIN || launch->flags & ~7u
+            || (launch->bind_count && !launch->binds) || (launch->route_count && !launch->routes)
+            || (launch->owner_fd_count && !launch->owner_fds)) {
         if (out) *out = NULL;
         return -EINVAL;
     }
     if (library) { shroot_argument(&args,"library"); shroot_argument(&args,library); }
     shroot_argument(&args, launch->kind == SHROOT_RUN ? "run" : launch->kind == SHROOT_EXEC ? "exec" : "login");
     shroot_argument(&args, selector);
+    args.owner_argument = args.count;
+    args.owner_fds = launch->owner_fds;
+    args.owner_fd_count = launch->owner_fd_count;
     shroot_option(&args, "--user", launch->user);
     shroot_option(&args, "--cwd", launch->cwd);
     shroot_option(&args, "--entrypoint", launch->entrypoint);
     shroot_option(&args, "--hostname", launch->hostname);
+    shroot_option(&args, "--path-prefix", launch->path_prefix);
     shroot_option(&args, "--gamepad-endpoint", launch->gamepad_endpoint);
     shroot_option(&args, "--network", launch->network);
     shroot_option(&args, "--ip", launch->ip);
@@ -137,7 +142,6 @@ static int launch_command(shroot_context *context, const char *library, const ch
         shroot_argument(&args, route->source); shroot_argument(&args, route->target);
     }
     if (launch->flags & SHROOT_STATISTICS) shroot_argument(&args, "--statistics");
-    if (launch->flags & SHROOT_MAGICDESK_CONNECTION) shroot_argument(&args, "--magicdesk");
     if (launch->flags & (SHROOT_DIAGNOSTICS | SHROOT_SIGNAL_DIAGNOSTICS))
         shroot_argument(&args, launch->flags & SHROOT_SIGNAL_DIAGNOSTICS ? "--diagnostics=signals" : "--diagnostics");
     shroot_argument(&args, "--");

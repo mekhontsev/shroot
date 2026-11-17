@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--x11-helper', type=Path, required=True)
     args = parser.parse_args()
     suite = Suite(args.output)
-    suite.runner = args.runtime + '/libmagicdesk_guest_run.so'
+    suite.runner = args.runtime + '/libshroot_guest_run.so'
     try:
         suite.command([suite.runner, '--store', args.store, '--', '/bin/sh', '-ec',
                        'command -v blender; mkdir -p /opt/md-gpu/lib /home/shell /usr/local/bin'])

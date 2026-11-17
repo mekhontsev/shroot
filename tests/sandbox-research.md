@@ -21,10 +21,10 @@ Use a disposable prepared glibc store and an immutable staged runtime:
 
 ```sh
 python tests/build_prepared.py BUILD --native-build NATIVE_BUILD
-python tests/test_sandbox.py BUILD \
+python "$APP_TESTS/test_sandbox.py" BUILD \
   --runtime IMMUTABLE_STAGED_HELPERS --store DISPOSABLE_GLIBC_STORE
 sh tests/build-hybrid-fixture.sh BUILD
-python tests/test_hybrid.py BUILD --runs 50
+python "$APP_TESTS/test_hybrid.py" BUILD --runs 50
 ```
 
 The runners record device/kernel identity, actual UID, helper hashes, output
@@ -62,7 +62,7 @@ read-only `md_seccomp_view`. The installed-policy mode exercises production
 publication and lazy SVC; the explicit userspace mode is a prototype limited to
 the measured calls, not a process-wide sandbox. Neither measures browser speed.
 
-Build with `MAGICDESK_GUEST_FIXTURES=ON`, then supply two raw AArch64
+Build with `SHROOT_BUILD_TESTS=ON`, then supply two raw AArch64
 `sock_filter` arrays captured from guest `seccomp`/`prctl` installation:
 
 ```sh
@@ -225,7 +225,7 @@ do not establish arbitrary exec, signal or process-lifetime compatibility.
 The common `task_checkpoint` owner serves normal bootstrap control markers
 through selective TRACE or scoped SYSEMU. `task_call` owns native entry/exit
 without a return BRK, and `signal_delivery` chains actual delivery stops without
-service single-step. Build the controls with `MAGICDESK_GUEST_FIXTURES=ON`:
+service single-step. Build the controls with `SHROOT_BUILD_TESTS=ON`:
 
 ```sh
 cmake --build BUILD --target test_signal_checkpoint

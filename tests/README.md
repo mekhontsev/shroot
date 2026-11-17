@@ -77,12 +77,20 @@ run establishes that actual Android identity, not MagicDesk's different Zygote
 domain, Shell, or ordinary Linux. Native streaming uses pipes; it does not loop
 through a console, network log relay or file previews.
 
-MagicDesk graphical, installer and APK-specific workflows use the optional
-`executors/magicdesk.py` adapter. Set its source location explicitly; Shroot does
-not assume a parent checkout or duplicate MagicDesk's MCP implementation:
+External transports are opt-in modules selected by `SHROOT_TEST_ADAPTER`.
+They implement `executor(output, mode, prefix, config=None, server=None)` and
+reuse the same guest assertions. Shroot never searches for another checkout or
+silently substitutes execution identity. Its local executor needs no adapter.
+
+MagicDesk owns its adapter and graphical, installer and APK-specific drivers in
+[`tests/shroot`](https://github.com/mekhontsev/magicdesk/tree/develop/tests/shroot).
+To run an engine fixture with that adapter from this checkout:
 
 ```sh
-export MAGICDESK_SOURCE=/path/to/magicdesk-android
+export PYTHONPATH=/path/to/magicdesk-android/tests/shroot
+export APP_TESTS="$PYTHONPATH"
+export SHROOT_SOURCE="$PWD"
+export SHROOT_TEST_ADAPTER=magicdesk_executor
 export SHROOT_TEST_EXECUTOR=shell  # or app with a matching fixture APK
 python tests/test_resources.py /path/to/exact/native/build --case supervisor-state
 ```
@@ -90,9 +98,14 @@ python tests/test_resources.py /path/to/exact/native/build --case supervisor-sta
 The adapter reads the existing MCP configuration (`~/.codex/config.toml`) without
 modifying it. `app` invokes the debug APK's real Zygote identity and verifies the
 exact packaged helper hashes; `shell` verifies UID 2000 and the shell SELinux
-domain. On-device service tests use a loopback log channel. Graphical checks
+domain. App artifacts use an app-UID console and authenticated, SHA-256-checked
+loopback file transfer; this adapter requires the runner on the same device and
+does not use `run-as`. On-device service tests use a loopback log channel. Graphical checks
 still require MagicDesk and its graphics/placement services; a local headless
 browser pass does not qualify Android presentation or audio.
+
+Commands below using `$APP_TESTS` run the application-owned drivers from that
+directory. Other `tests/` paths refer to this native repository.
 
 - [Choose A Suite](#choose-a-suite)
 - [Evidence Rules](#evidence-rules)
@@ -168,7 +181,7 @@ Other commands select one profile; omit it or select `native` for the ordinary
 host. The environment form applies to runners using the shared `Suite` launcher,
 including prepared-distribution workflows. Stock native controls stay native.
 For a standalone host component, use the device-side
-`libmagicdesk_guest_kernel_baseline.so --host NATIVE-FIXTURE ...`; do not wrap a
+`libshroot_guest_kernel_baseline.so --host NATIVE-FIXTURE ...`; do not wrap a
 whole Shroot launch in that command, because its descendants inherit the filter.
 
 Reports retain the real kernel and verified profile separately. The runner
@@ -896,9 +909,9 @@ ordinary system calls is part of this approach.
 
 ### Rootfs Fixtures
 
-The prepared-rootfs builder is part of Shroot. Only graphical recipes and Android
-presentation need an explicit **MagicDesk checkout** through `MAGICDESK_SOURCE`.
-Run these commands from the Shroot checkout.
+The prepared-rootfs builder is part of Shroot. Graphical launch recipes and Android
+presentation belong to the integrating application's test adapter.
+Run the preparation commands from the Shroot checkout.
 
 `prepare.mjs` authenticates Debian archive metadata and packages, then extracts
 an isolated test rootfs without maintainer scripts or host installation.
@@ -906,16 +919,17 @@ an isolated test rootfs without maintainer scripts or host installation.
 glibc probes with Clang/LLD, then packages them with the verified userspace.
 Use `SHROOT_BUILD_TESTS=ON` and `SHROOT_STATIC_RUNTIME=ON`: component fixtures
 embedded in the guest must not depend on the host's libc. `--graphics` additionally
-compiles the Java launch recipe and available graphical probes; it needs a JDK
-and a host `wayland-scanner`. Installed guest launches require none of these tools.
+compiles available native graphical probes; it needs a host `wayland-scanner`.
+The application integration builds its own launch recipe. Installed guest
+launches require none of these tools.
 Exact inputs remain in the build's `manifest.json`.
 
 ```sh
 node tests/prepare.mjs build/guest-fixtures --gtk
 python tests/build_prepared.py build/guest-fixtures --native-build build/native --graphics
 python tests/test_device.py build/guest-fixtures --packages
-python tests/test_graphics.py build/guest-fixtures
-python tests/test_graphics.py build/guest-fixtures --gtk
+python "$APP_TESTS/test_graphics.py" build/guest-fixtures
+python "$APP_TESTS/test_graphics.py" build/guest-fixtures --gtk
 ```
 
 The Android prepared-userspace runner also accepts `--executor app
@@ -932,12 +946,12 @@ For real application workflows, use a separate prepared build:
 node tests/prepare.mjs build/guest-applications --applications
 python tests/build_prepared.py build/guest-applications --native-build build/native --graphics
 python tests/test_device.py build/guest-applications --packages
-python tests/test_graphics.py build/guest-applications --application mousepad --network
-python tests/test_graphics.py build/guest-applications --application galculator
-python tests/test_graphics.py build/guest-applications --application mousepad --routed
-python tests/test_graphics.py build/guest-applications --application mousepad --routed --protocol x11
-python tests/test_shortcuts.py build/guest-applications --protocol wayland
-python tests/test_shortcuts.py build/guest-applications --protocol x11
+python "$APP_TESTS/test_graphics.py" build/guest-applications --application mousepad --network
+python "$APP_TESTS/test_graphics.py" build/guest-applications --application galculator
+python "$APP_TESTS/test_graphics.py" build/guest-applications --application mousepad --routed
+python "$APP_TESTS/test_graphics.py" build/guest-applications --application mousepad --routed --protocol x11
+python "$APP_TESTS/test_shortcuts.py" build/guest-applications --protocol wayland
+python "$APP_TESTS/test_shortcuts.py" build/guest-applications --protocol x11
 ```
 
 For Qt text-input-v3, prepare the newer Debian userspace separately:
@@ -946,7 +960,7 @@ For Qt text-input-v3, prepare the newer Debian userspace separately:
 node tests/prepare.mjs build/guest-qt --qt --suite trixie
 python tests/build_prepared.py build/guest-qt --native-build build/native --graphics
 python tests/test_device.py build/guest-qt --packages
-python tests/test_qt.py build/guest-qt
+python "$APP_TESTS/test_qt.py" build/guest-qt
 ```
 
 Bookworm is the default suite; trixie uses the same pinned signature and package

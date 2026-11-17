@@ -82,9 +82,8 @@ def start_service(init, service):
 
 def prepare_init(system=None):
     """Read the installer-owned preparation on the host, never on guest import."""
-    from executors.magicdesk import source_root
-    program = subprocess.check_output(['sh', str(source_root() /
-        'scripts/install_linux.sh'), '--print-init-prepare'], text=True)
+    from host_integration import adapter
+    program = adapter().init_prepare()
     if system is not None:
         if not system.startswith('/nix/store/') or '\n' in system:
             raise ValueError('Expected an installed NixOS system generation')
@@ -126,7 +125,7 @@ def wait_launch_completion(shell, path, deadline):
         threading.Event().wait(min(0.1, remaining))
 
 
-def installed_boot(target, port, token, init, desktop_user=None, system=None, control_address='127.0.0.1'):
+def installed_boot(target, port, token, init, desktop_user=None, system=None, control_address='127.0.0.1', audio_variable=None):
     """One init/control owner; a desktop driver is an optional dependent service."""
     control_args = f'{target}/session-controller.py {target} {port} {token} {control_address}'
     binary = system + '/sw/bin' if system else '/usr/bin'
@@ -138,10 +137,12 @@ def installed_boot(target, port, token, init, desktop_user=None, system=None, co
 mount --make-rshared /
 unset XDG_DATA_DIRS XDG_CONFIG_DIRS XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
 '''
-    if desktop_user is not None:
+    if desktop_user is not None and audio_variable is not None:
         # System services do not inherit the graphical launcher's environment.
         # Carry only its audio endpoint, not arbitrary host environment variables.
-        boot += 'printf "%s\\n" "${MAGICDESK_AUDIO_PULSE:-}" > ' + shlex.quote(target + '/audio-endpoint') + '\n'
+        if not audio_variable.isascii() or not audio_variable.isidentifier():
+            raise ValueError('Invalid audio environment variable')
+        boot += 'printf "%s\\n" "${' + audio_variable + ':-}" > ' + shlex.quote(target + '/audio-endpoint') + '\n'
     if system is not None:
         if init != 'systemd' or not system.startswith('/nix/store/'):
             raise ValueError('Expected an installed NixOS system generation')
@@ -149,7 +150,7 @@ unset XDG_DATA_DIRS XDG_CONFIG_DIRS XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
         # A published test controller needs an input exception, not a disabled
         # distribution firewall. The launch owns this private network namespace.
         boot += f'''if command -v iptables >/dev/null 2>&1; then
-    iptables -w 5 -I INPUT -i eth0 -p tcp --dport {port} -m comment --comment magicdesk-test-control -j ACCEPT
+    iptables -w 5 -I INPUT -i eth0 -p tcp --dport {port} -m comment --comment shroot-test-control -j ACCEPT
 fi
 '''
     user = shlex.quote(desktop_user) if desktop_user is not None else None

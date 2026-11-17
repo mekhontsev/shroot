@@ -39,7 +39,7 @@ instance/image kind and distinct immutable source directory identities across
 all persistent scopes, including retained projections outside the root view.
 `format` returns the stable namespace family (17); `inspect` also publishes its
 independent `schemaRevision`. `import-version` identifies import semantics (1),
-not SQLite schema, journal policy or the APK build. The named-environment manager
+not SQLite schema, journal policy or the runtime build. The named-environment manager
 keys prepared images by `import-v1-` plus source identity. Metadata upgrades reuse
 the same base and leave existing instance paths and dependency records intact.
 Changing import semantics affects new imports only; it never retargets existing
@@ -79,16 +79,16 @@ or guest root if it is empty. `--user NAME|UID[:GROUP|GID]` overrides it using t
 same credential model as ordinary guest launches; names and supplementary groups
 come from the image's account files. `--user current` retains the executor's IDs.
 A mapped-ownership image with nonempty User requires an explicit user override.
-The actual Android identity remains that of the selected User (app UID) or Shell
-(authorized UID 2000 or 0) executor. Kernel permissions and the host network
-namespace do not change. `inspect` includes the `guestUsers` policy.
+The actual host identity remains that of the selected executor. On Android this
+may be an app UID or an authorized Shell identity. Kernel permissions and the
+host network namespace do not change. `inspect` includes the `guestUsers` policy.
 Each instance gets a stable launch hostname derived from its storage identity;
 `--hostname NAME` overrides it. The ordinary runner accepts the same option.
-This changes guest uname's nodename, not Android's hostname or network namespace.
-`--network routed` selects the launch-owned logical IPv4 transport for run,
-exec and login; its absence preserves native networking. The ordinary store
-runner accepts the same option. No Android network namespace or interface is
-modified. See [network ownership](networking.md#network-namespaces).
+This changes guest uname's nodename, not the host's hostname or network namespace.
+`--network host|none|bridge|routed` selects native networking, offline operation,
+a prepared private IPv4/IPv6 network or guest-managed routed topology. The
+default is host. Run, exec and login share this profile without changing host
+interfaces. See [network options](networking.md#command-line).
 
 An instance is a normal guest store. Existing shell, PTY and graphical recipes
 can use it through `--store`, including their explicit graphics routes and
@@ -113,7 +113,7 @@ parser, `image_io.c` verifies SHA-256 and bounded archive streams, and
 `image_layer.c` applies names through the inode API. Libarchive, zlib, Zstandard
 and the SHA-256-only Mbed TLS component link only into the offline image tool,
 not the supervisor or syscall adapter. Sources and licenses are pinned in
-`image-dependencies.cmake` and packaged with the APK.
+`image-dependencies.cmake` and included in installed bundles' license notices.
 
 Descriptor sizes/digests and uncompressed diff_ids are checked before applying
 each layer. Private input snapshots prevent a verified source blob being replaced
@@ -283,10 +283,14 @@ and file atime/mtime are
 retained. The format carries guest mode independently of libarchive's ACL mode
 representation. Native Android SELinux labels are not exported; unsupported
 native xattrs fail rather than being silently lost.
-The portable archive has its own version-1 manifest (`magicdesk-backup.json`),
+The portable archive has its own version-1 manifest (`shroot-backup.json`) and
+`shroot.backup.mode` metadata,
 independent of native family/revision and catalog-record versions. Tests read a
 fixed v1 archive input without invoking the current exporter, and separately
 export/restore frozen native revisions with their sparse metadata.
+Restore also accepts `magicdesk-backup.json` and `magicdesk.backup.mode` in
+existing archives. These aliases are read-only compatibility: every new backup
+uses the Shroot names, including backups of restored archives.
 
 Backup is filesystem data, not a process checkpoint. Sockets are omitted with
 their paths reported; running processes, FIFO streams, open descriptors and
@@ -514,7 +518,7 @@ denied on the test device. Actual shell policy permits observations denied to th
 ordinary Termux UID; this does not grant CAP_NET_ADMIN, raw sockets or firewall control.
 
 These observations are from the RM11/API 36 device identified in
-[guest coverage](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md), not cross-device guarantees.
+[guest coverage](tests/validation-matrix.md), not cross-device guarantees.
 `test_service_runtime.c` checks descriptor reopening and path identity, native
 O_DIRECT, capability/securebits transitions, file capabilities, POSIX ACLs,
 initial stack boundaries, protected copies, application seccomp precedence and

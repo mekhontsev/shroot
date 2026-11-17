@@ -28,7 +28,7 @@ def main():
         prefix += ['--diagnostics']
     created = False
     try:
-        suite.upload(args.build / 'libmagicdesk_guest_readiness_guest.so', suite.base + '/readiness')
+        suite.upload(args.build / 'libshroot_guest_readiness_guest.so', suite.base + '/readiness')
         suite.chmod('700', suite.base + '/readiness')
         suite.command(prefix + ['--', '/bin/mkdir', target])
         created = True

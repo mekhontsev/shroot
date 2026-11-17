@@ -7,12 +7,12 @@ engine, with capabilities checked at the owning host boundary. Do not infer
 authority from an application's package name or silently elevate privileges.
 
 Preserve existing unrelated work. Git commits and publication require the user's
-authorization. Keep NFC extraction/refactoring separate from behavior changes;
+authorization. Keep NFC refactoring separate from behavior changes;
 commit coherent verified blocks, not individual editing steps.
 
 ## Ownership
 
-Read README.md and the relevant focused contracts before changing a mechanism.
+Read architecture.md and the relevant focused contracts before changing a mechanism.
 Runtime resource owners define semantics once across native, Base and lazy-SVC
 paths. Frontends adapt arguments, descriptors and results; they must not duplicate
 filesystem, policy, lifecycle or namespace implementations. Ordinary native IO

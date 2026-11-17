@@ -9,7 +9,7 @@ from probe_packet_runtime import run, service, echoes, wait_port, tunnel_network
 
 def certificates(directory):
     run('openssl', 'req', '-new', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256',
-        '-nodes', '-subj', '/CN=MagicDesk packet fixture CA', '-days', '1',
+        '-nodes', '-subj', '/CN=Shroot packet fixture CA', '-days', '1',
         '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign',
         '-keyout', str(directory / 'ca.key'), '-out', str(directory / 'ca.crt'))
     for name, usage in (('server', 'serverAuth'), ('client', 'clientAuth')):

@@ -76,7 +76,7 @@ class BundleLayout(unittest.TestCase):
         self.runtime.mkdir(parents=True)
         self.metadata = dict(format=1, version='1.0.0-dev', minimumKernel='5.15', system='Android',
                              architecture='aarch64', testHooks=False,
-                             helpers={role: f'libmagicdesk_guest_{role}.so' for role in HELPERS})
+                             helpers={role: f'libshroot_guest_{role}.so' for role in HELPERS})
         paths = ['bin/shroot', 'lib/libshroot.so', 'include/shroot.h', 'lib/libshroot.a',
                  'lib/cmake/Shroot/ShrootConfig.cmake', 'share/doc/shroot/LICENSE']
         paths += [f'libexec/shroot/{name}' for name in self.metadata['helpers'].values()]
@@ -98,7 +98,7 @@ class BundleLayout(unittest.TestCase):
         self.audit(production=True, system='Android', version='1.0.0-dev')
         self.assertEqual(len(self.elf.call_args_list), 7)
         dynamic = {call.args[0].name for call in self.elf.call_args_list if call.kwargs['dynamic']}
-        self.assertEqual(dynamic, {'libshroot.so', 'libmagicdesk_guest_image.so'})
+        self.assertEqual(dynamic, {'libshroot.so', 'libshroot_guest_image.so'})
 
     def test_reject_mismatched_metadata(self):
         for key, value in (('testHooks', True), ('testHooks', 'false'), ('system', 'Windows'),

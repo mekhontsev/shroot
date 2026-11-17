@@ -14,7 +14,7 @@ def main():
     parser.add_argument('--source', type=Path, default=Path(__file__).with_name('test_svc_go.go'))
     parser.add_argument('--build', type=Path, help='Native runtime bundle; required for local execution')
     environment = parser.add_mutually_exclusive_group()
-    environment.add_argument('--cgo-environment', help='Installed MagicDesk environment with a Linux C toolchain')
+    environment.add_argument('--cgo-environment', help='Installed Linux environment with a C toolchain')
     environment.add_argument('--cgo-store', help='Explicit inode store with a Linux C toolchain')
     FixtureExecutor.add_argument(parser)
     args = parser.parse_args()

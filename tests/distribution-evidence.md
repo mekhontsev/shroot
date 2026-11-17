@@ -25,7 +25,7 @@ regression tests instead of accumulating an incident history.
 - [Shared Evidence](#shared-evidence)
 - [Linux 5.15 Capability Profile](#linux-515-capability-profile)
 
-NixOS recipe/activation and pending graphical acceptance are tracked in the
+NixOS recipe/activation and graphical acceptance are tracked in the
 [matrix's NixOS section](validation-matrix.md#nixos-recipe-and-initial-image-probes).
 
 ## Linux 5.15 Capability Profile
@@ -1223,7 +1223,7 @@ and normal exit. Controller and editor share the Flatpak PID namespace.
 `flatpak-concurrent.json` records 24 concurrent sandbox launches alongside
 this editor. `arch-portal-loan-20261102.json` passes Chromium document grants,
 graceful/forced portal exit, auto-unmount and whole-unit restart/stop.
-The previously established stock Flatpak FD-allocation collision below remains
+The stock Flatpak FD-allocation collision below remains
 an upstream limitation; a passing allocation layout does not fix that defect.
 
 The installed APK build

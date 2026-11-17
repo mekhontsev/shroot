@@ -1,6 +1,6 @@
 # Desktop And GPU Fixtures
 
-[Fixture guide](README.md) | [Native architecture](../README.md)
+[Fixture guide](README.md) | [Native architecture](../architecture.md)
 
 SteamOS, libc/toolkit applications and guest GPU rendering. A rendered compositor is not proof of every application, input or audio workflow.
 
@@ -517,7 +517,7 @@ in that fixture; the normal non-root dry run is not a configuration pass.
 These scripts are not a product distribution installer or a container manager.
 
 ```sh
-python tests/test_distribution_app.py BUILD \
+python "$APP_TESTS/test_distribution_app.py" BUILD \
   --store DISPOSABLE_HOST_STORE --runtime IMMUTABLE_STAGED_HELPERS \
   --keyboard-directory HOST_XKB --protocol wayland --application writer
 ```
@@ -550,7 +550,7 @@ dumpable is disabled. The fixture never enables it again. Execute these native
 controls separately from the guest runtime:
 
 ```sh
-python tests/test_notifications.py BUILD
+python "$APP_TESTS/test_notifications.py" BUILD
 ```
 
 The runner checks the selected UID, stages fresh binaries, retains hashes,
@@ -566,7 +566,7 @@ run is not successful browser sandboxing. Build and execute them independently:
 
 ```sh
 python tests/build_prepared.py BUILD --native-build NATIVE_BUILD
-python tests/test_sandbox.py BUILD \
+python "$APP_TESTS/test_sandbox.py" BUILD \
   --runtime IMMUTABLE_STAGED_HELPERS --store DISPOSABLE_GLIBC_STORE
 ```
 
@@ -578,7 +578,7 @@ controls and unresolved security/lifecycle requirements.
 
 ```sh
 sh tests/build-hybrid-fixture.sh BUILD
-python tests/test_hybrid.py BUILD
+python "$APP_TESTS/test_hybrid.py" BUILD
 ```
 
 The [browser fixtures](browser/README.md) build the production runtime, including
@@ -599,7 +599,7 @@ support:
 
 ```sh
 sh tests/build-domain-fixture.sh BUILD
-python tests/test_domain.py BUILD --repeat 10
+python "$APP_TESTS/test_domain.py" BUILD --repeat 10
 ```
 
 The [helper/context control](chromium-isolation.md#helper-and-protected-memory-control)
@@ -612,8 +612,8 @@ guest-ELF gates are documented with the results:
 
 ```sh
 python tests/build-suid-context.py BUILD
-python tests/test_domain.py BUILD --fixture suid-context --repeat 10
-python tests/test_domain.py BUILD --fixture suid-context --suid-main --repeat 10
+python "$APP_TESTS/test_domain.py" BUILD --fixture suid-context --repeat 10
+python "$APP_TESTS/test_domain.py" BUILD --fixture suid-context --suid-main --repeat 10
 ```
 
 `md-exec-policy-test INTERPRETER` compares executable memfd scripts under the
@@ -622,7 +622,7 @@ native shell and guest. X_OK succeeding does not override a kernel exec denial.
 For a prepared GUI store:
 
 ```sh
-python tests/test_userspace.py BUILD \
+python "$APP_TESTS/test_userspace.py" BUILD \
   --store HOST_STORE --runtime STAGED_HELPERS --recipes BUILD/recipe-classes \
   --keyboard-directory HOST_XKB --protocol wayland --installed
 ```
@@ -638,7 +638,7 @@ The whole-desktop fixture uses the same connection and execution contracts:
 ```sh
 node tests/prepare.mjs build/guest-desktop --desktop --suite trixie
 sh tests/build.sh build/guest-desktop
-python tests/test_desktop.py BUILD \
+python "$APP_TESTS/test_desktop.py" BUILD \
   --store HOST_STORE --runtime STAGED_HELPERS --keyboard-directory HOST_XKB --installed
 ```
 
@@ -732,7 +732,7 @@ The device implements DRM_VERSION through bounded nested-pointer ioctl
 marshalling shared with other typed controls. It does not claim unrelated DRM
 operations. No preload, extra browser flags or separate Mesa build is installed.
 
-Run `python tests/test_render.py BUILD STORE` from the repository
+Run `python "$APP_TESTS/test_render.py" BUILD STORE` from the repository
 root with a prepared Turnip test environment.
 The unit/guest fixtures cover capability admission, disabled profiles, device
 and sysfs identity, FD duplication/transfer, namespaces, invalid ioctl buffers
@@ -945,5 +945,5 @@ prepared Turnip manifest passes the same workflow. Keep this distribution
 failure distinct from the guest syscall mechanism or Android frame transport.
 
 Exact successful device coverage and unsupported ABI surfaces belong in
-[Guest runtime](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#coverage-and-limits), not a general
+[distribution matrix](validation-matrix.md), not a general
 claim of distribution or driver compatibility.

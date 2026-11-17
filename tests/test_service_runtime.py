@@ -23,12 +23,12 @@ def main():
             args.other_store = suite.base + '/contracts/other'
             suite.command(suite.image_command('create', suite.base + '/contracts/image', args.other_store))
         suite.command(['mkdir', suite.base + '/fixtures'])
-        fixture = 'libmagicdesk_guest_service_runtime.so'
-        for name in (fixture, 'libmagicdesk_guest_test_credentials.so'):
+        fixture = 'libshroot_guest_service_runtime.so'
+        for name in (fixture, 'libshroot_guest_test_credentials.so'):
             destination = suite.base + '/fixtures/' + name
             suite.upload(args.build / name, destination)
             suite.chmod('700', destination)
-        suite.command([suite.base + '/fixtures/libmagicdesk_guest_test_credentials.so', suite.base + '/unit-store'])
+        suite.command([suite.base + '/fixtures/libshroot_guest_test_credentials.so', suite.base + '/unit-store'])
 
         def run(store, *argv):
             root = [suite.runner, '--store', store, '--user', '0:0', '--deadline-seconds', '90']

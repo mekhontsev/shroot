@@ -68,7 +68,7 @@ def main():
     try:
         store = args.store or suite.installed_environment(args.name)['store']
         for fixture in sorted({item[1] for item in selected}):
-            binary = 'libmagicdesk_guest_' + fixture + '.so'
+            binary = 'libshroot_guest_' + fixture + '.so'
             suite.upload(args.build / binary, suite.base + '/' + binary)
             suite.chmod('755', suite.base + '/' + binary)
         suite.command(suite.guest(store, '--user', '0:0', '--', '/bin/mkdir', mount), quiet=True)
@@ -81,7 +81,7 @@ def main():
                         *(['--diagnostics'] if args.diagnostics else []),
                         '--env', 'SHROOT_MACHINE_ENTRY=' + str(entry),
                         '--bind-ro', suite.base, mount, '--deadline-seconds', '60', '--',
-                        mount + '/libmagicdesk_guest_' + fixture + '.so', *options), timeout=75, quiet=True)
+                        mount + '/libshroot_guest_' + fixture + '.so', *options), timeout=75, quiet=True)
                     assert 'PASS' in output and 'FAIL' not in output, output
                     record['passed'] = True
                 except Exception as error:

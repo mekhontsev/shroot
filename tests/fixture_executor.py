@@ -2,6 +2,7 @@
 import argparse
 import os
 import shlex
+from host_integration import adapter
 
 MAX_DEADLINE_SECONDS = 7200
 
@@ -54,14 +55,11 @@ class FixtureExecutor:
                             help='Host execution identity; local keeps the calling process UID')
 
     @classmethod
-    def connect(cls, output, mode=None, prefix='fixture', *, config=None, server='magicdesk'):
+    def connect(cls, output, mode=None, prefix='fixture', *, config=None, server=None):
         mode = mode or os.environ.get('SHROOT_TEST_EXECUTOR', 'local')
         if mode == 'local':
             from executors.local import LocalExecutor
             return LocalExecutor(output, prefix)
         if mode in ('shell', 'app'):
-            from executors.magicdesk import MagicDeskExecutor, connect
-            client, transport = connect(config, server)
-            return MagicDeskExecutor(client, transport, output, mode, prefix,
-                                     config=config, server=server)
+            return adapter().executor(output, mode, prefix, config=config, server=server)
         raise ValueError('Unknown fixture executor: ' + mode)

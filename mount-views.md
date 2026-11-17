@@ -1,6 +1,6 @@
 # Mount Views And Path Origins
 
-[Native architecture](README.md) | [Resource model](process-resources.md)
+[Native architecture](architecture.md) | [Resource model](process-resources.md)
 
 Attachment ownership, portable mounts and guest-root resolution.
 

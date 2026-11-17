@@ -48,7 +48,7 @@ def main():
                                   ('fs_dispatch', suite.base + '/dispatch')):
             if entry_only and name not in ('service', 'cooperative_guest'):
                 continue
-            suite.upload(args.build / ('libmagicdesk_guest_' + name + '.so'), destination)
+            suite.upload(args.build / ('libshroot_guest_' + name + '.so'), destination)
             suite.chmod('700', destination)
         if not entry_only:
             suite.command([suite.base + '/mapping-reader'], timeout=10)

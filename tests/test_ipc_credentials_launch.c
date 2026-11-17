@@ -37,7 +37,7 @@ static void external(char **argv,int namespaced) {
     server=fork(); CHECK(server>=0);
     if (!server) {
         execl(argv[1],argv[1],"--store",argv[2],"--user","0:0","--deadline-seconds","15",
-            "--bind-ro",argv[3],"/fixture","--","/fixture/libmagicdesk_guest_ipc_credentials_guest.so",
+            "--bind-ro",argv[3],"/fixture","--","/fixture/libshroot_guest_ipc_credentials_guest.so",
             namespaced ? "--external-pid" : "--external",a.sun_path+1,parent,uid,gid,NULL); _exit(127);
     }
     /* EVENT_WAIT: guest connection/data; socket timeouts bound a failed client. */

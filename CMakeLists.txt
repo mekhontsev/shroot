@@ -54,7 +54,7 @@ if(SHROOT_BUILD_TESTS)
     add_executable(test_client_worker tests/test_client_worker.c)
     target_include_directories(test_client_worker PRIVATE src)
     target_compile_options(test_client_worker PRIVATE -std=c17 -Wall -Wextra -Werror -UNDEBUG)
-    set_target_properties(test_client_worker PROPERTIES OUTPUT_NAME libmagicdesk_guest_image.so
+    set_target_properties(test_client_worker PROPERTIES OUTPUT_NAME libshroot_guest_image.so
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/client-fixture")
     add_test(NAME client COMMAND test_client "${CMAKE_CURRENT_BINARY_DIR}/client-fixture")
 endif()
@@ -152,7 +152,7 @@ function(guest_executable name)
         set(link -pie)
     endif()
     add_executable(${name} ${guest_UNPARSED_ARGUMENTS})
-    set_target_properties(${name} PROPERTIES OUTPUT_NAME libmagicdesk_guest_${name}.so)
+    set_target_properties(${name} PROPERTIES OUTPUT_NAME libshroot_guest_${name}.so)
     target_compile_options(${name} PRIVATE -std=c17 -O2 -Wall -Wextra -Werror ${code} -fno-builtin)
     target_link_options(${name} PRIVATE ${link} -Wl,-z,noexecstack
         -Wl,-z,relro,-z,now -Wl,-z,max-page-size=16384)
@@ -205,7 +205,7 @@ else()
     target_link_options(bootstrap PRIVATE -Wl,-Ttext-segment=0x2000000000)
 endif()
 
-guest_executable(supervisor ${src}/supervisor.c ${src}/task_resources.c ${src}/command_access.c integrations/magicdesk/wire.c ${src}/launch_registry.c ${src}/launch_peer.c ${src}/process_owner.c ${src}/interception_memory.c ${src}/interception_buffers.c ${src}/guest_domain.c
+guest_executable(supervisor ${src}/supervisor.c ${src}/arguments.c ${src}/task_resources.c ${src}/launch_registry.c ${src}/launch_peer.c ${src}/process_owner.c ${src}/interception_memory.c ${src}/interception_buffers.c ${src}/guest_domain.c
     ${src}/mount_copy_service.c ${src}/uts_namespace.c ${src}/ipc_namespace_services.c
     ${src}/fd_selector.c ${src}/sysv_shm.c ${src}/guest_debugger.c ${src}/process_image_view.c ${src}/fd_install.c ${src}/pid_descriptor.c
     ${src}/task_helper.c ${src}/task_quiesce.c ${src}/private_memory.c ${src}/mapping_observation.c ${src}/memory_replace.c ${src}/fd_capture.c ${src}/ipc_io_host.c ${src}/ipc_io_job.c ${src}/network_io.c

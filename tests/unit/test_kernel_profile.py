@@ -31,7 +31,7 @@ class KernelProfileTest(unittest.TestCase):
         profile = KernelProfile('native')
         command = Mock()
         profile.prepare(command, '/supervisor')
-        self.assertEqual('unset MAGICDESK_TEST_KERNEL_PROFILE\n/run', profile.shell('/run'))
+        self.assertEqual('unset SHROOT_TEST_KERNEL_PROFILE\n/run', profile.shell('/run'))
         self.assertEqual([], profile.options)
         command.assert_not_called()
 
@@ -49,7 +49,7 @@ class KernelProfileTest(unittest.TestCase):
         profile = KernelProfile('linux-5.15')
         command = Mock(return_value=evidence())
         profile.prepare(command, '/supervisor')
-        command.assert_called_once_with(['sh', '-c', 'export MAGICDESK_TEST_KERNEL_PROFILE=linux-5.15\nexec "$@"', 'kernel-profile',
+        command.assert_called_once_with(['sh', '-c', 'export SHROOT_TEST_KERNEL_PROFILE=linux-5.15\nexec "$@"', 'kernel-profile',
                                          '/supervisor', '--test-kernel-profile'])
         self.assertEqual('6.12-test', profile.evidence['probe']['kernel'])
         self.assertEqual([], profile.evidence['launches'])
@@ -72,7 +72,7 @@ class KernelProfileTest(unittest.TestCase):
         profile = KernelProfile('linux-5.15')
         command = shlex.join(['/fixture with spaces/run', '--', 'guest argument'])
         selector, body = profile.shell(command).split('\n', 1)
-        self.assertEqual(['export', 'MAGICDESK_TEST_KERNEL_PROFILE=linux-5.15'], shlex.split(selector))
+        self.assertEqual(['export', 'SHROOT_TEST_KERNEL_PROFILE=linux-5.15'], shlex.split(selector))
         self.assertEqual(command, body)
 
     def test_guest_output_is_preserved(self):

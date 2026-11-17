@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise shared runtime/application runners without MagicDesk."""
+"""Exercise shared runtime/application runners through the local executor."""
 import argparse
 import json
 from pathlib import Path

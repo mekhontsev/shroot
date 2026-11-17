@@ -14,7 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build", type=Path)
     parser.add_argument("--config", type=Path, default=Path.home() / ".codex/config.toml")
-    parser.add_argument("--server", default="magicdesk")
+    parser.add_argument("--server")
     parser.add_argument("--packages", action="store_true", help="Observe actual dpkg transactions and known shell limits")
     parser.add_argument("--native-build", type=Path, help="Exact packaged fixture build (required for User)")
     parser.add_argument("--output", type=Path)
@@ -55,17 +55,17 @@ def main():
         check("extract without package installation", "tar -xzf " + root + "/bundle.tar.gz -C " + root)
         if args.executor == 'app':
             # Android executes immutable APK ELF files, not writable imported copies.
-            for target in ['libmagicdesk_guest_' + name + '.so' for name in ('supervisor', 'bootstrap', 'run', 'service', 'image')] + \
+            for target in ['libshroot_guest_' + name + '.so' for name in ('supervisor', 'bootstrap', 'run', 'service', 'image')] + \
                     ['md-command-test', 'md-capabilities-test', 'md-lifecycle-test', 'md-sockets-test']:
-                packaged = ('libmagicdesk_guest_capabilities.so' if target == 'md-capabilities-test' else
-                            'libmagicdesk_guest_prepared_' + target[3:].replace('-', '_') + '.so'
+                packaged = ('libshroot_guest_capabilities.so' if target == 'md-capabilities-test' else
+                            'libshroot_guest_prepared_' + target[3:].replace('-', '_') + '.so'
                             if target.startswith('md-') else target)
-                source = args.native_build / ('libmagicdesk_guest_capabilities.so' if target == 'md-capabilities-test' else target)
+                source = args.native_build / ('libshroot_guest_capabilities.so' if target == 'md-capabilities-test' else target)
                 remote = root + '/' + target
                 executor.upload(source, remote, packaged_name=packaged)
                 check('admit immutable ' + target, shlex.join(['ln', '-sf', executor.native_path(remote), remote]))
         launch = ("env PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/tmp TMPDIR=/tmp LANG=C "
-                  + root + "/libmagicdesk_guest_supervisor.so " + root + "/libmagicdesk_guest_bootstrap.so " + root + "/rootfs ")
+                  + root + "/libshroot_guest_supervisor.so " + root + "/libshroot_guest_bootstrap.so " + root + "/rootfs ")
         check("selected Android identity", "id -u", contains=str(executor.uid) + '\n')
         check("kernel identity", "uname -a", contains="aarch64")
         check("page size observation", "getconf PAGE_SIZE")
@@ -73,7 +73,7 @@ def main():
               + "/md-command-test " + root + "/prepared-images",
               contains="PASS prepared command:")
         check("optional kernel capabilities do not disable ordinary shell", "timeout 30 " + root
-              + "/md-capabilities-test " + root + "/libmagicdesk_guest_supervisor.so " + root + "/libmagicdesk_guest_bootstrap.so",
+              + "/md-capabilities-test " + root + "/libshroot_guest_supervisor.so " + root + "/libshroot_guest_bootstrap.so",
               contains="PASS capability isolation")
         # Copy outside the source first, then move inside the executor's root.
         # Relative dirfd operations outside that root remain deliberately rejected.
@@ -86,15 +86,15 @@ def main():
                         "PASS import: three deterministic SIGKILL boundaries",
                         "PASS offline import fixture (not execution from the imported namespace)"])
         namespace = ("env PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/tmp TMPDIR=/tmp LANG=C "
-                     + root + "/libmagicdesk_guest_run.so --store " + root + "/rootfs/tmp/imported-rootfs -- ")
+                     + root + "/libshroot_guest_run.so --store " + root + "/rootfs/tmp/imported-rootfs -- ")
         check("import independent second guest store", "timeout 180 " + root
-              + "/libmagicdesk_guest_service.so --import " + root + "/rootfs/prepared-rootfs " + root + "/second-store",
+              + "/libshroot_guest_service.so --import " + root + "/rootfs/prepared-rootfs " + root + "/second-store",
               contains="Imported entries=")
         for store, marker in [(root + "/rootfs/tmp/imported-rootfs", "first"), (root + "/second-store", "second")]:
-            check("distinct guest root " + marker, "timeout 30 " + root + "/libmagicdesk_guest_run.so --store "
+            check("distinct guest root " + marker, "timeout 30 " + root + "/libshroot_guest_run.so --store "
                   + store + " -- /bin/sh -c " + shlex.quote("printf " + marker + " > /etc/md-environment"))
         check("namespace process-tree ownership and cancellation", "timeout 150 " + root
-              + "/md-lifecycle-test " + root + "/libmagicdesk_guest_run.so " + root + "/rootfs/tmp/imported-rootfs "
+              + "/md-lifecycle-test " + root + "/libshroot_guest_run.so " + root + "/rootfs/tmp/imported-rootfs "
               + root + "/second-store",
               contains=["PASS lifecycle: double-fork/setsid descendant uses namespace after root exit",
                         "PASS lifecycle: TERM escalation",

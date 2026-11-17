@@ -777,7 +777,7 @@ static void warm_shared_channel(void) {
     CHECK(prctl(PR_GET_SECCOMP)==filter && !munmap(stack,size));
 }
 static void origin_send(unsigned mode, int protected) {
-    CHECK(!getenv("MAGICDESK_TEST_CAPTURE_FALLBACK") && !prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0));
+    CHECK(!getenv("SHROOT_TEST_CAPTURE_FALLBACK") && !prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0));
     int warm=protected&4; protected&=1;
     if (warm) warm_shared_channel();
     CHECK(mode<16);
@@ -890,7 +890,7 @@ static void origin_send(unsigned mode, int protected) {
     printf("PASS capsule guest sender mode=%u protected=%d\n",mode,protected);
 }
 static void origin_receive(unsigned mode, int protected) {
-    CHECK(!getenv("MAGICDESK_TEST_CAPTURE_FALLBACK") && !prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0));
+    CHECK(!getenv("SHROOT_TEST_CAPTURE_FALLBACK") && !prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0));
     int filtered=protected&2, warm=protected&4; protected&=1;
     if (warm) warm_shared_channel();
     CHECK(mode<15);
@@ -1052,7 +1052,7 @@ static void capture_channel_admission(int socket, int full) {
     CHECK(!prctl(PR_SET_DUMPABLE,dumpable));
 }
 static void addressed_send(const char *path, unsigned protected, unsigned full, int local, uid_t uid, gid_t gid) {
-    CHECK(!getenv("MAGICDESK_TEST_CAPTURE_FALLBACK") && !prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0));
+    CHECK(!getenv("SHROOT_TEST_CAPTURE_FALLBACK") && !prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0));
     if (!strcmp(path,"addressed")) CHECK(!chdir("/attached"));
     struct sockaddr_un a={.sun_family=AF_UNIX};
     CHECK(strlen(path)<sizeof(a.sun_path)); strcpy(a.sun_path,path);
@@ -1147,7 +1147,7 @@ static void addressed_fixture(const char *runner, const char *store, const char 
             char p[8],f[8],l[8],u[16],g[16]; snprintf(p,sizeof(p),"%u",protected); snprintf(f,sizeof(f),"%u",full);
             snprintf(l,sizeof(l),"%d",local); snprintf(u,sizeof(u),"%u",getuid()); snprintf(g,sizeof(g),"%u",getgid());
             execl(runner,runner,"--store",store,"--user","0:0","--bind",directory,"/attached","--deadline-seconds","20",
-                "--env","MAGICDESK_TEST_CAPTURE_FALLBACK=1",
+                "--env","SHROOT_TEST_CAPTURE_FALLBACK=1",
                 "--","/bin/test","--address-send",type==0 ? "/attached/addressed" : type==1 ? "addressed"
                     : type==2 ? "/tmp/addressed" : "@md-binary-address",p,f,l,u,g,(char *)NULL);
             _exit(90);

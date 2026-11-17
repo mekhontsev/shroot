@@ -76,10 +76,10 @@ def main():
         info = suite.installed_environment(args.name)
         suite.report['environment'] = info
         for name in ('test_binfmt_rule', 'binfmt_guest'):
-            binary = 'libmagicdesk_guest_' + name + '.so'
+            binary = 'libshroot_guest_' + name + '.so'
             suite.upload(args.build / binary, suite.base + '/' + binary)
             suite.chmod('755', suite.base + '/' + binary)
-        suite.command([suite.base + '/libmagicdesk_guest_test_binfmt_rule.so'])
+        suite.command([suite.base + '/libshroot_guest_test_binfmt_rule.so'])
         if args.qemu:
             suite.upload(args.qemu, suite.base + '/foreign-elf')
             suite.chmod('755', suite.base + '/foreign-elf')
@@ -87,7 +87,7 @@ def main():
         for mode in (0, 1):
             output = suite.command(suite.guest(info['store'], '--user', '0:0',
                 '--env', 'SHROOT_MACHINE_ENTRY=' + str(mode), '--bind-ro', suite.base, target,
-                '--deadline-seconds', '60', '--', target + '/libmagicdesk_guest_binfmt_guest.so'), timeout=90)
+                '--deadline-seconds', '60', '--', target + '/libshroot_guest_binfmt_guest.so'), timeout=90)
             assert 'PASS binfmt_misc' in output
             if args.systemd:
                 suite.command(suite.guest(info['store'], '--user', '0:0',

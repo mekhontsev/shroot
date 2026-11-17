@@ -10,6 +10,8 @@
 #include "host_identity.h"
 #include "socket_routes.h"
 #include "arguments.h"
+#include "launch_resources.h"
+#include "launch_path.h"
 #include "network_profile.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -139,10 +141,11 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
     const char *hostname_override = NULL;
     struct md_network_profile network = {0};
     const char *gamepad_endpoint = NULL;
+    const char *path_prefix = NULL;
     const char *diagnostics = NULL;
-    int position = 1, commands = 0, statistics = 0;
+    int position = 1, statistics = 0;
+    size_t owner_count = 0;
     while (position < argc && strcmp(argv[position], "--")) {
-        if (!strcmp(argv[position], "--magicdesk") && !commands) { commands = 1; position++; continue; }
         if (!strcmp(argv[position], "--statistics") && !statistics) { statistics = 1; position++; continue; }
         if ((!strcmp(argv[position], "--diagnostics") || !strcmp(argv[position], "--diagnostics=signals")) && !diagnostics) {
             diagnostics=argv[position++]; continue;
@@ -166,7 +169,12 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
         }
         if (position+1 >= argc) return -EINVAL;
         const char *option = argv[position++]; char *value = argv[position++];
-        if (md_network_profile_option(option)) {
+        if (!strcmp(option, "--owner-fd")) {
+            int fd = md_owner_fd(value);
+            if (fd < 0) return fd;
+            if (fcntl(fd, F_GETFD) < 0) return -errno;
+            ++owner_count;
+        } else if (md_network_profile_option(option)) {
             int error=md_network_profile_add(&network,option,value);
             if (error) return error;
         }
@@ -176,10 +184,12 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
         else if (!strcmp(option, "--hostname") && !hostname_override && md_hostname_valid(value)) hostname_override = value;
         else if (!strcmp(option, "--gamepad-endpoint") && !gamepad_endpoint && *value) gamepad_endpoint=value;
         else if (!strcmp(option, "--env") && override_count < 128) overrides[override_count++] = value;
+        else if (!strcmp(option, "--path-prefix") && !path_prefix && *value) path_prefix = value;
         else return -EINVAL;
     }
     int network_error=md_network_profile_validate(&network);
     if (network_error) return network_error;
+    int option_end = position;
     if (position < argc) ++position;
     if (kind == MD_IMAGE_EXEC && position == argc) return -EINVAL;
     if (kind != MD_IMAGE_RUN) entry_override = "";
@@ -229,23 +239,24 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
     char *login[] = {(char *)shell, "-l"};
     if (kind == MD_IMAGE_LOGIN && position == argc) { command = login; command_count = 2; }
     size_t total = entry_count + explicit_count + command_count;
-    size_t launch_count=3+commands+statistics+!!diagnostics+2+2+md_network_profile_arguments(&network,NULL)+2*!!gamepad_endpoint+4*guest_user
+    size_t launch_count=3+2*owner_count+statistics+!!diagnostics+2+2+md_network_profile_arguments(&network,NULL)+2*!!gamepad_endpoint+4*guest_user
         +3*(attachment_count+routes.count)+8+8*(kind==MD_IMAGE_LOGIN)
-        +2*(env_count+override_count)+1+total+1;
+        +2*(env_count+override_count)+2*!!path_prefix+1+total+1;
     if (!r && (!total || launch_count>MD_EXEC_POINTERS)) r = -E2BIG;
     const char *search = md_image_environment_value(overrides, override_count, "PATH");
     if (!search) search = md_image_environment_value(env, env_count, "PATH");
+    char *search_env = NULL;
+    if (!r && path_prefix) { r = (int)md_launch_path(path_prefix, search, &search_env); if (!r) search = search_env + 5; }
     char executable[PATH_MAX], runner[PATH_MAX];
     const char *first = explicit_count ? entry_override : entry_count ? entries[0] : command_count ? command[0] : NULL;
-    if (!r && commands && first && !strcmp(first, "magicdesk")) strcpy(executable, "/run/magicdesk/magicdesk");
-    else if (!r) r = program_path(&fs, first, working, search, executable);
+    if (!r) r = program_path(&fs, first, working, search, executable);
     if (!r) {
         ssize_t n = readlink("/proc/self/exe", runner, sizeof(runner)-1);
         if (n <= 0 || n >= (ssize_t)sizeof(runner)-1) r = -ENAMETOOLONG;
         else {
             runner[n] = 0; char *last = strrchr(runner, '/');
-            if (!last || (size_t)(last-runner)+sizeof("/libmagicdesk_guest_run.so") > sizeof(runner)) r = -ENAMETOOLONG;
-            else strcpy(last, "/libmagicdesk_guest_run.so");
+            if (!last || (size_t)(last-runner)+sizeof("/libshroot_guest_run.so") > sizeof(runner)) r = -ENAMETOOLONG;
+            else strcpy(last, "/libshroot_guest_run.so");
         }
     }
     char **launch = !r ? calloc(launch_count, sizeof(*launch)) : NULL;
@@ -260,7 +271,12 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
     if (!r) {
         size_t n = 0;
         launch[n++] = runner; launch[n++] = "--store"; launch[n++] = (char *)path;
-        if (commands) launch[n++] = "--magicdesk";
+        for (int i = 1; i < option_end;) {
+            const char *option = argv[i++];
+            if (!strcmp(option, "--owner-fd")) { launch[n++] = (char *)option; launch[n++] = argv[i]; }
+            if (!strcmp(option, "--statistics") || !strncmp(option, "--diagnostics", 13)) continue;
+            i += !strncmp(option, "--bind", 6) || md_socket_route_option_valid(option) ? 2 : 1;
+        }
         if (statistics) launch[n++] = "--statistics";
         if (diagnostics) launch[n++] = (char *)diagnostics;
         launch[n++] = "--cwd"; launch[n++] = (char *)working;
@@ -294,6 +310,7 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
             launch[n++] = "--env"; launch[n++] = logname_env;
         }
         for (size_t i = 0; i < override_count; ++i) { launch[n++] = "--env"; launch[n++] = overrides[i]; }
+        if (search_env) { launch[n++] = "--env"; launch[n++] = search_env; }
         launch[n++] = "--"; size_t start = n;
         if (explicit_count) launch[n++] = (char *)entry_override;
         for (size_t i = 0; i < entry_count; ++i) launch[n++] = entries[i];
@@ -304,6 +321,7 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
         execv(runner, launch); r = -errno;
     }
     free(launch); free(json); free(cwd);
+    if (search_env) munmap(search_env, strlen(search_env) + 1);
     free(group_text); md_identity_release(&identity);
     md_json_array_free(entries, entry_count); md_json_array_free(cmd, cmd_count); md_json_array_free(env, env_count);
     md_fs_mounts_close(&fs); md_fs_storage_close(&storage); md_inode_store_close(s); return r;

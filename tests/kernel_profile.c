@@ -185,18 +185,18 @@ int md_test_kernel_profile_install(int profile) {
 }
 
 int md_test_kernel_profile_prepare(int argc,char **argv) {
-    const char *value=getenv("MAGICDESK_TEST_KERNEL_PROFILE");
+    const char *value=getenv("SHROOT_TEST_KERNEL_PROFILE");
     int profile=value && !strcmp(value,"linux-5.15") ? PROFILE_5_15 : value ? -EINVAL : 0;
-    unsetenv("MAGICDESK_TEST_KERNEL_PROFILE");
+    unsetenv("SHROOT_TEST_KERNEL_PROFILE");
     if (profile<0) {
         fputs("Unknown test kernel profile\n",stderr); exit(125);
     }
-    const char *capture=getenv("MAGICDESK_TEST_CAPTURE_FALLBACK");
+    const char *capture=getenv("SHROOT_TEST_CAPTURE_FALLBACK");
     if (capture && strcmp(capture,"1")) {
         fputs("Unknown test capture profile\n",stderr); exit(125);
     }
     if (capture) profile|=PROFILE_CAPTURE;
-    unsetenv("MAGICDESK_TEST_CAPTURE_FALLBACK");
+    unsetenv("SHROOT_TEST_CAPTURE_FALLBACK");
     if (argc==2 && !strcmp(argv[1],"--test-kernel-profile")) {
         int error=profile ? md_test_kernel_profile_install(profile) : -EINVAL;
         if (error) fprintf(stderr,"kernel profile: %s\n",strerror(-error));

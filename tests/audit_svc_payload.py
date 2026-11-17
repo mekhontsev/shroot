@@ -26,7 +26,7 @@ def audit(build):
     assert 0 < payload['Size'] < 16384
     assert not any(s['Type']['Name'] in ('SHT_REL', 'SHT_RELA') and s['Size']
                    and s['Info'] == payload['Index'] for s in table), 'copied driver has relocations'
-    binary = build / 'libmagicdesk_guest_bootstrap.so'
+    binary = build / 'libshroot_guest_bootstrap.so'
     linked, = [s for s in sections(binary) if s['Name']['Name'] == 'md_svc_payload']
     original = obj.read_bytes()[payload['Offset']:payload['Offset'] + payload['Size']]
     final = binary.read_bytes()[linked['Offset']:linked['Offset'] + linked['Size']]

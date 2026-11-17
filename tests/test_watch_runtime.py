@@ -26,8 +26,8 @@ def main():
     executor = FixtureExecutor.connect(args.build, args.executor, 'watch')
     directory = executor.root
     def executable(name):
-        return executor.native_path(directory + '/libmagicdesk_guest_' + name + '.so')
-    runner_path = directory + '/libmagicdesk_guest_run.so'
+        return executor.native_path(directory + '/libshroot_guest_' + name + '.so')
+    runner_path = directory + '/libshroot_guest_run.so'
     runner = shlex.join([runner_path, '--user', args.user])
     report = {"id": tag, "directory": directory, **executor.state,
               "executor": executor.evidence, "guestUser": args.user, "productionAdapter": True,
@@ -50,7 +50,7 @@ def main():
         if args.contracts:
             binaries.extend(("test_inodes", "test_import", "test_rpc"))
         for name in binaries:
-            binary = "libmagicdesk_guest_" + name + ".so"
+            binary = "libshroot_guest_" + name + ".so"
             target = directory + ("/rootfs/bin/watch" if name == "watch_guest" else "/" + binary)
             report["uploads"].append(executor.upload(args.build / binary, target))
             command("chmod 755 " + target)

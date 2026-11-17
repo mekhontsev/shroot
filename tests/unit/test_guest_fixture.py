@@ -29,6 +29,8 @@ class GuestFixtureTest(unittest.TestCase):
     def suite(self, mode='shell', code=0, output='output\n'):
         suite = Suite.__new__(Suite)
         suite.executor = Mock(mode=mode)
+        suite.executor.shell = '/host/bin/sh'
+        suite.executor.command_shell = '"$TEST_SHELL"'
         suite.executor.native_path.side_effect = lambda path: '/apk/test' if path == '/fixture/test' else path
         suite.executor.execute.return_value = dict(exitCode=code, output=output)
         suite.executor.client = Mock()
@@ -46,7 +48,7 @@ class GuestFixtureTest(unittest.TestCase):
                 command, timeout = suite.executor.execute.call_args.args
                 self.assertEqual(57, timeout)
                 self.assertIn(shlex.quote(shlex.join(['/apk/test', 'argument with spaces'])), command)
-                self.assertIn('"$MAGICDESK_ANDROID_SHELL" -c ', command)
+                self.assertIn('"$TEST_SHELL" -c ', command)
                 suite.client.call.assert_not_called()
                 self.assertEqual(19, suite.report['commands'][0]['exitCode'])
 

@@ -403,7 +403,7 @@ def main():
             elif args.kind == 'tap':
                 assets.update(kernel=args.kernel)
                 assets['initramfs.cpio'] = vm_archive(Path(temporary), args.initramfs,
-                                                    args.build / 'libmagicdesk_guest_packet_vm.so')
+                                                    args.build / 'libshroot_guest_packet_vm.so')
             else:
                 assets['probe_packet_runtime.py'] = Path(__file__)
                 for name in ('openvpn_packet.py', 'openvpn-dns.py', 'wireguard_packet.py', 'openconnect_packet.py', 'ipsec_packet.py', 'tailscale_packet.py'):

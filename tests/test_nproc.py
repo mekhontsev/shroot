@@ -20,7 +20,7 @@ def main():
     created = False
     try:
         for name in ('test_process_limits', 'nproc_guest', 'nofile_guest'):
-            suite.upload(args.build / ('libmagicdesk_guest_' + name + '.so'),
+            suite.upload(args.build / ('libshroot_guest_' + name + '.so'),
                                    suite.base + '/' + name)
             suite.chmod('755', suite.base + '/' + name)
         if args.case in ('all', 'native'):

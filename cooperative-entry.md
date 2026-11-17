@@ -1295,7 +1295,7 @@ its native validation. Owned service gates are routed separately so that
 implementation syscalls do not acquire a second application admission. Original
 guest calls retain their policy and denial actions; inherited Android filters
 still constrain native execution. TSYNC preserves the admission snapshot of
-already accepted work. See [policy ownership](README.md#guest-policy)
+already accepted work. See [policy ownership](architecture.md#guest-policy)
 for the shared dispatch and notification contract. A client-writable flag is an optimization,
 not authority or a security boundary; shared memory is cooperative transport for
 trusted guest code, not authentication against hostile writers in an inherited
@@ -1405,7 +1405,7 @@ Use
 `benchmark_readiness.py --statistics` for separate instrumented runs; ordinary
 paired timing runs must omit that option.
 Current device qualification and its scope are recorded in the
-[task-channel acceptance](tests/svc-rewriting.md#task-channel-acceptance).
+[task-channel acceptance](tests/svc-rewriting.md#common-entry-acceptance).
 `nativeOpen`, `nativeClose`, `nativeFlags`, `nativeDuplicate`, `nativeSeek` and
 `nativeReadiness` count admitted native plans/flag
 queries, not necessarily successful effects (a stop can cancel a plan).

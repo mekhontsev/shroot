@@ -439,7 +439,7 @@ static long ioctl_locked(struct input_reader *r,unsigned command,unsigned long v
     default: break;
     }
     if (n==6) return string_result(data,size,desc->name);
-    if (n==7) return string_result(data,size,d->backend.physical_path ? d->backend.physical_path : "magicdesk/gamepad");
+    if (n==7) return string_result(data,size,d->backend.physical_path ? d->backend.physical_path : "shroot/gamepad");
     if (n==8) return string_result(data,size,"");
     if (n==9) return size<sizeof(uint32_t) ? (long)size : (long)sizeof(uint32_t);
     if (n==0x18) return bits_result(data,size,d->keys,sizeof(d->keys));

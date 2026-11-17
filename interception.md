@@ -1040,8 +1040,10 @@ inherited FDs while the application retains caller-supplied descriptors.
 See [process lifetime](process-lifetime.md).
 
 The lazy guest probe executes under this supervisor and tests the actual kernel
-operations in the selected shell/root domain. Denial fails that guest launch;
-it does not disable Android tools, PRoot, chroot, graphics or Desktop. The APK
-does not load these native executables into ART or probe them during startup.
-Current device coverage is UID 2000, NX809J, Android 16, Linux 6.12.23, 4 KiB pages.
-Other kernels, page sizes and actual UID 0 require separate device verification.
+operations under the selected host identity. Denial fails that guest launch,
+not independent services in an embedding application. Runtime executables are
+not loaded into the embedding process or probed during its unrelated startup.
+See [host execution](tests/host-execution.md) for Android User/Shell coverage and
+[qualified hosts](tests/README.md#qualified-hosts) for standalone Android and
+Linux results, including the 16 KiB Raspberry Pi host. Untested kernels, firmware
+and actual UID 0 still require separate qualification.

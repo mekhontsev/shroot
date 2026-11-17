@@ -1,6 +1,6 @@
 # Resource Ownership Verification
 
-[Native architecture](README.md) | [Resource model](process-resources.md)
+[Native architecture](architecture.md) | [Resource model](process-resources.md)
 
 Focused native and guest checks for the [process-resource model](process-resources.md). Run commands from the repository root; BUILD selects the prepared fixture directory.
 
@@ -45,7 +45,7 @@ preparation, and GDB start/continue/exit inside a PID namespace. `--trace` repea
 production paths through stock strace. Both the command exit and explicit output
 are checked; this is compatibility coverage, not kernel-equivalent isolation.
 Chromium automatic user/PID and explicit set-ID routes are checked separately in
-[Shroot](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#application-filters-and-browsers).
+[browser fixtures](tests/browser/README.md).
 `test_resources.py BUILD --case mount-namespace` also checks PID reservations,
 nested admission, signal/wait output, zombie proc lifetime, pidfd transfer to a
 protected receiver, orphan adoption, init thread exit and nonleader debugger exec.
@@ -105,7 +105,7 @@ has separate intercepted checks. The fixture also runs in the complete resource 
 
 ## Resource Ordering And Publication
 
-With `MAGICDESK_GUEST_FIXTURES=ON`, `test_task_resources` checks independent
+With `SHROOT_BUILD_TESTS=ON`, `test_task_resources` checks independent
 ownership, transaction rollback, retained-root copies and descriptor leaks.
 Its `test_fd_origins` cases cover descriptor replacement, unknown origins,
 close-on-exec flags, ranges, cwd/root independence, all CLONE_FS/CLONE_FILES

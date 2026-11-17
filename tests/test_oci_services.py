@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stock OCI entrypoints and persistent services through the selected runtime.
 
-Run locally or through the optional on-device MagicDesk adapter. Python only
+Run locally or through an optional external test adapter. Python only
 controls fixtures; every Linux process retains the explicitly selected executor.
 Services bind loopback, use private instances and leave no running processes.
 """
@@ -135,7 +135,7 @@ class Suite:
             if session is not None:
                 assert build is None, 'Use the retained session build, not a second runtime'
                 self.runner = session['runner']
-                self.image = session.get('image') or (session['directory'] + '/libmagicdesk_guest_image.so'
+                self.image = session.get('image') or (session['directory'] + '/libshroot_guest_image.so'
                                                      if session.get('nativeBuild') else None)
                 self.report.update(session=session['id'], nativeBuild=session.get('nativeBuild'),
                     nativeHashes=session.get('nativeHashes'), entryMode=session.get('entryMode', 'default'))
@@ -143,18 +143,18 @@ class Suite:
                     lambda argv: self.command(argv, quiet=True, raw=True), session)
             elif build:
                 hashes = self.stage_runtime(build, self.base)
-                self.runner = self.executor.native_path(self.base + '/libmagicdesk_guest_run.so')
-                self.image = self.executor.native_path(self.base + '/libmagicdesk_guest_image.so')
+                self.runner = self.executor.native_path(self.base + '/libshroot_guest_run.so')
+                self.image = self.executor.native_path(self.base + '/libshroot_guest_image.so')
                 self.report['nativeBuild'] = str(build)
                 self.report['nativeHashes'] = hashes
                 self.kernel_profile.prepare(lambda argv: self.command(argv, quiet=True),
-                    self.executor.native_path(self.base + '/libmagicdesk_guest_supervisor.so'))
+                    self.executor.native_path(self.base + '/libshroot_guest_supervisor.so'))
             else:
-                self.runner = (self.executor.libraries + '/libmagicdesk_guest_run.so'
+                self.runner = (self.executor.libraries + '/libshroot_guest_run.so'
                                if self.executor.mode == 'app' else
                                self.command(['/system/bin/sh', '-c', 'command -v shroot']).strip())
                 if self.executor.mode == 'app':
-                    self.image = self.executor.libraries + '/libmagicdesk_guest_image.so'
+                    self.image = self.executor.libraries + '/libshroot_guest_image.so'
         except Exception as error:
             self.report['preparationFailure'] = repr(error)
             self.finish()
@@ -163,7 +163,7 @@ class Suite:
     def stage_runtime(self, build, directory):
         hashes = {}
         for target in ('bootstrap', 'supervisor', 'run', 'image'):
-            filename = 'libmagicdesk_guest_' + target + '.so'
+            filename = 'libshroot_guest_' + target + '.so'
             with (build / filename).open('rb') as source:
                 hashes[filename] = hashlib.file_digest(source, 'sha256').hexdigest()
             self.upload(build / filename, directory + '/' + filename)
@@ -193,20 +193,19 @@ class Suite:
     @property
     def client(self):
         if self.executor.mode == 'local':
-            raise RuntimeError('This integration requires --executor shell/app and MagicDesk')
+            raise RuntimeError('This integration requires an external host adapter')
         return self.executor.client
 
     @property
     def transport(self):
         if self.executor.mode == 'local':
-            raise RuntimeError('This integration requires --executor shell/app and MagicDesk')
+            raise RuntimeError('This integration requires an external host adapter')
         return self.executor.transport
 
     def observe(self, argv, quiet=False, timeout=180, raw=False):
         argv = [self.executor.native_path(argv[0]), *argv[1:]]
         # Built-in shell functions retain their selected identity and FPATH.
-        shell = (shlex.quote(self.executor.shell) if self.executor.mode == 'local'
-                 else '"$MAGICDESK_ANDROID_SHELL"')
+        shell = getattr(self.executor, 'command_shell', shlex.quote(self.executor.shell))
         text = shell + ' -c ' + shlex.quote(shlex.join(list(map(str, argv))))
         text = bounded_shell(self.executor, text, timeout, kill_after=15)
         text = self.kernel_profile.shell(text)
@@ -373,9 +372,9 @@ def redis(suite, store, controls=False):
             server.ready('Ready to accept connections')
             assert suite.command(client + ['PING']).strip() == 'PONG'
             if cycle == 0:
-                assert suite.command(client + ['SET', 'magicdesk-fixture', value]).strip() == 'OK'
+                assert suite.command(client + ['SET', 'shroot-fixture', value]).strip() == 'OK'
                 assert suite.command(client + ['SAVE']).strip() == 'OK'
-            assert suite.command(client + ['GET', 'magicdesk-fixture']).strip() == value
+            assert suite.command(client + ['GET', 'shroot-fixture']).strip() == value
             suite.command(client + ['SHUTDOWN', 'SAVE'])
             server.completed()
         finally:

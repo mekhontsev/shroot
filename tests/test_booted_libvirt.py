@@ -62,7 +62,7 @@ def main():
             parser.error('--network requires the official Alpine --initrd')
         from probe_packet_runtime import vm_archive
         with tempfile.TemporaryDirectory(prefix='md-libvirt-packet-') as temporary:
-            archive = vm_archive(Path(temporary), args.initrd, args.build / 'libmagicdesk_guest_packet_vm.so')
+            archive = vm_archive(Path(temporary), args.initrd, args.build / 'libshroot_guest_packet_vm.so')
             run_fixture(args.session, 'libvirt', [args.kernel, archive, '--network',
                         '--network-forward', args.network_forward],
                         [args.kernel, archive, Path(__file__).with_name('probe_packet_runtime.py'),
@@ -74,8 +74,8 @@ def main():
         if initrd is None:
             from test_kernel_vm import contract_archive
             initrd = contract_archive(Path(temporary),
-                args.build / 'libmagicdesk_guest_vm_init.so',
-                args.build / 'libmagicdesk_guest_landlock_guest.so')
+                args.build / 'libshroot_guest_vm_init.so',
+                args.build / 'libshroot_guest_landlock_guest.so')
         run_fixture(args.session, 'qemu' if args.direct else 'libvirt',
                     [args.kernel, initrd], [args.kernel, initrd],
                     prepare=None if args.direct else prepare_libvirt)

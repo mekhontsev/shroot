@@ -1,9 +1,11 @@
 # Guest Networking
 
-[Native architecture](README.md) | [Resource model](process-resources.md)
+[Native architecture](architecture.md) | [Resource model](process-resources.md)
 
-Namespace-local network configuration, supported nftables flow filtering and NAT. This is not an Android firewall or native-kernel isolation.
+Namespace-local network configuration, supported nftables flow filtering and NAT.
+This configures guest networking, not the host firewall or native-kernel isolation.
 
+- [Command Line](#command-line)
 - [Launch Profiles](#launch-profiles)
 - [Network Namespaces](#network-namespaces)
 - [Traffic Control](#traffic-control)
@@ -12,13 +14,65 @@ Namespace-local network configuration, supported nftables flow filtering and NAT
 - [Namespace-Owned Sysctls](#namespace-owned-sysctls)
 - [Namespace-Owned Sysfs](#namespace-owned-sysfs)
 
+## Command Line
+
+Networking belongs to one supervised process tree. Separate launches can use the
+same store with different policies; they do not implicitly share a network.
+
+| Option | Behavior |
+| --- | --- |
+| Omitted or `--network host` | Native host networking; no virtual network or relay |
+| `--network none` | Private loopback without an uplink |
+| `--network bridge` | Prepared private IPv4/IPv6 topology, outbound access and optional port publication |
+| `--network routed` | Logical routed backend for guests that configure their own topology, including container engines |
+
+Run an Alpine BusyBox HTTP server with a loopback-only published port:
+
+```sh
+shroot library "$HOME/linux" exec alpine --network bridge \
+  -p 127.0.0.1:8080:80 -- /bin/busybox httpd -f -p 80
+shroot library "$HOME/linux" login alpine --network none
+```
+
+Repeated `-p` / `--publish` accepts `[IPv4:]HOST:GUEST[/tcp|/udp]` or
+`[IPv6]:HOST:GUEST[/tcp|/udp]`; TCP is the default. Omitted addresses bind all host
+IPv4 addresses. Use `127.0.0.1` or `[::1]` for local access only. Ports must be
+1-65535, with at most 128 publications and no ranges or automatic selection.
+Publication requires bridge mode. Conflicts reject the launch and release all
+reservations; normal exit and cancellation also release its ports.
+
+Bridge addressing can be selected per launch:
+
+```sh
+shroot library "$HOME/linux" login alpine --network bridge \
+  --subnet 172.23.8.0/24 --ip 172.23.8.42 --gateway 172.23.8.7 \
+  --subnet fd42:1234::/64 --ip6 fd42:1234::42 --gateway fd42:1234::7
+```
+
+Use at most one subnet/gateway per family. Endpoints must be distinct unicast
+addresses within canonical subnets, without overlap with gateway uplinks
+`10.0.2.0/24` and `fd6d:6473::/64`. Omitted families retain the default topology
+below. These options do not change the installed OS or create a shared named
+network between independent supervisors.
+
+Bridge DNS uses a launch-private, read-only view of the installed resolver's
+usable non-loopback addresses. Prepare that resolver through the
+[environment library](library.md), or supply repeated `--dns ADDRESS` options.
+Without a usable resolver, bridge startup fails instead of silently choosing a
+public service. Explicit DNS also works in host/routed modes; none rejects it.
+
+External traffic retains the executor's host routing and VPN policy. Guest IPv6
+does not create a host IPv6 uplink. Backing ports and inherited descriptors retain
+host authority: these modes are not complete network isolation. See the flow,
+packet and filtering limits below before exposing services to untrusted peers.
+
 ## Launch Profiles
 
 `network_profile` owns the bounded native argument contract shared by image
 run/exec/login, the low-level runner and supervisor: host (default), none,
-bridge, the advanced routed backend, publications, DNS and per-family addressing. Java's
-`GuestNetworkProfile` only carries immutable launch arguments; native code owns
-syntax, preparation and lifetime. MCP and shell CLI use that same runner. OS
+bridge, the advanced routed backend, publications, DNS and per-family addressing.
+CLI and library clients supply immutable launch arguments; this native owner
+validates syntax, prepares topology and owns its lifetime. OS
 boot inherits the profile through its ordinary launch and namespace setup.
 
 `network_launch` prepares topology before guest execution. Host is a no-op.
@@ -64,8 +118,7 @@ catalog entry, control FD or per-read resolver work. Last-FD closure reclaims th
 backing file even after abrupt process exit. Persistent DNS installation and
 launch-local resolver configuration remain separate operations.
 
-The public [CLI contract](https://github.com/mekhontsev/magicdesk/blob/develop/docs/shroot.md#network-modes) records limits and
-isolation caveats. `test_launch_network.py` exercises independent native clients,
+`test_launch_network.py` exercises independent native clients,
 TCP/UDP publication, real resolver IO, outbound traffic and cleanup; native model
 tests also cover partial reservation rollback and typed nft round trips.
 

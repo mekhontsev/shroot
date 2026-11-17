@@ -20,14 +20,14 @@ def main():
 
     try:
         command(['mkdir', base + '/fixtures'])
-        filename = 'libmagicdesk_guest_guest_interfaces.so'
+        filename = 'libshroot_guest_guest_interfaces.so'
         destination = base + '/fixtures/' + filename
         suite.upload(args.build / filename, destination)
         suite.chmod('700', destination)
         runner = suite.runner
         root = [runner, '--store', args.store, '--user', '0:0', '--deadline-seconds', '60']
         command(root + ['--', '/bin/mkdir', '-p', '/fixture'])
-        fixture = 'libmagicdesk_guest_guest_interfaces.so'
+        fixture = 'libshroot_guest_guest_interfaces.so'
         native = command([base + '/fixtures/' + fixture, 'native'])
         controls = next(line for line in native.splitlines() if line.startswith('controls '))
         for user in ('0:0', '65534:65534', '2000:2000'):

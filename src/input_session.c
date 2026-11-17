@@ -124,7 +124,7 @@ static int publish_nodes(struct md_input_session *s,unsigned slot,const struct m
     }
     snprintf(path,sizeof(path),"%s/name",base); if ((error=text_file(sys,path,"%s\n",d->name))) return error;
     snprintf(path,sizeof(path),"%s/phys",base);
-    if ((error=backend ? text_file(sys,path,"%s\n",backend->physical_path) : text_file(sys,path,"magicdesk/gamepad%u\n",slot))) return error;
+    if ((error=backend ? text_file(sys,path,"%s\n",backend->physical_path) : text_file(sys,path,"shroot/gamepad%u\n",slot))) return error;
     snprintf(path,sizeof(path),"%s/uniq",base); if ((error=text_file(sys,path,"\n"))) return error;
     snprintf(path,sizeof(path),"%s/subsystem",base); if ((error=link_file(sys,"../../../../class/input",path))) return error;
     snprintf(path,sizeof(path),"%s/uevent",base);

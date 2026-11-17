@@ -26,7 +26,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('prepared', type=Path)
     parser.add_argument('--native-build', required=True, type=Path)
-    parser.add_argument('--graphics', action='store_true', help='Compile the optional MagicDesk launch recipe')
+    parser.add_argument('--graphics', action='store_true', help='Compile graphical guest fixtures')
     args = parser.parse_args()
     work = args.prepared.resolve(strict=True)
     native = args.native_build.resolve(strict=True)
@@ -38,7 +38,7 @@ def main():
     # These component fixtures run inside the prepared guest as well as natively.
     # A host dynamic loader must not leak into the prepared distribution.
     for name in ('inodes', 'import', 'rpc'):
-        header = subprocess.check_output(['readelf', '-l', native / f'libmagicdesk_guest_test_{name}.so'], text=True)
+        header = subprocess.check_output(['readelf', '-l', native / f'libshroot_guest_test_{name}.so'], text=True)
         if 'INTERP' in header:
             parser.error('Prepared component fixtures require SHROOT_STATIC_RUNTIME=ON')
     run('sh', SOURCE / 'build-libc-fixtures.sh', 'glibc', sysroot, work)
@@ -59,10 +59,10 @@ def main():
     shutil.copy2(work / 'md-fixture', root / 'usr/bin/md-fixture')
     shutil.copy2(work / 'md-fixture.so', root / 'usr/lib/md-fixture.so')
     for name in ('inodes', 'import', 'rpc'):
-        shutil.copy2(native / f'libmagicdesk_guest_test_{name}.so', root / f'usr/bin/md-{name}-fixture')
+        shutil.copy2(native / f'libshroot_guest_test_{name}.so', root / f'usr/bin/md-{name}-fixture')
     for name in ('bootstrap', 'supervisor', 'run', 'service', 'image'):
-        shutil.copy2(native / f'libmagicdesk_guest_{name}.so', bundle)
-    shutil.copy2(native / 'libmagicdesk_guest_capabilities.so', bundle / 'md-capabilities-test')
+        shutil.copy2(native / f'libshroot_guest_{name}.so', bundle)
+    shutil.copy2(native / 'libshroot_guest_capabilities.so', bundle / 'md-capabilities-test')
     for name in ('await-exit', 'command-test', 'sockets-test', 'lifecycle-test',
                  'notification-test', 'notification-lifecycle-test', 'exec-policy-test', 'ipc-launch', 'trace-fault',
                  'sandbox-native-test'):
@@ -88,8 +88,6 @@ def main():
     gzip = next(item for item in manifest['packages'] if item['name'] == 'gzip')
     shutil.copy2(work / Path(gzip['file']).name, root / 'tmp/md-hardlinks.deb')
     if args.graphics:
-        from graphical_recipe import compile_recipe
-        compile_recipe(work / 'recipe-classes')
         run('sh', SOURCE / 'build-graphics-fixtures.sh', sysroot, root / 'usr/bin', work)
     shutil.copy2(work / 'manifest.json', bundle)
     with tarfile.open(work / 'bundle.tar.gz', 'w:gz', compresslevel=1, dereference=False) as archive:

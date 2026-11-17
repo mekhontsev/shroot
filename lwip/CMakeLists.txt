@@ -11,7 +11,7 @@ FetchContent_Declare(guest_lwip
     URL https://codeload.github.com/lwip-tcpip/lwip/tar.gz/77dcd25a72509eb83f72b033d219b1d40cd8eb95
     URL_HASH SHA256=85a09ebe68c260d4876e800220588e5a0b624266c994cc25da978210c2813f14
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    SOURCE_SUBDIR magicdesk-no-cmake)
+    SOURCE_SUBDIR shroot-no-cmake)
 FetchContent_MakeAvailable(guest_lwip)
 set(context_source ${CMAKE_CURRENT_BINARY_DIR}/source)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/context.patch)

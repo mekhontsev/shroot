@@ -292,7 +292,7 @@ class Images(unittest.TestCase):
         except PermissionError as error:
             self.skipTest(f'native FIFO fixture unavailable under host policy: {error}')
         driver = '''import os,subprocess,sys
-env = dict(os.environ, MAGICDESK_IMAGE_OWNER_PID=str(os.getpid()))
+env = dict(os.environ, SHROOT_IMAGE_OWNER_PID=str(os.getpid()))
 child = subprocess.Popen(sys.argv[1:], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 print(child.pid, flush=True)
 sys.stdin.read()
@@ -833,7 +833,7 @@ sys.stdin.read()
         instance = self.root / 'instance'
         self.command('create', self.destination, instance)
         layer_root = self.body('data/file').parent.parent
-        check = pathlib.Path(BINARY).with_name('libmagicdesk_guest_test_snapshot.so')
+        check = pathlib.Path(BINARY).with_name('libshroot_guest_test_snapshot.so')
         result = subprocess.run([check, '--imported', instance, layer_root], capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         self.assertEqual(self.body('data/file', instance).read_bytes(), b'upper')
@@ -929,9 +929,10 @@ sys.stdin.read()
     def test_restore_rejects_invalid_metadata_and_duplicate_header(self):
         header = encoded({'format': 1, 'guestUsers': 1, 'imageConfig': {}})
         for i, entries in enumerate((
-                [('magicdesk-backup.json', 'file', header), ('magicdesk-backup.json', 'file', header)],
-                [('magicdesk-backup.json', 'file', b'{"format":1}')],
-                [('magicdesk-backup.json', 'file', header), ('rootfs/../../escaped', 'file', b'bad')])):
+                [('shroot-backup.json', 'file', header), ('shroot-backup.json', 'file', header)],
+                [('magicdesk-backup.json', 'file', header), ('shroot-backup.json', 'file', header)],
+                [('shroot-backup.json', 'file', b'{"format":1}')],
+                [('shroot-backup.json', 'file', header), ('rootfs/../../escaped', 'file', b'bad')])):
             archive = self.root / ('invalid'+str(i)+'.tar')
             archive.write_bytes(tar(entries))
             self.command('restore', archive, self.destination, success=False)
@@ -982,6 +983,23 @@ sys.stdin.read()
         info = json.loads(self.command('inspect', self.destination).stdout)
         self.assertEqual(info['guestUsers'], 1)
         self.assertEqual(info['config'], {'config': {'Cmd': ['/bin/sh']}})
+
+        backup = self.root / 'current.tar.zst'
+        self.command('backup', self.destination, backup)
+        raw = subprocess.run(['zstd', '-q', '-d', '-c', str(backup)],
+                             check=True, capture_output=True).stdout
+        with tarfile.open(fileobj=io.BytesIO(raw)) as exported:
+            self.assertIn('shroot-backup.json', exported.getnames())
+            self.assertNotIn('magicdesk-backup.json', exported.getnames())
+            keys = {key for entry in exported for key in entry.pax_headers}
+            self.assertTrue(any(key.endswith('shroot.backup.mode') for key in keys), keys)
+            self.assertFalse(any(key.endswith('magicdesk.backup.mode') for key in keys), keys)
+        restored = self.root / 'current'
+        self.command('restore', backup, restored)
+        self.assertEqual(self.body('file', restored), self.body('alias', restored))
+        with database(restored / 'namespace.db') as db:
+            self.assertEqual(db.execute('SELECT uid,gid,mode FROM objects WHERE uid=42').fetchone(),
+                             (42, 43, 0o6750))
 
     def test_backup_rejects_live_store_and_existing_output(self):
         self.run_import(self.layout())
@@ -1173,9 +1191,9 @@ sys.stdin.read()
         header = encoded({'format': 1, 'guestUsers': 1, 'imageConfig': {}})
         archive = self.root / 'private.tar'
         archive.write_bytes(tar([
-            ('magicdesk-backup.json', 'file', header),
+            ('shroot-backup.json', 'file', header),
             ('rootfs/file', 'file', b'body', 0o644, 0, 0,
-             {'magicdesk.backup.mode': (0o644).to_bytes(2, 'little'), 'user.shroot.metadata': b'forged'}),
+             {'shroot.backup.mode': (0o644).to_bytes(2, 'little'), 'user.shroot.metadata': b'forged'}),
         ]))
         result = self.command('restore', archive, self.destination, success=False)
         self.assertIn(os.strerror(errno.EPERM), result.stderr)
@@ -1227,5 +1245,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('build', type=pathlib.Path)
     args, rest = parser.parse_known_args()
-    BINARY = str((args.build / 'libmagicdesk_guest_image.so').resolve())
+    BINARY = str((args.build / 'libshroot_guest_image.so').resolve())
     unittest.main(argv=[__file__, *rest])

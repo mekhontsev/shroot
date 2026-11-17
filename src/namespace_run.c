@@ -9,6 +9,8 @@
 #include "host_identity.h"
 #include "arguments.h"
 #include "network_profile.h"
+#include "launch_resources.h"
+#include "launch_path.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -27,12 +29,15 @@ void md_boot(uintptr_t *stack) {
         md_die("usage: guest-run --store HOST_PATH [--cwd GUEST_PATH] -- PROGRAM [ARGS]", -EINVAL);
     const char *store = NULL, *cwd = "/", *home = "/tmp", *admit = NULL, *run_deadline = NULL;
     const char *diagnostics = NULL;
-    int statistics = 0, commands = 0;
+    int statistics = 0;
+    struct md_arguments owners;
+    md_arguments_init(&owners);
     const char *user = NULL;
     const char *groups = NULL;
     const char *hostname = NULL;
     struct md_network_profile network = {0};
     const char *gamepad_endpoint = NULL;
+    const char *path_prefix = NULL;
     char *overrides[128]; unsigned override_count = 0;
     struct md_fs_attachment attachments[MD_FS_MOUNTS_MAX]; unsigned attachment_count = 0;
     size_t program = 1;
@@ -41,7 +46,6 @@ void md_boot(uintptr_t *stack) {
             diagnostics = argv[program++]; continue;
         }
         if (md_equal(argv[program], "--statistics")) { statistics = 1; program++; continue; }
-        if (md_equal(argv[program], "--magicdesk") && !commands) { commands = 1; program++; continue; }
         if (program + 1 >= argc) md_die("missing launch option value", -EINVAL);
         if (md_equal(argv[program], "--bind") || md_equal(argv[program], "--bind-ro")
                 || md_equal(argv[program], "--bind-create") || md_equal(argv[program], "--bind-store-ro")
@@ -61,10 +65,14 @@ void md_boot(uintptr_t *stack) {
             program += 3;
             continue;
         }
-        if (md_equal(argv[program], "--store") && !store) store = argv[program + 1];
+        if (md_equal(argv[program], "--owner-fd")) {
+            int error = md_owner_fds_add(&owners, argv[program + 1]);
+            if (error) md_die("invalid owner descriptor", error);
+        } else if (md_equal(argv[program], "--store") && !store) store = argv[program + 1];
         else if (md_equal(argv[program], "--cwd")) cwd = argv[program + 1];
         else if (md_equal(argv[program], "--home")) home = argv[program + 1];
         else if (md_equal(argv[program], "--gamepad-endpoint") && !gamepad_endpoint) gamepad_endpoint=argv[program+1];
+        else if (md_equal(argv[program], "--path-prefix") && !path_prefix) path_prefix=argv[program+1];
         else if (md_network_profile_option(argv[program])) {
             int error=md_network_profile_add(&network,argv[program],argv[program+1]);
             if (error) md_die("invalid network option",error);
@@ -101,22 +109,19 @@ void md_boot(uintptr_t *stack) {
     if (user && (environment_result = md_launch_environment_user(&guest_environment, user)) < 0)
         md_die("guest user environment", environment_result);
     for (unsigned i = 0; i < override_count; ++i) {
-        if (md_prefix(overrides[i], "MAGICDESK_COMMAND_")) md_die("command channel requires --magicdesk", -EINVAL);
         environment_result = md_launch_environment_set(&guest_environment, overrides[i]);
         if (environment_result < 0) md_die("invalid guest environment override", environment_result);
     }
-    if (commands) {
-        unsigned found = 0;
-        for (unsigned i = 0; env[i]; i++) {
-            if (md_prefix(env[i], "MAGICDESK_COMMAND_ENDPOINT=") || md_prefix(env[i], "MAGICDESK_COMMAND_BUILD=")) {
-                environment_result = md_launch_environment_set(&guest_environment, env[i]);
-                if (environment_result < 0) md_die("command environment", environment_result);
-                ++found;
-            }
-        }
-        if (found != 2) md_die("--magicdesk requires a live MagicDesk command environment", -ENOTCONN);
-    }
     if (admit && admit[0] != '/') md_die("admitted ELF must be absolute", -EINVAL);
+    if (path_prefix) {
+        const char *path = NULL;
+        for (unsigned i = 0; guest_environment.values[i]; ++i)
+            if (md_prefix(guest_environment.values[i], "PATH=")) path = guest_environment.values[i] + 5;
+        char *entry = NULL;
+        long error = md_launch_path(path_prefix, path, &entry);
+        if (!error) error = md_launch_environment_set(&guest_environment, entry);
+        if (error < 0) md_die("guest search path", error);
+    }
     char bootstrap[PATH_MAX], supervisor[PATH_MAX], endpoint[96] = "md-namespace-";
     long executable = RAW4(readlinkat, AT_FDCWD, "/proc/self/exe", bootstrap, sizeof(bootstrap) - 1);
     if (executable <= 0 || executable == sizeof(bootstrap) - 1) md_die("runner identity", -EIO);
@@ -124,8 +129,8 @@ void md_boot(uintptr_t *stack) {
     while (executable && bootstrap[executable - 1] != '/') --executable;
     bootstrap[executable] = 0;
     if (!executable || md_copy(supervisor, sizeof(supervisor), bootstrap) ||
-        md_append(supervisor, sizeof(supervisor), "libmagicdesk_guest_supervisor.so") ||
-        md_append(bootstrap, sizeof(bootstrap), "libmagicdesk_guest_bootstrap.so"))
+        md_append(supervisor, sizeof(supervisor), "libshroot_guest_supervisor.so") ||
+        md_append(bootstrap, sizeof(bootstrap), "libshroot_guest_bootstrap.so"))
         md_die("runtime path", -ENAMETOOLONG);
     md_decimal(endpoint + md_length(endpoint), (unsigned long)RAW0(getpid));
     struct md_process_signals signals;
@@ -136,7 +141,7 @@ void md_boot(uintptr_t *stack) {
     if (!guard) {
         struct md_arguments arguments;
         md_arguments_init(&arguments);
-        long error=md_arguments_reserve(&arguments,argc-program+34+3*(md_connections.count+attachment_count)
+        long error=md_arguments_reserve(&arguments,argc-program+34+2*owners.count+3*(md_connections.count+attachment_count)
             +md_network_profile_arguments(&network,NULL));
         if (error<0) md_die("launch arguments",error);
         char **args=arguments.values;
@@ -144,7 +149,7 @@ void md_boot(uintptr_t *stack) {
         unsigned n = 1;
         if (diagnostics) args[n++] = (char *)diagnostics;
         if (statistics) args[n++] = "--statistics";
-        if (commands) args[n++] = "--magicdesk";
+        for (size_t i = 0; i < owners.count; ++i) { args[n++] = "--owner-fd"; args[n++] = owners.values[i]; }
         if (run_deadline) { args[n++] = "--deadline-seconds"; args[n++] = (char *)run_deadline; }
         args[n++]="--runtime-tmp"; args[n++]=(char *)runtime_tmp;
         if (admit) { args[n++] = "--admit-elf"; args[n++] = (char *)admit; }

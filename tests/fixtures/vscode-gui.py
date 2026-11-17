@@ -63,7 +63,7 @@ def main():
     extension = work / 'driver'
     extension.mkdir()
     (extension / 'package.json').write_text(json.dumps({
-        'name': 'guest-debug-fixture', 'publisher': 'magicdesk-fixture', 'version': '1.0.0',
+        'name': 'guest-debug-fixture', 'publisher': 'shroot-fixture', 'version': '1.0.0',
         'engines': {'vscode': '^1.90.0'}, 'main': './extension.js',
         'activationEvents': ['onStartupFinished'], 'extensionDependencies': ['ms-vscode.cpptools']}))
     shutil.copyfile(args.driver, extension / 'extension.js')

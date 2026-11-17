@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 static struct shroot_result wait_job(shroot_job *job) {
@@ -38,16 +39,27 @@ static void execute(shroot_store *store, const char *argument, int expected) {
 }
 static void cancellation(shroot_store *store) {
     int ready[2]; assert(!pipe2(ready, O_CLOEXEC));
-    const char *argv[] = {"/bin/client-guest", "hold", NULL};
-    struct shroot_launch_options options = {.kind=SHROOT_EXEC, .arguments=argv};
+    int leases[2][2];
+    for (int i = 0; i < 2; ++i) assert(!socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, leases[i]));
+    int owners[] = {leases[0][1], leases[1][1]};
+    const char *argv[] = {"/bin/client-guest", "hold-owner", NULL};
+    struct shroot_launch_options options = {.kind=SHROOT_EXEC, .arguments=argv, .owner_fds=owners, .owner_fd_count=2};
     struct shroot_io io = {-1, ready[1], 2, NULL};
     shroot_job *job = NULL;
     assert(!shroot_launch(store, &options, &io, &job));
+    for (int i = 0; i < 2; ++i) {
+        assert(fcntl(owners[i], F_GETFD) == FD_CLOEXEC);
+        close(owners[i]);
+    }
     close(ready[1]);
     struct pollfd fd = {ready[0], POLLIN, 0};
     /* EVENT_WAIT: guest has entered its blocking work before cancellation. */
     assert(poll(&fd, 1, 30000) == 1 && (fd.revents & POLLIN));
     char data[6]; assert(read(ready[0], data, sizeof(data)) == sizeof(data));
+    for (int i = 0; i < 2; ++i) {
+        struct pollfd lease = {leases[i][0], POLLIN, 0};
+        assert(poll(&lease, 1, 0) == 0);
+    }
     assert(!shroot_job_cancel(job));
     struct shroot_result result = wait_job(job);
     if (result.error || (result.exit_code != 128 + SIGTERM && result.signal != SIGTERM))
@@ -57,6 +69,12 @@ static void cancellation(shroot_store *store) {
     /* EVENT_WAIT: no descendant retains the output pipe after tree cleanup. */
     assert(poll(&fd, 1, 5000) == 1 && (fd.revents & POLLHUP));
     close(ready[0]);
+    for (int i = 0; i < 2; ++i) {
+        struct pollfd lease = {leases[i][0], POLLIN, 0};
+        assert(poll(&lease, 1, 5000) == 1 && (lease.revents & POLLHUP));
+        close(leases[i][0]);
+    }
+    puts("PASS owner FDs: caller flags retained, guest isolation, whole-tree custody and cancellation release");
 }
 int main(int argc, char **argv) {
     assert(argc == 4);
