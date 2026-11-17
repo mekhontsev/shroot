@@ -327,7 +327,7 @@ int md_domain_open_retained(int directory, pid_t caller, const char *path, int f
     if (path[0] == '/') return -EACCES;
     /* Read-only capability exercise. Mutations and magic-link traversal need a
      * complete resource policy, not an implicit escape to the host namespace. */
-    if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | __O_TMPFILE))) return -ENOTSUP;
+    if ((flags & MD_O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | MD_O_TMPFILE_BIT))) return -ENOTSUP;
     struct stat held, proc;
     if (fstat(directory, &held)) return -errno;
     if (!S_ISDIR(held.st_mode)) return -ENOTDIR;

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "image_maintenance.h"
 #include "image_library.h"
 #include "storage_paths.h"
@@ -118,7 +119,7 @@ int md_image_relocate_library(const char *source,const char *destination) {
     for (struct store_lease *p=leases;!r && p;p=p->next) r=relative_sources(p->fd,origin);
     if (!r && (fstat(root,&opened) || lstat(source,&existing)
             || !opened.st_nlink || opened.st_dev!=existing.st_dev || opened.st_ino!=existing.st_ino)) r=-ESTALE;
-    if (!r && syscall(SYS_renameat2,AT_FDCWD,source,parent,name,RENAME_NOREPLACE)) r=-errno;
+    if (!r) r=(int)md_host_rename(AT_FDCWD,source,parent,name,RENAME_NOREPLACE);
     if (!r && (fsync(parent) || fsync(previous_parent))) r=-errno;
     while (leases) { struct store_lease *p=leases; leases=p->next; close(p->fd); free(p); }
     if (catalog>=0) close(catalog);

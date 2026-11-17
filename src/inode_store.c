@@ -1,8 +1,10 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "inode_internal.h"
 #include "inode_overlay.h"
 #include "inode_leaf.h"
 #include "inode_native.h"
+#include "host_open.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fs.h>
@@ -12,8 +14,7 @@
 #include <unistd.h>
 
 int md_inode_temporary(struct md_inode_store *s) {
-    int fd = openat(s->objects, ".", O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
-    return fd < 0 ? -errno : fd;
+    return (int)md_host_temporary(s->objects,".",0600);
 }
 
 int md_inode_object_id(struct md_inode_store *s, int fd, char out[33]) {
@@ -67,7 +68,7 @@ static int create_node(struct md_inode_store *s, int dirfd, const char *path,
             && !md_identity_capable(s->identity,CAP_MKNOD)) r=-EPERM;
     if (!r) r=mdi_landlock(s,&loc.parent,NULL,md_landlock_make_access(kind));
     if (!r && kind==S_IFREG) {
-        int fd=mdi_leaf_create(s,&loc.parent,loc.name,O_RDWR,mode);
+        int fd=mdi_leaf_create(s,&loc.parent,loc.name,O_PATH,mode);
         if (fd!=-EOPNOTSUPP) {
             r=mdi_finish(s,fd<0 ? fd : 0);
             if (r && fd>=0) close(fd);
@@ -77,7 +78,7 @@ static int create_node(struct md_inode_store *s, int dirfd, const char *path,
     if (!r) r=mdi_write(s);
     struct mdi_node node;
     int fd = -1;
-    if (!r) r = mdi_allocate(s, kind, mode, O_RDWR, target,
+    if (!r) r = mdi_allocate(s, kind, mode, O_PATH, target,
         loc.parent.id, &node, &fd);
     if (!r && (kind==S_IFCHR || kind==S_IFBLK)) r=mdi_device_number(s,&node,device);
     if (!r) r = mdi_add_name(s, loc.parent.id, loc.name, node.id);
@@ -184,9 +185,9 @@ static int open_resolved(struct md_inode_store *s, int dirfd, const char *path, 
     *completion = (struct md_open_completion){0};
     if (birth && (!native_plan || *birth)) return -EINVAL;
     if (native_plan && !md_open_native_plan(flags,birth!=NULL)) return -EXDEV;
-    if (flags & ~(O_ACCMODE | O_CLOEXEC | O_APPEND | O_TRUNC | O_NOFOLLOW | O_DIRECTORY | O_PATH
+    if (flags & ~(MD_O_ACCMODE | O_CLOEXEC | O_APPEND | O_TRUNC | O_NOFOLLOW | O_DIRECTORY | O_PATH
             | O_CREAT | O_EXCL | O_NONBLOCK | O_NOCTTY | O_NOATIME | MD_O_LARGEFILE | O_SYNC | O_DSYNC | O_DIRECT)) return -ENOTSUP;
-    if ((flags & O_ACCMODE) == O_ACCMODE) return -EINVAL;
+    if ((flags & MD_O_ACCMODE) == MD_O_ACCMODE) return -EINVAL;
     if (flags & O_PATH) flags &= O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
     int create = flags & O_CREAT;
     if (create && (flags & O_DIRECTORY)) return -EINVAL;
@@ -201,7 +202,7 @@ static int open_resolved(struct md_inode_store *s, int dirfd, const char *path, 
     int fd=pin.fd;
     /* The selected provider owns data-open semantics. Do not reject this
      * inode endpoint combination before discovering a mount crossing. */
-    if (!r && (flags&O_TRUNC) && !(flags&O_ACCMODE)) r=-EINVAL;
+    if (!r && (flags&O_TRUNC) && !(flags&MD_O_ACCMODE)) r=-EINVAL;
     if (!r && create && loc.trailing) r = -EISDIR;
     if (!r && create && (flags & O_EXCL) && loc.exists) r = -EEXIST;
     if (!r && !loc.exists) {
@@ -280,10 +281,18 @@ static int open_resolved(struct md_inode_store *s, int dirfd, const char *path, 
     int directory = r ? -1 : mdi_backing_directory(s, &loc.node);
     if (!r && directory < 0) r = directory;
     int deferred = !r && loc.node.kind == S_IFIFO && !(flags & O_PATH);
-    int native_flags = deferred || device ? O_PATH : flags & ~(O_CREAT | O_EXCL);
+    int reopen=!plan && !deferred && !device && !(flags&O_NOFOLLOW);
+    int native_flags = deferred || device || reopen ? O_PATH : flags & ~(O_CREAT | O_EXCL);
     if (plan) native_flags=O_PATH;
     if (!r && image) r=mdi_leaf_promote(s,&loc.node);
     if (!r && fd<0 && (fd=mdi_backing_open(s,&loc.node,native_flags))<0) r=fd;
+    /* Private lookup flags belong to the pin, not the published description. */
+    if (!r && reopen) {
+        int pin=fd;
+        fd=md_open_pinned(pin,flags);
+        close(pin);
+        if (fd<0) r=fd;
+    }
     if (!r && plan && pin.fd<0) r=mdi_backing_fstat(&loc.node,fd,&st);
     if (!r && image) {
         struct stat opened;
@@ -424,8 +433,8 @@ int md_inode_rename(struct md_inode_store *s, int sourcefd, const char *source,
         if (n<0 || (size_t)n>=sizeof(target)) r=-ENAMETOOLONG;
         else {
             int from=mdi_directory_pin(s,&a.parent),to=mdi_directory_pin(s,&b.parent);
-            if (renameat2(from<0 ? s->objects : from,from<0 ? a.node.backing : a.name,
-                    to<0 ? s->objects : to,to<0 ? target : b.name,flags)) r=-errno;
+            r=(int)md_host_rename(from<0 ? s->objects : from,from<0 ? a.node.backing : a.name,
+                    to<0 ? s->objects : to,to<0 ? target : b.name,flags);
         }
         return mdi_finish(s,r);
     }

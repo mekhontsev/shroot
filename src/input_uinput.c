@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <linux/magic.h>
 #include <linux/uinput.h>
+#include <asm/ioctl.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -174,7 +175,7 @@ static void output(void *context,const struct input_event *event) {
 }
 static long request_resume(struct md_control_pending *base,void *data,size_t size) {
     (void)data; (void)size; struct ui_request *r=(void *)base;
-    pthread_mutex_lock(&r->state->lock); long result=r->done ? r->result : -EINPROGRESS;
+    pthread_mutex_lock(&r->state->lock); long result=r->done ? r->result : MD_OPERATION_PENDING;
     pthread_mutex_unlock(&r->state->lock); return result;
 }
 static void request_dispose(struct md_control_pending *base) {
@@ -206,7 +207,7 @@ static long effect(void *context,const struct ff_effect *value,const struct ff_e
     }
     pthread_mutex_unlock(&s->lock);
     if (error) { free(r); return error; }
-    return -EINPROGRESS;
+    return MD_OPERATION_PENDING;
 }
 static int ioctl_spec(void *context,unsigned command,struct md_control_ioctl *spec) {
     (void)context; *spec=(struct md_control_ioctl){0};

@@ -6,6 +6,11 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+/* Exercise the freestanding symbols even when host headers only offer macros. */
+uint16_t (htons)(uint16_t);
+uint16_t (ntohs)(uint16_t);
+uint32_t (htonl)(uint32_t);
+uint32_t (ntohl)(uint32_t);
 
 static unsigned char *guarded(size_t size) {
     size_t page=(size_t)sysconf(_SC_PAGESIZE);
@@ -14,6 +19,8 @@ static unsigned char *guarded(size_t size) {
     return p+page;
 }
 int main(void) {
+    assert((htons)(0x1234)==0x3412 && (ntohs)(0x3412)==0x1234);
+    assert((htonl)(0x12345678)==0x78563412 && (ntohl)(0x78563412)==0x12345678);
     size_t page=(size_t)sysconf(_SC_PAGESIZE);
     unsigned char *a=guarded(page),*b=guarded(page),expected[512];
     for (size_t n=0;n<=257;++n) for (size_t src=0;src<16;++src) for (size_t dst=0;dst<16;++dst) {

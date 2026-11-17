@@ -31,7 +31,8 @@ int md_fs_provider_operation(struct md_filesystem *fs,struct md_mount_namespace 
     }
     if (q->operation==MD_FS_STATFS) {
         md_fs_statfs_result(fd,md_view_policy_flags(mount),NULL,out,output);
-        unsigned long type=md_provider_tree_filesystem(mount->provider);
+        unsigned long type=0;
+        if (!out->error) out->error=md_provider_tree_filesystem_at(mount->provider,fd,&type);
         if (!out->error && type) ((struct md_fs_statfs *)output->data)->type=type;
         return 1;
     }
@@ -50,7 +51,7 @@ int md_fs_provider_operation(struct md_filesystem *fs,struct md_mount_namespace 
     if (managed<0) { out->error=managed; return 1; }
     if (!managed) {
         int write_open=(q->operation==MD_FS_OPEN || q->operation==MD_FS_REOPEN)
-            && !(q->flags&O_PATH) && (q->flags&(O_ACCMODE|O_TRUNC));
+            && !(q->flags&O_PATH) && (q->flags&(MD_O_ACCMODE|O_TRUNC));
         int write_xattr=q->operation==MD_FS_XATTR_OBJECT
             && (q->mode==MD_FS_XATTR_SET || q->mode==MD_FS_XATTR_REMOVE);
         if (write_open || write_xattr) {
@@ -84,8 +85,8 @@ int md_fs_provider_operation(struct md_filesystem *fs,struct md_mount_namespace 
                 && (md_mount_policy_flags(&mount->policy)&MD_MOUNT_NODEV)) { result=-EACCES; break; }
         if (!(flags&O_PATH) && (flags&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) { result=-EEXIST; break; }
         if (flags&O_DIRECTORY || ((flags&O_TRUNC) && !S_ISREG(st.st_mode))
-                || (flags&O_ACCMODE)==O_ACCMODE) { result=-EINVAL; break; }
-        if (!(flags&O_PATH) && (flags&(O_ACCMODE|O_TRUNC)) && md_view_readonly(mount)
+                || (flags&MD_O_ACCMODE)==MD_O_ACCMODE) { result=-EINVAL; break; }
+        if (!(flags&O_PATH) && (flags&(MD_O_ACCMODE|O_TRUNC)) && md_view_readonly(mount)
                 && !S_ISCHR(st.st_mode) && !S_ISBLK(st.st_mode)) { result=-EROFS; break; }
         if (!output || !output->control) { out->requires_control=1; result=-EOPNOTSUPP; break; }
         struct md_fs_anchor *origin=NULL;

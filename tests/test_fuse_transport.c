@@ -42,7 +42,7 @@ static void basics(void) {
     assert(md_fuse_connection_poll(c)==POLLOUT);
     struct md_fuse_request *a=submit(c,0,wake),*b=submit(c,0,wake);
     assert(md_fuse_connection_poll(c)==(POLLIN|POLLOUT));
-    assert(md_fuse_request_result(a,data,sizeof(data))==-EINPROGRESS);
+    assert(md_fuse_request_result(a,data,sizeof(data))==MD_OPERATION_PENDING);
     assert(md_fuse_connection_read(c,data,1)==-EINVAL);
     uint64_t id=receive(c,0);
     assert(receive(c,0)==id); /* Failed guest copy does not consume a message. */
@@ -57,6 +57,13 @@ static void basics(void) {
     struct pollfd poller={fd,POLLIN,0}; assert(poll(&poller,1,0)==1);
     assert(md_fuse_connection_poll(c)==POLLOUT);
     dispose(a); dispose(b);
+    const int terminal_errors[]={EINPROGRESS,EAGAIN,EINTR,EIO,4095};
+    for (unsigned i=0;i<sizeof(terminal_errors)/sizeof(*terminal_errors);++i) {
+        a=submit(c,0,wake); id=receive(c,1);
+        assert(reply(c,id,-terminal_errors[i])>0 && md_fuse_request_ready(a));
+        assert(md_fuse_request_result(a,NULL,0)==-terminal_errors[i]);
+        dispose(a);
+    }
     struct md_fuse_request *n=submit(c,1,wake);
     id=receive(c,1); assert(md_fuse_request_result(n,NULL,0)==0);
     assert(reply(c,id,0)==-ENOENT); dispose(n);

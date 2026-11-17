@@ -4,7 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/filter.h>
-#include <linux/stat.h>
+#include "../src/statx_abi.h"
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
@@ -74,7 +74,7 @@ static void install_filter(void) {
 }
 static void reads(int file,int directory,int filtered,int protected,int restart) {
     struct stat st;
-    struct statx sx;
+    struct md_statx sx;
     struct statfs space;
     char value[256];
     const char *name="metadata-notification",*attribute="user.metadata";

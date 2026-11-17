@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "proc_file.h"
 #include "process_oom.h"
 #include "proc_sysctl.h"
@@ -35,6 +36,8 @@ struct md_proc_file {
     int process_state;
     int process_inspectable;
     struct md_signal_status signals;
+    struct md_proc_syscall_view syscall;
+    int syscall_known;
     struct md_process_limits limits;
     int limits_valid;
     enum md_proc_file_kind kind;
@@ -122,15 +125,15 @@ struct md_proc_file *md_proc_file_open(struct md_user_namespace *target,
     int error=!opener || kind<MD_PROC_FILE_UID_MAP || kind>MD_PROC_FILE_CONTROL ? EINVAL : 0;
     int directory=md_proc_file_directory(kind);
     if (!error && (flags&O_DIRECTORY) && !directory) error=ENOTDIR;
-    if (!error && directory && !(flags&O_PATH) && ((flags&O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) error=EISDIR;
+    if (!error && directory && !(flags&O_PATH) && ((flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) error=EISDIR;
     if (!error && (flags&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) error=EEXIST;
-    if (!error && !(flags&O_PATH) && (flags&O_ACCMODE)==O_ACCMODE) error=EINVAL;
+    if (!error && !(flags&O_PATH) && (flags&MD_O_ACCMODE)==MD_O_ACCMODE) error=EINVAL;
     if (!error && !(flags&O_PATH) && (md_proc_file_namespace(kind) || md_proc_file_process(kind) || md_proc_file_cgroup_kind(kind))
-            && ((flags&O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) error=EACCES;
-    if (!error && !(flags&O_PATH) && (flags&O_ACCMODE)!=O_RDONLY && kind==MD_PROC_FILE_SETGROUPS
+            && ((flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) error=EACCES;
+    if (!error && !(flags&O_PATH) && (flags&MD_O_ACCMODE)!=O_RDONLY && kind==MD_PROC_FILE_SETGROUPS
             && !md_identity_capable_in(opener,target,CAP_SYS_ADMIN)) error=EACCES;
     if (!error && !(flags&O_PATH) && md_proc_file_sysctl(kind))
-        error=-md_proc_sysctl_access(kind,opener,(flags&O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC) ? W_OK : R_OK,1);
+        error=-md_proc_sysctl_access(kind,opener,(flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC) ? W_OK : R_OK,1);
     if (error) { errno=error; return NULL; }
     struct md_proc_file *f=calloc(1,sizeof(*f));
     if (!f) return NULL;
@@ -148,8 +151,8 @@ struct md_proc_file *md_proc_file_open_control(const struct md_control_file_ops 
     if (!opener || !opener->identity) { errno=EINVAL; return NULL; }
     const struct md_identity *id=opener->identity;
     if (ops==&task_ops) return md_proc_file_reopen(context,opener,flags);
-    int mode=(flags&O_PATH) ? 0 : (flags&O_ACCMODE)==O_RDWR ? R_OK|W_OK
-        : (flags&O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
+    int mode=(flags&O_PATH) ? 0 : (flags&MD_O_ACCMODE)==O_RDWR ? R_OK|W_OK
+        : (flags&MD_O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
     if (!(flags&O_PATH) && (flags&O_TRUNC)) mode|=W_OK;
     int error=!ops || !context ? -EINVAL : ops->access(context,id,(unsigned)mode);
     if (!error && (flags&O_NOATIME) && !(flags&O_PATH)) {
@@ -165,7 +168,7 @@ struct md_proc_file *md_proc_file_open_control(const struct md_control_file_ops 
         error=ops->stat(context,&metadata);
         if (!error) directory=S_ISDIR(metadata.st_mode);
         if (!error && (flags&O_DIRECTORY) && !directory) error=-ENOTDIR;
-        if (!error && directory && !(flags&O_PATH) && ((flags&O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) error=-EISDIR;
+        if (!error && directory && !(flags&O_PATH) && ((flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) error=-EISDIR;
         if (error) { errno=-error; return NULL; }
     }
     struct md_proc_file *f=md_proc_file_open(NULL,ref
@@ -200,7 +203,7 @@ unsigned long md_proc_file_filesystem(const struct md_proc_file *f) {
 int md_proc_file_mapping(const struct md_proc_file *f,unsigned protection,unsigned flags) {
     if (!f || !f->control || (!f->control->mappable && !f->control->mapping)) return -ENODEV;
     if (f->flags&O_PATH) return -EBADF;
-    if ((f->flags&O_ACCMODE)==O_WRONLY) return -EACCES;
+    if ((f->flags&MD_O_ACCMODE)==O_WRONLY) return -EACCES;
     return (flags&MAP_SHARED) && (protection&PROT_WRITE) ? -EACCES : 0;
 }
 int md_proc_file_fcntl(struct md_proc_file *f,int command,unsigned long argument,long *out) {
@@ -209,7 +212,7 @@ int md_proc_file_fcntl(struct md_proc_file *f,int command,unsigned long argument
     if (command==F_GETFL) *out=flags&~(O_CLOEXEC|O_CREAT|O_EXCL|O_TRUNC);
     else if (flags&O_PATH) *out=-EBADF;
     else if (command==F_GET_SEALS) *out=f->control && f->control->seals ? f->control->seals(f->control_context) : -EINVAL;
-    else if (command==F_ADD_SEALS && (flags&O_ACCMODE)==O_RDONLY) *out=-EPERM;
+    else if (command==F_ADD_SEALS && (flags&MD_O_ACCMODE)==O_RDONLY) *out=-EPERM;
     else if (command==F_SETFL) {
         unsigned mutable=O_APPEND|O_NONBLOCK|O_NOATIME;
         if (argument&(O_DIRECT|O_ASYNC)) *out=-EOPNOTSUPP;
@@ -312,7 +315,7 @@ struct md_proc_file *md_proc_file_reopen(const struct md_proc_file *f,
     if (!opener || !opener->identity) { errno=EINVAL; return NULL; }
     if (f->control && f->control->no_reopen) return anonymous_reopen(f,opener,flags);
     if (f->placement && !f->control && !(flags&O_PATH)) {
-        unsigned mode=(flags&O_ACCMODE)==O_RDWR ? R_OK|W_OK : (flags&O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
+        unsigned mode=(flags&MD_O_ACCMODE)==O_RDWR ? R_OK|W_OK : (flags&MD_O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
         if (flags&O_TRUNC) mode|=W_OK;
         int error=(mode&W_OK) && (md_fs_anchor_policy(f->placement)&MD_MOUNT_READONLY) ? -EROFS
             : md_proc_file_task_access(opener->identity,&f->metadata,mode,1);
@@ -449,7 +452,7 @@ int md_proc_file_descriptor(const struct md_proc_file *f) {
         if (f->backing>=0) {
             int flags=fcntl(f->backing,F_GETFL);
             if (flags<0) return -errno;
-            if ((flags&(O_PATH|O_ACCMODE))!=(f->flags&(O_PATH|O_ACCMODE))) return -EACCES;
+            if ((flags&(O_PATH|MD_O_ACCMODE))!=(f->flags&(O_PATH|MD_O_ACCMODE))) return -EACCES;
             int fd=fcntl(f->backing,F_DUPFD_CLOEXEC,0);
             return fd<0 ? -errno : fd;
         }
@@ -475,7 +478,7 @@ int md_proc_file_access(const struct md_proc_file *f, enum md_proc_file_operatio
     if ((md_proc_file_directory(f->kind) || f->control_directory) && operation!=MD_PROC_FILE_SEEK) return -EISDIR;
     if (md_proc_file_namespace(f->kind)) return operation==MD_PROC_FILE_SEEK ? -ESPIPE : -EINVAL;
     if (operation==MD_PROC_FILE_SEEK && f->control && f->control->nonseekable) return -ESPIPE;
-    int mode=f->flags&O_ACCMODE;
+    int mode=f->flags&MD_O_ACCMODE;
     return (operation==MD_PROC_FILE_READ && mode==O_WRONLY)
         || (operation==MD_PROC_FILE_WRITE && mode==O_RDONLY) ? -EBADF : 0;
 }
@@ -558,6 +561,11 @@ static void process_status_line(struct md_proc_file *f, FILE *out, const char *l
     }
     fputs(line,out);
 }
+void md_proc_file_syscall_state(struct md_proc_file *f,const struct md_proc_syscall_view *view) {
+    if (f->kind!=MD_PROC_FILE_SYSCALL || f->content) return;
+    f->syscall_known=view!=NULL;
+    if (view) f->syscall=*view;
+}
 static int process_content(struct md_proc_file *f) {
     if (f->process_state && !f->process_inspectable) {
         if (f->kind==MD_PROC_FILE_IO) return -EACCES;
@@ -571,7 +579,8 @@ static int process_content(struct md_proc_file *f) {
     char path[64];
     snprintf(path,sizeof(path),"/proc/%d/%s",f->node.process,md_proc_file_process_name(f->kind));
     int fd=f->backing>=0 ? f->backing : open(path,O_RDONLY|O_CLOEXEC);
-    if (fd<0) return -errno;
+    /* This is an already-open proc description, not a fresh path lookup. */
+    if (fd<0) return errno==ENOENT ? -ESRCH : -errno;
     struct stat st;
     int error=0;
     if (f->backing<0) error=fstat(fd,&st) ? -errno : st.st_dev!=f->node.device || st.st_ino!=f->node.inode ? -ESRCH : 0;
@@ -589,7 +598,12 @@ static int process_content(struct md_proc_file *f) {
     char *data=NULL; size_t length=0;
     FILE *out=open_memstream(&data,&length);
     if (!out) return -errno;
-    if (f->kind==MD_PROC_FILE_LIMITS) {
+    if (f->kind==MD_PROC_FILE_SYSCALL && f->syscall_known) {
+        const struct md_proc_syscall_view *v=&f->syscall;
+        fprintf(out,"%ld",v->number);
+        for (unsigned i=0;i<6;++i) fprintf(out," 0x%llx",(unsigned long long)v->args[i]);
+        fprintf(out," 0x%lx 0x%lx\n",(unsigned long)v->stack,(unsigned long)v->instruction);
+    } else if (f->kind==MD_PROC_FILE_LIMITS) {
         char *line=source;
         while (*line) {
             char *end=strchr(line,'\n');
@@ -655,7 +669,7 @@ static int process_content(struct md_proc_file *f) {
 }
 long md_proc_file_read_at(struct md_proc_file *f, const struct md_uts_namespace *uts, const struct md_cgroup_namespace *cgroup,
         void *out, size_t capacity, int64_t offset) {
-    if (!f || (f->flags&O_PATH) || (f->flags&O_ACCMODE)==O_WRONLY) return -EBADF;
+    if (!f || (f->flags&O_PATH) || (f->flags&MD_O_ACCMODE)==O_WRONLY) return -EBADF;
     if (offset<0) return -EINVAL;
     if (md_proc_file_directory(f->kind)) return -EISDIR;
     if (md_proc_file_namespace(f->kind)) return -EINVAL;
@@ -732,7 +746,7 @@ static struct md_user_authority authority(const struct md_identity *id) {
 }
 long md_proc_file_write_at(struct md_proc_file *f, const struct md_identity *writer, struct md_uts_namespace *uts,
         const void *data, size_t size, int64_t offset, size_t page_size) {
-    if (!f || !writer || (f->flags&O_PATH) || (f->flags&O_ACCMODE)==O_RDONLY) return -EBADF;
+    if (!f || !writer || (f->flags&O_PATH) || (f->flags&MD_O_ACCMODE)==O_RDONLY) return -EBADF;
     if (md_fs_anchor_policy(f->placement)&MD_MOUNT_READONLY) return -EROFS;
     if (md_proc_file_namespace(f->kind)) return -EINVAL;
     if (md_proc_file_sysctl(f->kind)) return md_proc_sysctl_write(uts,f->kind,writer,data,size,&offset);
@@ -767,6 +781,18 @@ int md_proc_file_io_begin(struct md_proc_file_io *io, struct md_proc_file *file,
     io->file=md_proc_file_retain(file); io->operation=operation;
     io->positional=!!positional; io->offset=offset; io->whence=whence; io->length=length;
     return ready;
+}
+int md_proc_file_io_prepare(struct md_proc_file_io *io) {
+    if (!io || !io->file) return -EINVAL;
+    if (md_resource_order_state(&io->turn)==MD_RESOURCE_ORDER_RUNNING) return 0;
+    int error=md_resource_order_start(&io->turn);
+    if (error) return error;
+    struct md_proc_file *f=io->file;
+    if (io->operation==MD_PROC_FILE_READ && io->length
+            && !(io->positional ? io->offset : f->position) && md_proc_file_process(f->kind)) {
+        free(f->content); f->content=NULL; f->content_size=0;
+    }
+    return 0;
 }
 static int directory_append(struct md_proc_file *f,const char *name,unsigned char type,uint64_t inode) {
     size_t length=strlen(name);
@@ -910,7 +936,7 @@ long md_proc_file_io_execute(struct md_proc_file_io *io, const struct md_identit
     if (io->pending) {
         if (capacity>MD_CONTROL_IO_MAX) capacity=MD_CONTROL_IO_MAX;
         io->result=io->pending->resume(io->pending,bytes,capacity);
-        if (io->result==-EINPROGRESS) return io->result;
+        if (io->result==MD_OPERATION_PENDING) return io->result;
         io->next_position=io->pending->position;
         int position_valid=io->pending->position_valid;
         io->pending->dispose(io->pending); io->pending=NULL;
@@ -919,8 +945,7 @@ long md_proc_file_io_execute(struct md_proc_file_io *io, const struct md_identit
         if (io->operation==MD_PROC_FILE_SEEK && io->result>=0) io->file->position=io->result;
         return io->result;
     }
-    int error=md_resource_order_state(&io->turn)==MD_RESOURCE_ORDER_RUNNING
-        ? 0 : md_resource_order_start(&io->turn);
+    int error=md_proc_file_io_prepare(io);
     if (error) return error;
     io->executed=1;
     struct md_proc_file *f=io->file;
@@ -932,9 +957,9 @@ long md_proc_file_io_execute(struct md_proc_file_io *io, const struct md_identit
         io->actor.wakeup=io->turn.wakeup;
         io->result=f->control->command(f->control_context,&io->actor,(unsigned)io->whence,io->offset,&io->pending);
         if (io->pending) {
-            if (io->result==-EINPROGRESS) return io->result;
+            if (io->result==MD_OPERATION_PENDING) return io->result;
             io->pending->dispose(io->pending); io->pending=NULL;
-        } else if (io->result==-EINPROGRESS) io->result=-EPROTO;
+        } else if (io->result==MD_OPERATION_PENDING) io->result=-EPROTO;
         return io->result;
     }
     if (io->operation==MD_PROC_FILE_SEEK) {
@@ -944,9 +969,9 @@ long md_proc_file_io_execute(struct md_proc_file_io *io, const struct md_identit
             io->actor.wakeup=io->turn.wakeup;
             io->result=f->control->seek(f->control_context,&io->actor,offset,io->whence,&io->pending);
             if (io->pending) {
-                if (io->result==-EINPROGRESS) return io->result;
+                if (io->result==MD_OPERATION_PENDING) return io->result;
                 io->pending->dispose(io->pending); io->pending=NULL;
-            } else if (io->result==-EINPROGRESS) io->result=-EPROTO;
+            } else if (io->result==MD_OPERATION_PENDING) io->result=-EPROTO;
             if (io->result>=0) f->position=io->result;
             if (io->result!=-ENOSYS) return io->result;
         }
@@ -983,12 +1008,12 @@ long md_proc_file_io_execute(struct md_proc_file_io *io, const struct md_identit
                 : io->operation==MD_PROC_FILE_GETDENTS ? MD_CONTROL_GETDENTS : MD_CONTROL_READ,
             bytes,length,io->offset,&io->pending);
         if (io->pending) {
-            if (io->result==-EINPROGRESS) return io->result;
+            if (io->result==MD_OPERATION_PENDING) return io->result;
             io->next_position=io->pending->position;
             if (io->operation==MD_PROC_FILE_WRITE && io->result>0 && !io->positional
                     && io->pending->position_valid) io->offset=io->next_position-io->result;
             io->pending->dispose(io->pending); io->pending=NULL;
-        } else if (io->result==-EINPROGRESS) io->result=-EPROTO;
+        } else if (io->result==MD_OPERATION_PENDING) io->result=-EPROTO;
         if (io->operation==MD_PROC_FILE_WRITE && io->result>0 && !io->positional)
             f->position=io->offset+io->result;
         return io->result;
@@ -1007,7 +1032,7 @@ long md_proc_file_io_execute(struct md_proc_file_io *io, const struct md_identit
         }
         /* Reject impossible proc writes before copying or allocating input. */
         size_t limit=f->kind==MD_PROC_FILE_SETGROUPS ? 8 : page_size;
-        if ((f->flags&O_PATH) || (f->flags&O_ACCMODE)==O_RDONLY) return io->result=-EBADF;
+        if ((f->flags&O_PATH) || (f->flags&MD_O_ACCMODE)==O_RDONLY) return io->result=-EBADF;
         int sysctl=md_proc_file_sysctl(f->kind);
         if (sysctl && f->control && (md_proc_file_control_access(f,writer,W_OK)==-EROFS))
             return io->result=-EROFS;

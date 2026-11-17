@@ -45,7 +45,7 @@ int signal_ignored(struct thread *t,int signal,struct md_task_signal_stop *stop)
 int signal_identity_allowed(const struct thread *from,const struct md_identity *identity,pid_t group,int signal);
 int signal_allowed(const struct thread *from,const struct thread *to,int signal);
 void deliver_signal(pid_t pid,int sig,int restored,struct md_task_signal_stop *stop);
-void resume_signal(pid_t pid,int sig,const struct md_signal_origin *origin);
+void resume_signal(pid_t pid,int sig,const struct md_signal_origin *origin,int delivery_stop);
 int init_signal_suppressed(const struct thread *from,const struct thread *to,int signal);
 
 int signal_logical_enqueue(struct thread *to,enum md_signal_scope scope,const siginfo_t *info);

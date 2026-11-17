@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "fs_mount_internal.h"
 #include "fs_native.h"
 #include "inode_internal.h"
@@ -24,7 +25,7 @@
 static void inode(struct md_filesystem *, struct md_mount_namespace *, struct md_view_mount *,
         const struct md_fs_request *, struct md_fs_result *, const struct md_fs_output *);
 static int writable(unsigned flags) {
-    return !(flags & O_PATH) && (flags & (O_ACCMODE | O_TRUNC | O_CREAT));
+    return !(flags & O_PATH) && (flags & (MD_O_ACCMODE | O_TRUNC | O_CREAT));
 }
 static int special(mode_t mode) {
     return S_ISCHR(mode) || S_ISBLK(mode) || S_ISFIFO(mode) || S_ISSOCK(mode);
@@ -155,8 +156,8 @@ static int devpts_operation(struct md_filesystem *fs,struct md_mount_namespace *
                 && !(major(st.st_rdev)==5 && minor(st.st_rdev)==2)) {
             /* Controlling-terminal acquisition belongs to the caller's session,
              * not to the namespace worker opening its retained path. */
-            r=md_devpts_access(mount->devpts,fd,(q->flags&O_ACCMODE)==O_RDWR ? R_OK|W_OK
-                : (q->flags&O_ACCMODE)==O_WRONLY ? W_OK : R_OK,id);
+            r=md_devpts_access(mount->devpts,fd,(q->flags&MD_O_ACCMODE)==O_RDWR ? R_OK|W_OK
+                : (q->flags&MD_O_ACCMODE)==O_WRONLY ? W_OK : R_OK,id);
             if (!r) {
                 r=fcntl(fd,F_DUPFD_CLOEXEC,3);
                 if (r<0) r=-errno;
@@ -166,8 +167,8 @@ static int devpts_operation(struct md_filesystem *fs,struct md_mount_namespace *
             r=md_devpts_open(mount->devpts,fd,q->flags,id);
             if ((r==-EACCES || r==-EPERM) && (q->flags&O_APPEND) && !(q->flags&O_PATH)
                     && S_ISCHR(st.st_mode) && !(major(st.st_rdev)==5 && minor(st.st_rdev)==2)
-                    && !md_devpts_access(mount->devpts,fd,(q->flags&O_ACCMODE)==O_RDWR ? R_OK|W_OK
-                        : (q->flags&O_ACCMODE)==O_WRONLY ? W_OK : R_OK,id)) {
+                    && !md_devpts_access(mount->devpts,fd,(q->flags&MD_O_ACCMODE)==O_RDWR ? R_OK|W_OK
+                        : (q->flags&MD_O_ACCMODE)==O_WRONLY ? W_OK : R_OK,id)) {
                 /* Retry in the receiver, never transfer a restricted append
                  * OFD. Native admission, including UID 2000, stays native. */
                 r=fcntl(fd,F_DUPFD_CLOEXEC,3);
@@ -438,7 +439,7 @@ static void inode_selected(struct md_filesystem *fs, const struct md_fs_request 
             : q->operation==MD_FS_OPEN_IMAGE ? O_RDONLY|O_CLOEXEC : q->flags;
         /* O_TMPFILE creates inside the selected directory; it does not reopen
          * that directory. Keep creation flags/mode and the provider's errno. */
-        if (!(flags&O_PATH) && (flags&__O_TMPFILE)) {
+        if (!(flags&O_PATH) && (flags&MD_O_TMPFILE_BIT)) {
             local.operation=MD_FS_OPEN; local.path[0]=".";
             inode(fs,a->view,a->mount,&local,out,output);
             return;
@@ -527,20 +528,20 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
     case MD_FS_CREATE: case MD_FS_OPEN: case MD_FS_OPEN_IMAGE: {
         int flags = q->operation == MD_FS_CREATE ? O_RDWR | O_CREAT | O_EXCL
             : q->operation == MD_FS_OPEN_IMAGE ? O_RDONLY : (int)q->flags;
-        if (flags & ~(O_ACCMODE | O_CLOEXEC | O_APPEND | O_TRUNC | O_NOFOLLOW | O_DIRECTORY | O_PATH
-                | O_CREAT | O_EXCL | O_NONBLOCK | O_NOCTTY | MD_O_LARGEFILE | O_SYNC | O_DSYNC | O_DIRECT | O_NOATIME | __O_TMPFILE)) { r = -ENOTSUP; break; }
-        if ((flags & O_ACCMODE) == O_ACCMODE) { r = -EINVAL; break; }
+        if (flags & ~(MD_O_ACCMODE | O_CLOEXEC | O_APPEND | O_TRUNC | O_NOFOLLOW | O_DIRECTORY | O_PATH
+                | O_CREAT | O_EXCL | O_NONBLOCK | O_NOCTTY | MD_O_LARGEFILE | O_SYNC | O_DSYNC | O_DIRECT | O_NOATIME | MD_O_TMPFILE_BIT)) { r = -ENOTSUP; break; }
+        if ((flags & MD_O_ACCMODE) == MD_O_ACCMODE) { r = -EINVAL; break; }
         if (q->operation == MD_FS_OPEN_IMAGE && (!data || capacity < sizeof(struct md_image_identity))) { r = -ERANGE; break; }
         if (flags & O_PATH) flags &= O_PATH | O_NOFOLLOW | O_DIRECTORY | O_CLOEXEC;
-        if (((flags & O_TRUNC) && !(flags & O_ACCMODE))
+        if (((flags & O_TRUNC) && !(flags & MD_O_ACCMODE))
                 || ((flags & O_CREAT) && (flags & O_DIRECTORY))) { r = -EINVAL; break; }
         if ((flags & O_CREAT) && (q->mode & ~01777)) { r = -ENOTSUP; break; }
         struct stat existing;
         if (a->metadata_captured) existing=a->captured_metadata;
         else if (a->fd >= 0 && fstat(a->fd, &existing)) { r = -errno; break; }
         if (a->fd>=0 && (r=device_open(a->mount,flags,existing.st_mode))) break;
-        if (flags&__O_TMPFILE) {
-            if (!(flags&O_DIRECTORY) || !(flags&O_ACCMODE)) { r=-EINVAL; break; }
+        if (flags&MD_O_TMPFILE_BIT) {
+            if (!(flags&O_DIRECTORY) || !(flags&MD_O_ACCMODE)) { r=-EINVAL; break; }
             if (output && output->native_open_plan) { r=-EXDEV; break; }
             /* Creation belongs to the selected directory, not its parent or
              * a proc-FD reopen. Kernel checks retain native filesystem limits. */
@@ -634,7 +635,7 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
         break;
     case MD_FS_SYMLINK: if (symlinkat(q->path[1], a->parent, a->name)) r = -errno; break;
     case MD_FS_UNLINK: if (unlinkat(a->parent, a->name, (int)q->flags)) r = -errno; break;
-    case MD_FS_RENAME: if (syscall(SYS_renameat2, a->parent, a->name, b->parent, b->name, q->flags)) r = -errno; break;
+    case MD_FS_RENAME: r=(int)md_host_rename(a->parent,a->name,b->parent,b->name,q->flags); break;
     case MD_FS_LINK:
         if (q->flags & ~AT_SYMLINK_FOLLOW) r = -EINVAL;
         else if (linkat(a->parent, a->name, b->parent, b->name, 0)) r = -errno;
@@ -646,7 +647,7 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
 static int local_inode_view(struct md_filesystem *fs, const struct md_fs_request *q) {
     /* Temporary-file support belongs to the selected filesystem. The inode
      * provider cannot reject it before the path crosses a native mount. */
-    if (q->operation==MD_FS_OPEN && !(q->flags&O_PATH) && (q->flags&__O_TMPFILE)) return 0;
+    if (q->operation==MD_FS_OPEN && !(q->flags&O_PATH) && (q->flags&MD_O_TMPFILE_BIT)) return 0;
     /* View object IDs are not inode-store IDs, even without a path crossing. */
     if (q->operation==MD_FS_OPEN_OBJECT && md_mount_namespace_attached(fs->mounts)) return 0;
     if (fs->native_root || q->resolve || (fs->mounts
@@ -761,7 +762,7 @@ static int path_suspend(struct md_filesystem *fs,const struct md_fs_request *q,
     p->base.task_input=md_view_walk_task_input(walk);
     *a=*b=(struct md_view_location){.fd=-1,.parent=-1};
     *output->continuation=&p->base;
-    return -EINPROGRESS;
+    return MD_OPERATION_PENDING;
 }
 static void mounts_execute(struct md_filesystem *fs, const struct md_fs_request *q,
         struct md_fs_result *out, const struct md_fs_output *output,struct path_operation *resume) {
@@ -902,7 +903,7 @@ paths:;
         r=pending ? md_view_walk_resume(fs,pending,&a,observer_ptr)
             : md_view_walk_async(fs,q->directory[0],q->origin[0],q->path[0],
                 follow(q),missing(q),resolve,&a,observer_ptr,output && output->continuation ? &pending : NULL);
-        if (r==-EINPROGRESS) goto suspended;
+        if (r==MD_OPERATION_PENDING) goto suspended;
         md_view_walk_destroy(pending); pending=NULL;
         if (observer.completed) {
             if (r) out->error=r;
@@ -920,7 +921,7 @@ paths:;
             : output && output->continuation ? md_view_walk_async(fs,q->directory[1],q->origin[1],q->path[1],
                 -1,1,MD_VIEW_TASK_PATH,&b,NULL,&pending)
             : md_view_walk(fs,q->directory[1],q->origin[1],q->path[1],-1,1,MD_VIEW_TASK_PATH,&b);
-        if (r==-EINPROGRESS) goto suspended;
+        if (r==MD_OPERATION_PENDING) goto suspended;
         md_view_walk_destroy(pending); pending=NULL;
         if (r==-EREMOTE && fs->store->boundary) fs->store->boundary->operand=1;
     }

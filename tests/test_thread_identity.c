@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "kernel_clone.h"
 #include <assert.h>
 #include <errno.h>
 #include <linux/futex.h>
@@ -44,13 +45,6 @@ static void credentials(void) {
 }
 static volatile pid_t parent_tid, child_tid, redirected_tid;
 static unsigned clear_target;
-/* Exercise the kernel clone contract: libc wrappers may reject clear_child_tid
- * for application-created tasks before issuing any syscall. */
-extern long identity_clone(unsigned long,void *,volatile pid_t *,void *,volatile pid_t *,int (*)(void *));
-__asm__(".text\n.global identity_clone\n.type identity_clone,%function\nidentity_clone:\n"
-    "stp x19,x30,[sp,#-16]!\nmov x19,x5\nmov x8,#220\nsvc #0\n"
-    "cbnz x0,1f\nmov x0,#0\nblr x19\nmov x8,#93\nsvc #0\nbrk #0\n"
-    "1: ldp x19,x30,[sp],#16\nret\n.size identity_clone,.-identity_clone\n");
 static int clone_child(void *unused) {
     (void)unused;
     assert(parent_tid==syscall(SYS_gettid));
@@ -93,8 +87,8 @@ static void threads(void) {
         clear_target=i%4;
         parent_tid=child_tid=-1;
         redirected_tid=-1;
-        pid_t child=(pid_t)identity_clone(CLONE_VM|CLONE_PARENT_SETTID
-            |CLONE_CHILD_SETTID|CLONE_CHILD_CLEARTID|SIGCHLD,stack+length,&parent_tid,NULL,&child_tid,clone_child);
+        pid_t child=md_test_clone(clone_child,stack+length,CLONE_VM|CLONE_PARENT_SETTID
+            |CLONE_CHILD_SETTID|CLONE_CHILD_CLEARTID|SIGCHLD,NULL,(pid_t *)&parent_tid,NULL,(pid_t *)&child_tid);
         if (child<=0 || parent_tid!=child)
             fprintf(stderr,"clone publication iteration=%u child=%d parent_tid=%d child_tid=%d errno=%d\n",
                 i,child,parent_tid,child_tid,errno);

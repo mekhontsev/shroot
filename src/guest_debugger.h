@@ -48,7 +48,9 @@ struct md_debugger_host {
      * (including __WNOTHREAD) through nonblocking probes. */
     int (*wait_children)(pid_t,const struct seccomp_data *,pid_t **,size_t *);
     void (*complete)(pid_t, long);
-    void (*resume)(pid_t,int,const struct md_signal_origin *);
+    /* Only a delivery stop constructs a signal frame on this resume. A signal
+     * injected at another boundary retains native queuing semantics. */
+    void (*resume)(pid_t,int,const struct md_signal_origin *,int delivery_stop);
     void (*reaped)(pid_t observer,pid_t child,int native_wait);
     void (*signal_origin)(pid_t recipient,const siginfo_t *,struct md_signal_origin *,int consume);
     void (*signal_translate)(pid_t observer,const struct md_signal_origin *,siginfo_t *);

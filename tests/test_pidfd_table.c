@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "kernel_clone.h"
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -73,7 +74,7 @@ static void exercise(const char *directory, int protected, int killed, unsigned 
     void *stack=mmap(NULL,65536,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
     assert(stack!=MAP_FAILED && !prctl(PR_SET_DUMPABLE,protected ? 0 : 1));
     int flags=CLONE_VM|CLONE_THREAD|CLONE_SIGHAND|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID;
-    int tid=clone(helper,(char *)stack+65536,flags,&t,&t.tid,NULL,&t.tid); assert(tid>0);
+    int tid=md_test_clone(helper,(char *)stack+65536,flags,&t,&t.tid,NULL,&t.tid); assert(tid>0);
     wait_word(&t.phase,1);
     for (unsigned i=0;i<3;++i) assert(!close(t.source[i]));
     int pidfd=syscall(SYS_pidfd_open,tid,O_EXCL);

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "socket_abi.h"
 #include "network_calls.h"
 #include "network_endpoint.h"
 #include "network_packet.h"
@@ -62,7 +63,7 @@ static long data_message(long nr,const unsigned long *a) {
     int sending=nr==SYS_sendto || nr==SYS_sendmsg;
     int header=nr==SYS_sendmsg || nr==SYS_recvmsg;
     struct iovec vector={(void *)a[1],a[2]};
-    struct msghdr message={.msg_iov=&vector,.msg_iovlen=1,.msg_name=(void *)a[4]};
+    struct md_msghdr message={.msg_iov=&vector,.msg_iovlen=1,.msg_name=(void *)a[4]};
     struct md_socket_vectors vectors;
     long result=0;
     if (header) {
@@ -89,11 +90,11 @@ static long data_message(long nr,const unsigned long *a) {
             if (!message.msg_name) message.msg_namelen=0;
             long error=0;
             if (result>=0 && header) {
-                error=md_write_memory((char *)a[1]+offsetof(struct msghdr,msg_namelen),
+                error=md_write_memory((char *)a[1]+offsetof(struct md_msghdr,msg_namelen),
                     &message.msg_namelen,sizeof(message.msg_namelen));
-                if (!error) error=md_write_memory((char *)a[1]+offsetof(struct msghdr,msg_controllen),
+                if (!error) error=md_write_memory((char *)a[1]+offsetof(struct md_msghdr,msg_controllen),
                     &message.msg_controllen,sizeof(message.msg_controllen));
-                if (!error) error=md_write_memory((char *)a[1]+offsetof(struct msghdr,msg_flags),
+                if (!error) error=md_write_memory((char *)a[1]+offsetof(struct md_msghdr,msg_flags),
                     &message.msg_flags,sizeof(message.msg_flags));
             } else if (result>=0 && a[4]) error=md_write_memory((void *)a[5],&message.msg_namelen,sizeof(message.msg_namelen));
             if (error) result=error;
@@ -110,7 +111,7 @@ static long data_send_batch(const unsigned long *a) {
     if (!count) return md_raw(SYS_sendmmsg,a[0],a[1],a[2],a[3],0,0);
     if (count>1024) count=1024;
     for (unsigned i=0;i<count;++i) {
-        struct mmsghdr *item=(struct mmsghdr *)a[1]+i;
+        struct md_mmsghdr *item=(struct md_mmsghdr *)a[1]+i;
         unsigned long one[6]={a[0],(uintptr_t)&item->msg_hdr,a[3]};
         long result=data_message(SYS_sendmsg,one);
         if (result<0) return i ? (long)i : result;
@@ -193,7 +194,7 @@ static long device_receive_ready(void) {
     long result=md_guest_buffer_control(MD_BUFFER_NETWORK_CALL,0,0);
     long released=md_adapter_buffer_release(); return result ? result : released;
 }
-static long device_source(const struct msghdr *message,long received,struct sockaddr_nl *source) {
+static long device_source(const struct md_msghdr *message,long received,struct sockaddr_nl *source) {
     char prefix[8]={0}; size_t used=0;
     size_t needed=received<8 ? (size_t)received : 8;
     for (size_t i=0;i<message->msg_iovlen && used<needed;++i) {
@@ -207,18 +208,18 @@ static long device_source(const struct msghdr *message,long received,struct sock
     source->nl_groups=match ? 2 : 1;
     return 0;
 }
-static long device_credentials(const struct msghdr *message) {
+static long device_credentials(const struct md_msghdr *message) {
     size_t offset=0;
-    while (message->msg_controllen-offset>=sizeof(struct cmsghdr)) {
-        struct cmsghdr c;
+    while (message->msg_controllen-offset>=sizeof(struct md_cmsghdr)) {
+        struct md_cmsghdr c;
         long error=md_read_memory(&c,(char *)message->msg_control+offset,sizeof(c)); if (error) return error;
-        if (c.cmsg_len<CMSG_LEN(0) || c.cmsg_len>message->msg_controllen-offset) return -EPROTO;
-        if (c.cmsg_level==SOL_SOCKET && c.cmsg_type==SCM_CREDENTIALS && c.cmsg_len==CMSG_LEN(sizeof(struct ucred))) {
+        if (c.cmsg_len<MD_CMSG_LEN(0) || c.cmsg_len>message->msg_controllen-offset) return -EPROTO;
+        if (c.cmsg_level==SOL_SOCKET && c.cmsg_type==SCM_CREDENTIALS && c.cmsg_len==MD_CMSG_LEN(sizeof(struct ucred))) {
             struct ucred trusted={0};
-            error=md_write_memory((char *)message->msg_control+offset+CMSG_LEN(0),&trusted,sizeof(trusted));
+            error=md_write_memory((char *)message->msg_control+offset+MD_CMSG_LEN(0),&trusted,sizeof(trusted));
             if (error) return error;
         }
-        size_t step=CMSG_ALIGN(c.cmsg_len);
+        size_t step=MD_CMSG_ALIGN(c.cmsg_len);
         if (step>message->msg_controllen-offset) break;
         offset+=step;
     }
@@ -248,15 +249,15 @@ static long control_call(long nr,const unsigned long *a,int events) {
             long result=md_guest_native_call(SYS_recvfrom,(unsigned long[6]){a[0],a[1],a[2],a[3]});
             struct sockaddr_nl source={.nl_family=AF_NETLINK};
             struct iovec vector={(void *)a[1],a[2]};
-            struct msghdr message={.msg_iov=&vector,.msg_iovlen=1};
+            struct md_msghdr message={.msg_iov=&vector,.msg_iovlen=1};
             long error=events && result>=0 ? device_source(&message,result<(long)a[2] ? result : (long)a[2],&source) : 0;
             if (!error && result>=0) error=output((void *)a[4],(void *)a[5],&source,sizeof(source));
             return error ? error : result;
         }
         if (nr==SYS_recvmsg) {
-            struct msghdr original;
+            struct md_msghdr original;
             long error=md_read_memory(&original,(void *)a[1],sizeof(original)); if (error) return error;
-            struct msghdr native=original;
+            struct md_msghdr native=original;
             native.msg_name=NULL; native.msg_namelen=0;
             long result=md_guest_native_call(SYS_recvmsg,(unsigned long[6]){a[0],(uintptr_t)&native,a[2]});
             if (result<0) return result;
@@ -281,7 +282,7 @@ static long control_call(long nr,const unsigned long *a,int events) {
     struct ifreq bridge={0};
     unsigned long bridge_args[4]={0};
     struct md_network_send destination={0};
-    struct msghdr message={0};
+    struct md_msghdr message={0};
     int gathered=nr==SYS_sendmsg || nr==SYS_writev;
     struct md_socket_vectors vectors;
     if (nr==SYS_sendmsg) {

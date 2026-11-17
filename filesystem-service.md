@@ -114,6 +114,13 @@ only requests result delivery; it cannot bypass that queue and retire its
 request. Queue dispatch publishes the result once, or discards it after
 cancellation. Unqueued completions retain their direct delivery path.
 
+Control providers and filesystem continuations return `MD_OPERATION_PENDING`
+only while retaining an owned operation. This internal status is outside the
+Linux errno range and never becomes a completed guest result. Terminal errors,
+including `EINPROGRESS`, retire the operation normally. Provider and transport
+boundaries validate errors before publication; cancellation retains the same
+request owner until retirement.
+
 Private-memory repair drains an in-flight guest-output copy, not the filesystem
 worker. Notification validation and `process_vm_writev` share one copy interval
 for file results and inotify, including `FIONREAD`. After participant stops have
@@ -188,10 +195,12 @@ namespace object ID; admission and executable access checks remain separate.
 Xattrs use bounded captured values through the shared filesystem operation
 contract. Inode-backed attributes retain guest metadata and permissions; native
 attachments retain their real xattrs and kernel access checks. Both paths hide
-Android's `security.selinux` label and Shroot's private backing attributes.
-List size queries and data reads use the same filtered names; explicit reads
-return ENODATA, and writes to host-private attributes return EOPNOTSUPP without
-changing the backing label. Ordinary user attributes remain accessible. This
+Android's `security.selinux` label and Shroot's physical backing attributes.
+List size queries and data reads use the same filtered names. Hidden physical
+attributes read as ENODATA; writes to Android labels or private attributes on
+native attachments return EOPNOTSUPP. Inode-backed files retain same-named guest
+`user.shroot.` attributes separately in their catalogue, without exposing or
+changing physical backing markers. Ordinary user attributes remain accessible. This
 keeps guest copy/patch tools from trying to reproduce Android labels in Linux.
 
 Directory reads return bounded Linux getdents64 records. Explicit capacity and

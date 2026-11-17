@@ -32,7 +32,9 @@ static void coalesced_kernel_signal(int signal,int code) {
         struct sigaction action={.sa_handler=unexpected};
         sigemptyset(&action.sa_mask); assert(!sigaction(signal,&action,NULL));
         assert(!ptrace(PTRACE_TRACEME,0,NULL,NULL));
-        assert(!raise(SIGSTOP));
+        /* Keep the following syscall boundary independent of libc raise(),
+         * which may restore its temporary signal mask after tgkill returns. */
+        assert(!syscall(SYS_tgkill,getpid(),syscall(SYS_gettid),SIGSTOP));
         assert(syscall(SYS_getpid)>0);
         sigset_t set; sigemptyset(&set); sigaddset(&set,signal);
         siginfo_t info;
@@ -90,7 +92,7 @@ static void realtime_order(int retain_again,int number) {
         uint64_t blocked=UINT64_C(1)<<(number-1),empty=0;
         assert(!syscall(SYS_rt_sigprocmask,SIG_BLOCK,&blocked,NULL,8));
         assert(!ptrace(PTRACE_TRACEME,0,NULL,NULL));
-        assert(!raise(SIGSTOP));
+        assert(!syscall(SYS_tgkill,getpid(),syscall(SYS_gettid),SIGSTOP));
         while (realtime_count<3)
             assert(syscall(SYS_rt_sigsuspend,&empty,8)==-1 && errno==EINTR);
         _exit(0);
@@ -147,7 +149,7 @@ static void child(unsigned round,int traced) {
     if (traced) {
         assert(!ptrace(PTRACE_TRACEME,0,NULL,NULL));
         if (round==1) assert(!raise(SIGURG));
-        assert(!raise(SIGSTOP));
+        assert(!syscall(SYS_tgkill,getpid(),syscall(SYS_gettid),SIGSTOP));
         if (round==6) {
             struct sock_filter code[]={
                 BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
@@ -231,7 +233,12 @@ int main(void) {
                 struct ptrace_syscall_info call={0};
                 assert(ptrace(PTRACE_GET_SYSCALL_INFO,pid,(void *)sizeof(call),&call)>0);
                 assert(call.op==(i ? PTRACE_SYSCALL_INFO_EXIT : PTRACE_SYSCALL_INFO_ENTRY));
-                if (!i) assert(call.entry.nr==SYS_getpid);
+                if (!i) {
+                    if (call.entry.nr!=SYS_getpid)
+                        fprintf(stderr,"signal delivery round=%u first syscall=%llu pc=%#llx\n",
+                            round,(unsigned long long)call.entry.nr,(unsigned long long)call.instruction_pointer);
+                    assert(call.entry.nr==SYS_getpid);
+                }
             }
         }
         if (round==6) {
@@ -289,7 +296,11 @@ int main(void) {
                 assert(restored.si_pid==original(SIGTRAP).si_pid);
                 deliver=WSTOPSIG(status);
             }
-            assert(pc(pid)==stopped);
+            uintptr_t current=pc(pid);
+            if (current!=stopped)
+                fprintf(stderr,"signal delivery round=%u stop=%u pc=%#lx expected=%#lx\n",
+                    round,stops,(unsigned long)current,(unsigned long)stopped);
+            assert(current==stopped);
             assert(!ptrace(PTRACE_CONT,pid,NULL,(void *)(intptr_t)deliver));
         }
         if (!WIFEXITED(status) || WEXITSTATUS(status) || stops!=2)

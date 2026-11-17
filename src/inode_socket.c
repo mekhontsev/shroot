@@ -28,7 +28,7 @@ int md_inode_socket_bind(struct md_inode_store *s, int dirfd, const char *path, 
     if (!r) r=mdi_landlock(s,&loc.parent,NULL,MD_LL_MAKE_SOCK);
     struct mdi_node node;
     int fd = -1;
-    if (!r) r = mdi_allocate(s, S_IFSOCK, mode, O_RDWR, NULL, loc.parent.id, &node, &fd);
+    if (!r) r = mdi_allocate(s, S_IFSOCK, mode, O_PATH, NULL, loc.parent.id, &node, &fd);
     if (fd >= 0) close(fd);
     sqlite3_stmt *query = NULL;
     if (!r) r = mdi_prepare(s, "INSERT INTO sockets(object,address) VALUES(?1,?2)", &query);

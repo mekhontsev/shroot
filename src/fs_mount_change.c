@@ -43,7 +43,7 @@ static int walk_operand(struct md_filesystem *fs, const struct md_fs_request *q,
     int r;
     if (pending && *pending) {
         r=md_view_walk_resume(fs,*pending,out,NULL);
-        if (r!=-EINPROGRESS) { md_view_walk_destroy(*pending); *pending=NULL; }
+        if (r!=MD_OPERATION_PENDING) { md_view_walk_destroy(*pending); *pending=NULL; }
     } else if (!*q->path[index]) r=md_view_descriptor(fs,q->directory[index],q->origin[index],out);
     else if (pending) r=md_view_walk_async(fs,q->directory[index],q->origin[index],q->path[index],follow,0,resolve,out,NULL,pending);
     else r=md_view_walk(fs,q->directory[index],q->origin[index],q->path[index],follow,0,resolve,out);
@@ -865,13 +865,13 @@ static void mount_execute(struct md_filesystem *fs,const struct md_fs_request *q
         if ((clone || (i==1 && q->mode==MD_FS_MOUNT_BIND)) && (q->control.ops
                 || (!*q->path[i] && (!q->origin[i] || !q->origin[i]->view)))) continue;
         out->error=walk_operand(fs,q,i,&p->locations[i],output && output->continuation ? &p->walk : NULL);
-        if (out->error==-EINPROGRESS) {
+        if (out->error==MD_OPERATION_PENDING) {
             for (unsigned n=0;n<i;++n) if (!p->pins[n] && p->locations[n].fd>=0) {
                 out->error=md_view_anchor_duplicate(fs,p->locations[n].view,p->locations[n].mount,
                     p->locations[n].fd,&p->pins[n]);
                 if (out->error) break;
             }
-            if (out->error && out->error!=-EINPROGRESS) break;
+            if (out->error && out->error!=MD_OPERATION_PENDING) break;
             if (!pending) {
                 pending=calloc(1,sizeof(*pending));
                 out->error=pending ? md_fs_continuation_capture(&pending->base,q) : -ENOMEM;
@@ -882,7 +882,7 @@ static void mount_execute(struct md_filesystem *fs,const struct md_fs_request *q
                 memcpy(pending->pins,p->pins,sizeof(p->pins));
             }
             pending->base.task_input=md_view_walk_task_input(pending->walk);
-            out->error=-EINPROGRESS; *output->continuation=&pending->base; return;
+            out->error=MD_OPERATION_PENDING; *output->continuation=&pending->base; return;
         }
         if (out->error) break;
     }

@@ -133,7 +133,9 @@ static void child(unsigned flags,struct report *out) {
         };
         struct sock_fprog program={sizeof(code)/sizeof(*code),code};
         assert(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
-        assert(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
+        long installed=syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program);
+        if (installed) fprintf(stderr,"checkpoint filter flags=%u result=%ld errno=%d\n",flags,installed,errno);
+        assert(!installed);
         if (flags&DENY_GATE) {
             struct sock_filter deny[]={
                 BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
@@ -416,7 +418,12 @@ static void strict_sysemu(int protected,int tsync,int negative,int convention,in
     set_registers(pid,negative ? &gate : &saved);
     struct user_pt_regs outside=registers(pid);
     const struct user_pt_regs *wanted=negative ? &gate : &saved;
-    for (unsigned i=0;i<31;++i) assert(outside.regs[i]==wanted->regs[i]);
+    for (unsigned i=0;i<31;++i) {
+        if (outside.regs[i]!=wanted->regs[i]) fprintf(stderr,
+            "strict SYSEMU protected=%d tsync=%d negative=%d convention=%d ip=%d x%u=%#llx expected=%#llx\n",
+            protected,tsync,negative,convention,by_ip,i,outside.regs[i],wanted->regs[i]);
+        assert(outside.regs[i]==wanted->regs[i]);
+    }
     assert(outside.pc==wanted->pc && outside.sp==wanted->sp && outside.pstate==wanted->pstate);
     resume(pid,PTRACE_CONT,0);
     assert(waitpid(pid,&status,0)==pid);
@@ -581,6 +588,11 @@ static void pending_native_signal(int protected,int kind,int process_directed) {
         && info.si_code==(kind==2 || process_directed ? SI_USER : SI_TKILL));
     resume(pid,PTRACE_CONT,signal);
     assert(waitpid(pid,&status,0)==pid && WIFEXITED(status) && !WEXITSTATUS(status));
+    if (out->count!=1 || out->info.si_signo!=signal || out->info.si_code!=info.si_code
+            || out->info.si_pid!=info.si_pid || out->info.si_uid!=info.si_uid)
+        fprintf(stderr,"signal identity protected=%d kind=%d shared=%d count=%d expected=%d/%d/%d/%u actual=%d/%d/%d/%u\n",
+            protected,kind,process_directed,out->count,signal,info.si_code,info.si_pid,info.si_uid,
+            out->info.si_signo,out->info.si_code,out->info.si_pid,out->info.si_uid);
     assert(out->count==1 && out->info.si_signo==signal && out->info.si_code==info.si_code
         && out->info.si_pid==info.si_pid && out->info.si_uid==info.si_uid);
     assert(out->pc==saved.pc && out->sp==saved.sp && out->x0==saved.regs[0] && out->x7==saved.regs[7]);
@@ -626,6 +638,11 @@ static void interrupted_native_call(int protected,int restart) {
      * rt_sigreturn must execute, and then the resumed service regains SYSEMU. */
     resume(pid,PTRACE_SYSCALL,SIGUSR1); assert(stopped(pid)==(SIGTRAP|0x80));
     struct ptrace_syscall_info returning=call_info(pid,PTRACE_SYSCALL_INFO_ENTRY);
+    if (returning.entry.nr!=SYS_rt_sigreturn || out->count!=1 || out->progress)
+        fprintf(stderr,"interrupted native protected=%d restart=%d nr=%llu pc=%#llx count=%d progress=%llu\n",
+            protected,restart,(unsigned long long)returning.entry.nr,
+            (unsigned long long)returning.instruction_pointer,out->count,
+            (unsigned long long)out->progress);
     assert(returning.entry.nr==SYS_rt_sigreturn && out->count==1 && !out->progress);
     assert(out->pc==gate.pc+(restart ? 0 : 4) && (long)out->x0==(restart ? data[0] : -EINTR)
         && out->sp==interrupted.sp && out->x7==interrupted.regs[7]);
@@ -1191,11 +1208,10 @@ static void unified_checkpoint(int protected,int restricted,int denied,int inval
     assert(!md_task_checkpoint_trace(&runtime,PTRACE_SETREGSET,pid,(void *)NT_PRSTATUS,&io));
     assert(!md_task_checkpoint_trace(&runtime,PTRACE_CONT,pid,NULL,NULL));
     unsigned writes=checkpoint_register_writes;
-    int status,native_stops=0,group_stops=0;
+    int status,native_stops=0,group_stops=0,continue_stops=0;
     for (unsigned stops=0;;++stops) {
         assert(stops<16 && waitpid(pid,&status,0)==pid && WIFSTOPPED(status));
         if ((int)stops==injection) {
-            printf("checkpoint borrowing protected=%d stage=%u status=%#x\n",protected,stops,status);
             unsigned before=checkpoint_register_writes;
             assert(!nested_task_call(pid,0,&runtime));
             writes+=checkpoint_register_writes-before;
@@ -1213,6 +1229,14 @@ static void unified_checkpoint(int protected,int restricted,int denied,int inval
                 assert(!md_task_checkpoint_trace(&runtime,injection==-3 ? PTRACE_LISTEN : PTRACE_CONT,pid,NULL,NULL));
                 if (injection==-3) assert(!kill(pid,SIGCONT));
             }
+            continue;
+        }
+        if (injection<-1 && WSTOPSIG(status)==SIGCONT && !((unsigned)status>>16)) {
+            siginfo_t info;
+            assert(group_stops==1 && !continue_stops++);
+            assert(!md_task_checkpoint_trace(&runtime,PTRACE_GETSIGINFO,pid,NULL,&info));
+            assert(info.si_signo==SIGCONT && info.si_code==SI_USER && info.si_pid==getpid());
+            assert(!md_task_checkpoint_trace(&runtime,PTRACE_CONT,pid,NULL,(void *)(uintptr_t)SIGCONT));
             continue;
         }
         if ((unsigned)status>>16==PTRACE_EVENT_SECCOMP) {
@@ -1251,11 +1275,22 @@ static void unified_checkpoint(int protected,int restricted,int denied,int inval
             assert(!md_task_checkpoint_trace(&runtime,PTRACE_CONT,pid,NULL,NULL));
             continue;
         }
+        if ((unsigned)status>>16!=MD_TASK_CHECKPOINT_EVENT) {
+            struct user_pt_regs actual=registers(pid);
+            fprintf(stderr,"unified checkpoint protected=%d restricted=%d denied=%d invalid=%d injection=%d status=%#x pc=%#llx nr=%llu\n",
+                protected,restricted,denied,invalid_number,injection,status,
+                (unsigned long long)actual.pc,(unsigned long long)actual.regs[8]);
+        }
         assert((unsigned)status>>16==MD_TASK_CHECKPOINT_EVENT); break;
     }
     assert(native_stops==!denied);
     assert(!checkpoint_stop_instead && group_stops==(injection<-1));
     struct user_pt_regs observed=registers(pid);
+    if (observed.pc!=(uintptr_t)md_guest_buffer_control_checkpoint+4 || observed.regs[7]!=saved.regs[7])
+        fprintf(stderr,"checkpoint context protected=%d restricted=%d denied=%d invalid=%d injection=%d pc=%#llx expected=%#llx x7=%#llx expected=%#llx\n",
+            protected,restricted,denied,invalid_number,injection,(unsigned long long)observed.pc,
+            (unsigned long long)(uintptr_t)md_guest_buffer_control_checkpoint+4,
+            (unsigned long long)observed.regs[7],(unsigned long long)saved.regs[7]);
     assert(observed.pc==(uintptr_t)md_guest_buffer_control_checkpoint+4 && observed.regs[7]==saved.regs[7]);
     /* Only replay of the native call needs a register write, never the marker. */
     assert(checkpoint_register_writes==writes+restricted);
@@ -1926,6 +1961,12 @@ static void terminal_race(int protected,int entry) {
     md_task_checkpoints_clear(&runtime); close(channel[0]); close(channel[1]);
 }
 int main(int argc,char **argv) {
+    if (argc==2 && !strcmp(argv[1],"--interrupted-native")) {
+        alarm(60);
+        for (int protected=0;protected<2;++protected)
+            for (int restart=0;restart<2;++restart) interrupted_native_call(protected,restart);
+        return 0;
+    }
     setvbuf(stdout,NULL,_IOLBF,0);
     alarm(60);
     md_test_native_probe(argc,argv);
@@ -1933,6 +1974,13 @@ int main(int argc,char **argv) {
     if (!native_skip) {
         puts("UNAVAILABLE native syscall-skip: inherited policy denies syscall -1; production TRACE/SYSEMU controls remain enabled");
         argc=1;
+    }
+    if (argc==2 && !strcmp(argv[1],"--pending-native")) {
+        for (int protected=0;protected<2;++protected)
+            for (int kind=0;kind<3;++kind)
+                for (int process=0;process<(kind==2 ? 1 : 2);++process)
+                    pending_native_signal(protected,kind,process);
+        return 0;
     }
     if (argc==1 || (argc==2 && !strcmp(argv[1],"--checkpoint-stop"))) {
         for (int protected=0;protected<2;++protected)

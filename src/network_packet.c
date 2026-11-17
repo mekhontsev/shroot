@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "socket_abi.h"
 #include "network_packet.h"
 #include "adapter_buffer.h"
 #include "fs_buffer.h"
@@ -43,23 +44,23 @@ static long address(void *target,socklen_t capacity,void *length,const struct md
     long error=md_write_memory(target,value,capacity<size ? capacity : size);
     return error ? error : md_write_memory(length,&size,sizeof(size));
 }
-static long control_item(struct msghdr *message,size_t *used,int level,int type,const void *data,size_t length) {
-    union { struct cmsghdr alignment; unsigned char bytes[CMSG_SPACE(sizeof(struct in6_pktinfo))]; } packet={0};
-    struct cmsghdr *h=&packet.alignment;
+static long control_item(struct md_msghdr *message,size_t *used,int level,int type,const void *data,size_t length) {
+    union { struct md_cmsghdr alignment; unsigned char bytes[MD_CMSG_SPACE(sizeof(struct in6_pktinfo))]; } packet={0};
+    struct md_cmsghdr *h=&packet.alignment;
     size_t capacity=message->msg_control ? message->msg_controllen-*used : 0;
-    size_t size=CMSG_LEN(length),space=CMSG_SPACE(length);
+    size_t size=MD_CMSG_LEN(length),space=MD_CMSG_SPACE(length);
     if (capacity<size) message->msg_flags|=MSG_CTRUNC;
     if (capacity<sizeof(*h)) return 0;
     h->cmsg_level=level; h->cmsg_type=type;
     h->cmsg_len=capacity<size ? capacity : size;
-    memcpy(CMSG_DATA(h),data,length);
+    memcpy(MD_CMSG_DATA(h),data,length);
     long error=md_write_memory((char *)message->msg_control+*used,packet.bytes,h->cmsg_len);
     *used+=capacity<space ? capacity : space;
     return error;
 }
 long md_network_packet_receive(long nr,const unsigned long *a) {
     if (nr==SYS_recvmmsg) return -EOPNOTSUPP;
-    struct msghdr original={0};
+    struct md_msghdr original={0};
     struct iovec scalar={(void *)a[1],a[2]},local[9];
     long error=0;
     int flags=0;
@@ -109,7 +110,7 @@ long md_network_packet_receive(long nr,const unsigned long *a) {
         }
     }
     long options=error ? error : receive_state();
-    struct msghdr native={.msg_iov=vectors,.msg_iovlen=count};
+    struct md_msghdr native={.msg_iov=vectors,.msg_iovlen=count};
     /* The native result retains post-BPF length for PACKET_AUXDATA even when
      * the application buffer truncates it. Its requested return mode is below. */
     long result=options<0 ? options : RAW3(recvmsg,a[0],&native,flags|MSG_TRUNC);
@@ -127,7 +128,7 @@ long md_network_packet_receive(long nr,const unsigned long *a) {
     if (result<(long)sizeof(packet) || packet.group>32) return -EPROTO;
     result-=sizeof(packet);
     if (original.msg_name) {
-        void *length=nr==SYS_recvmsg ? (char *)a[1]+offsetof(struct msghdr,msg_namelen) : (void *)a[5];
+        void *length=nr==SYS_recvmsg ? (char *)a[1]+offsetof(struct md_msghdr,msg_namelen) : (void *)a[5];
         error=address(original.msg_name,original.msg_namelen,length,&packet,(int)options);
     }
     if (!error && nr==SYS_recvmsg) {
@@ -168,9 +169,9 @@ long md_network_packet_receive(long nr,const unsigned long *a) {
             }
         }
         original.msg_controllen=used;
-        if (!error) error=md_write_memory((char *)a[1]+offsetof(struct msghdr,msg_controllen),
+        if (!error) error=md_write_memory((char *)a[1]+offsetof(struct md_msghdr,msg_controllen),
             &original.msg_controllen,sizeof(original.msg_controllen));
-        if (!error) error=md_write_memory((char *)a[1]+offsetof(struct msghdr,msg_flags),
+        if (!error) error=md_write_memory((char *)a[1]+offsetof(struct md_msghdr,msg_flags),
             &original.msg_flags,sizeof(original.msg_flags));
     }
     if (!(flags&MSG_TRUNC) && (size_t)result>total) result=(long)total;

@@ -25,6 +25,7 @@
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
+#include <linux/ptrace.h>
 #include <sys/signalfd.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -251,9 +252,18 @@ static void reap_private(pid_t pid,pid_t group,pid_t agent,pid_t real,int code,i
     /* exec remaps this same test ELF; PIE addresses are not inherited. */
     uintptr_t relocation=executing ? exec_relocation(pid) : 0;
     uintptr_t syscall=(uintptr_t)md_raw_syscall+relocation;
-    assert(!md_task_child_reap_begin(&reap,native_trace,pid,group,agent,boundary,&saved,
+    int began=md_task_child_reap_begin(&reap,native_trace,pid,group,agent,boundary,&saved,
         syscall,syscall+4,
-        &signal_exchange,(uintptr_t)&signal_exchange+relocation,&displaced));
+        &signal_exchange,(uintptr_t)&signal_exchange+relocation,&displaced);
+    if (began) fprintf(stderr,"reap begin error=%d boundary=%d pc=%#llx call=%#lx\n",
+        began,boundary,(unsigned long long)saved.pc,(unsigned long)syscall);
+    if (began) {
+        struct ptrace_syscall_info info={0};
+        long size=ptrace(PTRACE_GET_SYSCALL_INFO,pid,(void *)sizeof(info),&info);
+        fprintf(stderr,"reap stop size=%ld op=%u pc=%#llx nr=%llu result=%lld\n",size,info.op,
+            (unsigned long long)info.instruction_pointer,(unsigned long long)info.entry.nr,(long long)info.exit.rval);
+    }
+    assert(!began);
     int ready=0;
     while (!ready) {
         int status=waiter_status(pid);
@@ -277,15 +287,18 @@ static void await_syscall(pid_t group,pid_t tid,long number,unsigned long argume
     /* Prove the waiter entered the kernel; a ready flag before futex() would
      * let cleanup win without actually exercising the wake. Test-only probe. */
     struct timespec begin,now; assert(!clock_gettime(CLOCK_MONOTONIC,&begin));
+    long nr=-1; unsigned long at=0;
     for (;;) {
         if (tid) {
             char path[96]; snprintf(path,sizeof(path),"/proc/%d/task/%d/syscall",group,tid);
             FILE *f=fopen(path,"r"); assert(f);
-            long nr=-1; unsigned long at=0;
             int fields=fscanf(f,"%ld %lx",&nr,&at); fclose(f);
             if (fields==2 && nr==number && at==argument) return;
         }
         assert(!clock_gettime(CLOCK_MONOTONIC,&now));
+        if (now.tv_sec-begin.tv_sec>=5)
+            fprintf(stderr,"await syscall pid=%d tid=%d expected=%ld/%#lx observed=%ld/%#lx\n",
+                group,tid,number,argument,nr,at);
         assert(now.tv_sec-begin.tv_sec<5);
         sched_yield();
     }
@@ -351,7 +364,10 @@ static void check_notifications(pid_t real,int code,int value,const char *mode) 
                 : WIFSIGNALED(status) && WTERMSIG(status)==value);
         }
     }
-    assert(read(fd,&notice,sizeof(notice))==-1 && errno==EAGAIN); close(fd);
+    ssize_t extra=read(fd,&notice,sizeof(notice));
+    if (extra>=0) fprintf(stderr,"unexpected child notice mode=%s signal=%u code=%d pid=%u status=%d\n",
+        mode,notice.ssi_signo,notice.ssi_code,notice.ssi_pid,notice.ssi_status);
+    assert(extra==-1 && errno==EAGAIN); close(fd);
     int status;
     assert(waitpid(-1,&status,__WALL|WNOHANG)==-1 && errno==ECHILD);
 }
@@ -539,14 +555,22 @@ static void native(const char *mode,const char *executable) {
             md_task_quiesce_destroy(barrier);
         }
         assert(!ptrace(PTRACE_CONT,parent,NULL,NULL));
-        for (unsigned i=0;i<reader_count;++i) {
-            status=waiter_status(reader_ids[i]); assert(WIFSTOPPED(status) && status>>16==PTRACE_EVENT_EXIT);
-            assert(!ptrace(PTRACE_CONT,reader_ids[i],NULL,NULL));
-            status=waiter_status(reader_ids[i]); assert(WIFEXITED(status) && !WEXITSTATUS(status));
+        /* A libc may hold its thread-list lock through SYS_exit. Release
+         * exit stops as they arrive, rather than imposing a thread order. */
+        pid_t retiring[3]={parent,reader_ids[0],reader_ids[1]};
+        unsigned states[3]={0},remaining=reader_count+1;
+        while (remaining) {
+            pid_t tid=waitpid(-1,&status,__WALL); assert(tid>0);
+            unsigned i=0; while (i<=reader_count && retiring[i]!=tid) ++i;
+            assert(i<=reader_count);
+            if (!states[i]) {
+                assert(WIFSTOPPED(status) && status>>16==PTRACE_EVENT_EXIT);
+                states[i]=1; assert(!ptrace(PTRACE_CONT,tid,NULL,NULL));
+            } else {
+                assert(states[i]==1 && WIFEXITED(status) && !WEXITSTATUS(status));
+                states[i]=2; --remaining;
+            }
         }
-        status=waiter_status(parent); assert(WIFSTOPPED(status) && status>>16==PTRACE_EVENT_EXIT);
-        assert(!ptrace(PTRACE_CONT,parent,NULL,NULL));
-        status=waiter_status(parent); assert(WIFEXITED(status) && !WEXITSTATUS(status));
     } else if (!executing) {
         /* After real-parent exit the subreaper owns the already traced zombie. */
         status=waiter_status(agent); assert(WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL);

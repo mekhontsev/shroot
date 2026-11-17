@@ -394,7 +394,9 @@ descriptor-relative opens, seek/pread and namespace ownership.
 not change `/proc/PID/cmdline`, which reports that process's arguments.
 
 Status/stat use typed per-open snapshots with guest IDs, credentials and debugger
-relationships; seeking to zero refreshes the snapshot. A zombie remains visible
+relationships; seeking to zero or starting a new read at offset zero refreshes
+the snapshot, including positional reads. Continuation chunks retain the same
+snapshot. A zombie remains visible
 until wait consumes it. Namespace handles retain their owners after task exit;
 opening pid_for_children before its first child returns ENOENT.
 Zombie cgroup v2 observations retain the last membership and mark a removed

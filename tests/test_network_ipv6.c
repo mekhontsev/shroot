@@ -7,6 +7,7 @@
 #include "network_route.h"
 #include "network_route_ip.h"
 #include "network_packet.h"
+#include "socket_abi.h"
 #include "guest_identity.h"
 #include <arpa/inet.h>
 #include <assert.h>
@@ -257,6 +258,15 @@ static void raw_bindings(void) {
     struct sockaddr_storage wire=encode(local,AF_INET6,&length);
     memcpy(to.value,&wire,length); to.size=length;
     unsigned char echo[8]={128,0,0,0,0,1,0,1};
+    struct md_cmsghdr control={.cmsg_len=MD_CMSG_LEN(sizeof(int))|(UINT64_C(1)<<32),
+        .cmsg_level=IPPROTO_IPV6,.cmsg_type=IPV6_HOPLIMIT};
+    int hops=42;
+    to.control_size=MD_CMSG_SPACE(sizeof(hops));
+    memcpy(to.control,&control,sizeof(control));
+    memcpy(to.control+sizeof(control),&hops,sizeof(hops));
+    assert(md_network_socket_call(socket,&root,SYS_sendmsg,args,echo,sizeof(echo),sizeof(echo),1,&to,NULL,NULL)==-EINVAL);
+    control.cmsg_len=MD_CMSG_LEN(sizeof(hops));
+    memcpy(to.control,&control,sizeof(control));
     assert(md_network_socket_call(socket,&root,SYS_sendto,args,echo,sizeof(echo),sizeof(echo),1,&to,NULL,NULL)==8);
     unsigned char data[sizeof(struct md_network_packet)+8]; unsigned replies=0;
     while (recv(fd,data,sizeof(data),MSG_DONTWAIT)>0) replies+=data[sizeof(struct md_network_packet)]==129;

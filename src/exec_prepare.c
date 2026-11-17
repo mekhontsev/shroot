@@ -342,7 +342,7 @@ int md_fs_command_prepare(struct md_fs_context *context, const struct md_fs_requ
         p->kind=(enum md_command_file)(error-1);
     }
     if (!error) error=prepare_identity(p,context,q->mode);
-    if (error==-EINPROGRESS) {
+    if (error==MD_OPERATION_PENDING) {
         if (p==&local) {
             *owner=malloc(sizeof(**owner));
             if (*owner) **owner=local;

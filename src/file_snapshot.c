@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "file_snapshot.h"
+#include "host_open.h"
 #include "inode_store.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -8,7 +10,7 @@
 
 int md_file_snapshot_flags(unsigned flags) {
     if (flags&O_DIRECTORY) return -ENOTDIR;
-    if ((flags&O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC)) return -EACCES;
+    if ((flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC)) return -EACCES;
     if ((flags&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) return -EEXIST;
     return 0;
 }
@@ -31,8 +33,8 @@ int md_file_snapshot_begin_direct(struct md_file_snapshot *s,const char *directo
     int error=md_file_snapshot_flags(flags);
     if (error) return error;
     /* Android may deny reopening memfds; use the same backing as self proc. */
-    int fd=open(directory,O_TMPFILE|O_RDWR|O_CLOEXEC,0600);
-    if (fd<0) return -errno;
+    int fd=(int)md_host_temporary(AT_FDCWD,directory,0600);
+    if (fd<0) return fd;
     s->fd=fd; s->flags=flags;
     return 0;
 }

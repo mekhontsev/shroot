@@ -94,6 +94,11 @@ isolation or protect mutually hostile processes sharing the real executor UID.
 
 ## Application Ancillary Transport
 
+Guest message and control headers use the AArch64 kernel layout in
+`socket_abi.h`, independently of the host libc. Task helpers and receive receipts
+use that same layout. Host-owned libc `sendmsg`/`recvmsg` buffers remain libc
+types; bounded ancillary decoding accepts their compatible kernel header bytes.
+
 An IPC authority has one immutable runtime-owner offer: `NATIVE` or
 `ORIGINS_V1`. This is not an application request or a feature inferred from
 received descriptors. Listen publication records the offer alongside its

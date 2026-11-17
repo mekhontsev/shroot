@@ -10,7 +10,7 @@
 #include "raw.h"
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/stat.h>
+#include "statx_abi.h"
 #include <sys/inotify.h>
 #include "namespace_internal.h"
 #include "open_request.h"
@@ -105,7 +105,7 @@ static long native_metadata_fallback(const struct md_fs *fs,long nr,const unsign
     long locked=md_fd_control(MD_FD_USE,0,0,0);
     if (locked<0) return locked;
     long native=md_namespace_native_descriptor((int)a[0]);
-    struct statx st;
+    struct md_statx st;
     if (native>0) error=nr==SYS_statx
         ? RAW5(statx,a[0],a[1],a[2],(a[3]&~(unsigned long)STATX_MNT_ID_UNIQUE)|STATX_MNT_ID,&st)
         : md_raw(nr,a[0],a[1],a[2],a[3],a[4],a[5]);

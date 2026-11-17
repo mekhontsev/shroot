@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_capabilities.h"
 #include "interception_memory.h"
 #include <assert.h>
 #include <errno.h>
@@ -95,7 +96,10 @@ static void backing_reuse(void) {
     md_memory_mapping_finish(memory,&next,-ECANCELED);
     assert(!md_memory_mapping_prepare(memory,&next,MD_MAPPING_MAP,0x30000,page,0,MAP_PRIVATE,0));
     assert(!fchmod(other,0));
+    struct __user_cap_data_struct capabilities[2];
+    md_test_capabilities_suspend((UINT64_C(1)<<CAP_DAC_OVERRIDE)|(UINT64_C(1)<<CAP_DAC_READ_SEARCH),capabilities);
     assert(md_memory_mapping_pin(memory,&next,other,0)==-EACCES && !next.backing);
+    md_test_capabilities_restore(capabilities);
     /* A denied reopen does not prevent use of a previously opened source. */
     assert(!md_memory_mapping_backing(memory,&next,other,0) && next.backing);
     md_memory_mapping_finish(memory,&next,-ECANCELED);

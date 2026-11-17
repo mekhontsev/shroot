@@ -10,7 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/openat2.h>
-#include <linux/stat.h>
+#include "statx_abi.h"
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -62,7 +62,7 @@ void md_fs_native_descriptor(struct md_filesystem *fs,const struct md_fs_request
         }
         if (!out->error) md_fs_stat_info(&st,&out->info);
         if (!out->error && (q->mode&MD_FS_STAT_MOUNT)) {
-            struct statx native;
+            struct md_statx native;
             if (syscall(SYS_statx,q->directory[0],"",AT_EMPTY_PATH,STATX_MNT_ID,&native)) out->error=-errno;
             else if ((native.stx_mask&STATX_MNT_ID) && native.stx_mnt_id) {
                 uint64_t mount=0;
@@ -182,7 +182,7 @@ void md_fs_native_boundary(struct md_filesystem *fs, const struct md_inode_bound
     if (!fs->actor || private_pid || boundary->operand || !boundary->path
             || q->resolve) return;
     if (q->operation!=MD_FS_STAT && q->operation!=MD_FS_READLINK && q->operation!=MD_FS_OPEN) return;
-    if (q->operation==MD_FS_OPEN && (q->flags&(O_ACCMODE|O_CREAT|O_TRUNC|__O_TMPFILE))) return;
+    if (q->operation==MD_FS_OPEN && (q->flags&(MD_O_ACCMODE|O_CREAT|O_TRUNC|MD_O_TMPFILE_BIT))) return;
     struct md_fd_order order={0};
     struct md_fs_anchor *origin=NULL;
     if (task_relative(fs,boundary->path,q,&order,&origin)) goto finished;

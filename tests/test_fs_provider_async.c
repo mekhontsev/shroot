@@ -54,7 +54,7 @@ static int lookup(void *context,int directory,const char *name,const struct md_c
         p->input.request=(struct md_fs_task_capture){p->path,O_PATH|O_NOFOLLOW|O_CLOEXEC};
         p->base.task_input=&p->input; p->base.metadata=&p->input.metadata;
     }
-    ++calls.admitted; calls.ready=0; *out=&p->base; return -EINPROGRESS;
+    ++calls.admitted; calls.ready=0; *out=&p->base; return MD_OPERATION_PENDING;
 }
 static const struct md_provider_tree_ops operations={.lookup=lookup};
 static void proc_capture_admission(void) {
@@ -152,7 +152,7 @@ static struct md_fs_result run(struct md_filesystem *fs,const char *path,unsigne
     struct md_fs_output output={.continuation=&pending};
     unsigned before=calls.admitted;
     md_fs_context_execute(&context,&q,&r,&output);
-    for (unsigned waits=0;r.error==-EINPROGRESS;++waits) {
+    for (unsigned waits=0;r.error==MD_OPERATION_PENDING;++waits) {
         assert(waits<32 && pending && !pending->ready(pending));
         /* Another operation progresses while the provider has not replied. */
         struct md_fs_request other={.operation=MD_FS_STAT,.directory={-1,-1},.path={"/",NULL}};
@@ -169,7 +169,7 @@ static struct md_fs_result run(struct md_filesystem *fs,const char *path,unsigne
         struct md_fs_continuation *old=pending; pending=NULL;
         md_fs_context_resume(&context,old,&r,&output);
         int suspended=md_fs_continuation_pending(old,&pending,&r);
-        assert(suspended==(r.error==-EINPROGRESS));
+        assert(suspended==(r.error==MD_OPERATION_PENDING));
     }
     assert(!pending && calls.admitted-before==expected);
     return r;
@@ -218,14 +218,14 @@ void md_test_fs_provider_async(struct md_filesystem *fs) {
     md_fs_execute(fs,&q,&result,NULL); assert(result.error==-EOPNOTSUPP && calls.admitted==before);
     struct md_fs_continuation *pending=NULL;
     struct md_fs_output output={.continuation=&pending};
-    md_fs_execute(fs,&q,&result,&output); assert(result.error==-EINPROGRESS && pending);
+    md_fs_execute(fs,&q,&result,&output); assert(result.error==MD_OPERATION_PENDING && pending);
     pending->destroy(pending); assert(calls.cancelled==1 && calls.completed+calls.cancelled==calls.admitted);
     calls.capture=1;
     result=run(fs,"/deferred/dir/leaf",0,2); assert(!result.error && result.info.size==4);
     result=run(fs,"/deferred/dir/../link",0,5); assert(!result.error && result.info.size==4);
     result=run(fs,"/deferred/absent",0,1); assert(result.error==-ENOENT);
     pending=NULL;
-    md_fs_execute(fs,&q,&result,&output); assert(result.error==-EINPROGRESS && pending && pending->task_input);
+    md_fs_execute(fs,&q,&result,&output); assert(result.error==MD_OPERATION_PENDING && pending && pending->task_input);
     struct md_fs_task_input *input=pending->task_input;
     input->descriptor=open(input->request.path,input->request.flags); assert(input->descriptor>=0);
     fd=input->descriptor;

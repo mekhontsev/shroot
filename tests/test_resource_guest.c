@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "kernel_clone.h"
 #include "test_syscall_registers.h"
 #include <sys/mman.h>
 #include "fs_buffer.h"
@@ -8,7 +9,7 @@
 #include <asm/hwcap.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/stat.h>
+#include "../src/statx_abi.h"
 #include <linux/close_range.h>
 #include <linux/audit.h>
 #include <linux/filter.h>
@@ -116,7 +117,7 @@ static void sharing(unsigned flags, int split, int root) {
     char before[4096]; assert(getcwd(before, sizeof(before)));
     mode_t old = umask(0022);
     void *stack = malloc(1024 * 1024); assert(stack);
-    pid_t pid = clone(mutate, (char *)stack + 1024 * 1024, SIGCHLD | flags, &c); assert(pid > 0);
+    pid_t pid = md_test_clone(mutate, (char *)stack + 1024 * 1024, SIGCHLD | flags, &c); assert(pid > 0);
     get(c.ready[0]);
     int shared_fs = (flags & CLONE_FS) && !(split >= 0 && (split & CLONE_FS));
     if (root) {
@@ -172,7 +173,7 @@ static void range_sharing(unsigned flags, int invalid) {
     assert(!pipe(c.ready) && !pipe(c.done));
     c.file=open("value",O_RDONLY); assert(c.file>=0);
     void *stack=malloc(1024*1024); assert(stack);
-    pid_t pid=clone(range_child,(char *)stack+1024*1024,SIGCHLD|CLONE_FILES,&c);
+    pid_t pid=md_test_clone(range_child,(char *)stack+1024*1024,SIGCHLD|CLONE_FILES,&c);
     assert(pid>0); get(c.ready[0]);
     int split=(flags & CLOSE_RANGE_UNSHARE) && !invalid;
     if (split) assert(fcntl(c.file,F_GETFD)==0);
@@ -296,7 +297,7 @@ static void concurrent_cwd(unsigned flags) {
     for (unsigned i=0;i<3;++i) {
         contexts[i]=*base; contexts[i].writer=i==0;
         stacks[i]=malloc(1024*1024); assert(stacks[i]);
-        children[i]=clone(cwd_worker,(char *)stacks[i]+1024*1024,SIGCHLD|CLONE_FS|flags,contexts+i);
+        children[i]=md_test_clone(cwd_worker,(char *)stacks[i]+1024*1024,SIGCHLD|CLONE_FS|flags,contexts+i);
         assert(children[i]>0);
     }
     for (unsigned i=0;i<3;++i) get(base->ready[0]);
@@ -345,7 +346,7 @@ static void concurrent_aliases(void) {
     for (unsigned i=0;i<3;++i) {
         contexts[i]=*base; contexts[i].writer=i==0;
         stacks[i]=malloc(1024*1024); assert(stacks[i]);
-        children[i]=clone(alias_worker,(char *)stacks[i]+1024*1024,SIGCHLD|CLONE_FILES,contexts+i);
+        children[i]=md_test_clone(alias_worker,(char *)stacks[i]+1024*1024,SIGCHLD|CLONE_FILES,contexts+i);
         assert(children[i]>0);
     }
     for (unsigned i=0;i<3;++i) get(base->ready[0]);
@@ -391,7 +392,7 @@ static void shared_undo(int exec) {
     struct sembuf op = {.sem_num=0, .sem_op=-1, .sem_flg=SEM_UNDO};
     assert(!syscall(SYS_semop, c.sem, &op, 1));
     void *stack = malloc(1024 * 1024); assert(stack);
-    pid_t pid = clone(undo_child, (char *)stack + 1024 * 1024, SIGCHLD | CLONE_SYSVSEM, &c);
+    pid_t pid = md_test_clone(undo_child, (char *)stack + 1024 * 1024, SIGCHLD | CLONE_SYSVSEM, &c);
     assert(pid > 0); get(c.ready[0]);
     assert(syscall(SYS_semctl, c.sem, 0, GETVAL, 0) == 0);
     put(c.done[1]); reap(pid); free(stack);
@@ -559,7 +560,7 @@ static unsigned terminal_custody(int guest, int protected, int call, int explici
     void *stack=malloc(1024*1024); assert(stack);
     struct custody_context context={getpid(),protected,call,base,
         O_PATH|O_CLOEXEC|(nofollow ? O_NOFOLLOW : 0),ready[1],release[0]};
-    pid_t child=clone(custody_child,(char *)stack+1024*1024,SIGCHLD|CLONE_FILES,&context);
+    pid_t child=md_test_clone(custody_child,(char *)stack+1024*1024,SIGCHLD|CLONE_FILES,&context);
     assert(child>0);
     /* EVENT_WAIT: successful open/close precedes the denial. A native-leaf
      * O_PATH result may admit one table-owned channel, not a child-owned FD. */
@@ -844,7 +845,7 @@ static void capture_terminal(int inherited) {
     for (int protected=0;protected<2;++protected) for (int stage=0;stage<4;++stage)
         for (unsigned repeat=0;repeat<4;++repeat) {
             struct capture_context context={protected,stage,directory};
-            pid_t child=clone(capture_terminal_child,(char *)stack+1024*1024,SIGCHLD|CLONE_FILES,&context);
+            pid_t child=md_test_clone(capture_terminal_child,(char *)stack+1024*1024,SIGCHLD|CLONE_FILES,&context);
             assert(child>0);
             int status;
             /* EVENT_WAIT: exact filtered child; the fixture alarm bounds failure. */
@@ -1173,7 +1174,7 @@ static void buffer_export(int guest) {
     void *stack=malloc(1024*1024); assert(stack);
     for (int i=0;i<16;++i) {
         struct export_context c={directory,channel,0};
-        pid_t child=clone(export_child,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,&c); assert(child>0);
+        pid_t child=md_test_clone(export_child,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,&c); assert(child>0);
         /* EVENT_WAIT: exact child exit; the fixture alarm bounds a stuck export. */
         int status; assert(waitpid(child,&status,0)==child);
         assert(WIFSIGNALED(status) && WTERMSIG(status)==SIGSYS);
@@ -1182,7 +1183,7 @@ static void buffer_export(int guest) {
     if (guest) {
         for (int mode=1;mode<=3;++mode) {
             struct export_context c={directory,channel,mode};
-            pid_t child=clone(export_child,(char *)stack+1024*1024,
+            pid_t child=md_test_clone(export_child,(char *)stack+1024*1024,
                 SIGCHLD|(mode==1 ? 0 : CLONE_FILES),&c); assert(child>0); reap(child);
             off_t restored=lseek(directory,2,SEEK_SET);
             unsigned remaining=export_fds(NULL);
@@ -1319,7 +1320,7 @@ static void metadata_export(int guest, int managed) {
     retained_proc_filter(proc);
     void *stack=malloc(1024*1024); assert(stack);
     for (unsigned i=0;i<16;++i) {
-        pid_t pid=clone(metadata_export_child,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,&file);
+        pid_t pid=md_test_clone(metadata_export_child,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,&file);
         assert(pid>0);
         /* EVENT_WAIT: exporter terminal event; alarm bounds a missing exit. */
         int status; assert(waitpid(pid,&status,0)==pid);
@@ -1424,7 +1425,7 @@ static void buffer_return(int guest) {
     for (unsigned i=0;i<12;++i) reap(children[i]);
     void *stack=malloc(1024*1024); assert(stack);
     for (int i=0;i<16;++i) {
-        pid_t child=clone(return_child,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,NULL);
+        pid_t child=md_test_clone(return_child,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,NULL);
         assert(child>0);
         /* EVENT_WAIT: filtered receiver death; alarm bounds a stuck table or
          * channel turn. The surviving peer must receive the next descriptor. */
@@ -1536,7 +1537,7 @@ static int exec_custody(int guest, int proc) {
         for (int protected=0;protected<2;++protected) {
         unsigned char before[256]; export_fds(before);
         struct exec_custody_case test={protected,scenario};
-        pid_t child=clone(exec_custody_child,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,&test); assert(child>=0);
+        pid_t child=md_test_clone(exec_custody_child,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,&test); assert(child>=0);
         int status;
         /* EVENT_WAIT: exact exec caller death/completion before inspecting its
          * surviving CLONE_FILES peer; alarm fails a missing terminal event. */
@@ -1616,7 +1617,7 @@ static void proc_snapshot(int argc, char **argv) {
                         assert(snapshot.st_size==0 && snapshot.st_dev==named.st_dev
                             && snapshot.st_ino==named.st_ino && snapshot.st_mode==named.st_mode);
                         assert(!fstatat(fd,"",&snapshot,AT_EMPTY_PATH) && snapshot.st_ino==named.st_ino);
-                        struct statx descriptor_info,named_info;
+                        struct md_statx descriptor_info,named_info;
                         assert(!syscall(SYS_statx,fd,"",AT_EMPTY_PATH,STATX_BASIC_STATS|STATX_MNT_ID,&descriptor_info));
                         assert(!syscall(SYS_statx,AT_FDCWD,"/proc/self/cmdline",0,STATX_BASIC_STATS|STATX_MNT_ID,&named_info));
                         if (descriptor_info.stx_ino!=named_info.stx_ino || descriptor_info.stx_size
@@ -2174,7 +2175,7 @@ static void buffer_fifo(void) {
     void *stack=malloc(1024*1024); assert(stack);
     unsigned baseline=export_fds(NULL);
     for (unsigned i=0;i<32;++i) {
-        pid_t child=clone(fifo_park,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,&ready[1]); assert(child>=0);
+        pid_t child=md_test_clone(fifo_park,(char *)stack+1024*1024,CLONE_FILES|SIGCHLD,&ready[1]); assert(child>=0);
         /* EVENT_WAIT: child is entering the FIFO call. Death races preparation
          * and peer wait; an unpaired read can never publish an application FD. */
         get(ready[0]); assert(!kill(child,SIGKILL));
@@ -2336,7 +2337,7 @@ static void buffer_exit(void) {
             if (round%2) assert(!prctl(PR_SET_DUMPABLE,0));
             for (unsigned i=0;i<peers;++i) {
                 void *stack=malloc(1024*1024); assert(stack);
-                assert(clone(buffer_exit_busy,(char *)stack+1024*1024,
+                assert(md_test_clone(buffer_exit_busy,(char *)stack+1024*1024,
                     CLONE_VM|CLONE_FILES|CLONE_FS|CLONE_SIGHAND|CLONE_THREAD,&context)>0);
             }
             /* EVENT_WAIT: every peer has completed an O_PATH call; exit_group
@@ -2358,7 +2359,7 @@ static void buffer_park(int protected,int busy) {
     pid_t peers[8];
     for (unsigned i=0;i<8;++i) {
         void *stack=malloc(1024*1024); assert(stack);
-        peers[i]=clone(buffer_exit_busy,(char *)stack+1024*1024,
+        peers[i]=md_test_clone(buffer_exit_busy,(char *)stack+1024*1024,
             CLONE_VM|CLONE_FILES|CLONE_FS|CLONE_SIGHAND|CLONE_THREAD,&context);
         assert(peers[i]>0);
     }

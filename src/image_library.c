@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "image_library.h"
 #include "image_io.h"
 #include "image_json.h"
@@ -218,7 +219,7 @@ static int publish(struct md_library *lib,const struct md_environment *item) {
     if (!r) r=md_image_write(fd,json,strlen(json));
     if (!r && fsync(fd)) r=-errno;
     if (fd>=0) close(fd);
-    if (!r && syscall(SYS_renameat2,lib->names,stage,lib->names,name,RENAME_NOREPLACE)) r=-errno;
+    if (!r) r=(int)md_host_rename(lib->names,stage,lib->names,name,RENAME_NOREPLACE);
     /* After rename, a sync failure is an uncertain outcome, never rollback. */
     if (!r && fsync(lib->names)) r=-errno;
     if (fd>=0) unlinkat(lib->names,stage,0);

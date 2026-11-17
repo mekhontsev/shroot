@@ -1,3 +1,4 @@
+#include "socket_abi.h"
 #include "descriptor_capture.h"
 #include "fd_capture.h"
 #include "adapter_buffer.h"
@@ -29,14 +30,14 @@ long md_descriptor_capture_inputs(long state,struct md_fd_capture_frame *f,const
             state=md_guest_buffer_control(p->observed,0,0);
         } else if (state==MD_FD_CAPTURE_SEND) {
             if (!f->count || f->count>253 || f->offset>count || f->count>count-f->offset) return -EPROTO;
-            _Alignas(struct cmsghdr) char control[CMSG_SPACE(253*sizeof(int))];
+            _Alignas(struct md_cmsghdr) char control[MD_CMSG_SPACE(253*sizeof(int))];
             struct iovec data={&f->token,sizeof(f->token)};
-            struct msghdr m={.msg_iov=&data,.msg_iovlen=1,.msg_control=control,
-                .msg_controllen=CMSG_SPACE(f->count*sizeof(int))};
+            struct md_msghdr m={.msg_iov=&data,.msg_iovlen=1,.msg_control=control,
+                .msg_controllen=MD_CMSG_SPACE(f->count*sizeof(int))};
             memset(control,0,m.msg_controllen);
-            struct cmsghdr *h=CMSG_FIRSTHDR(&m);
-            *h=(struct cmsghdr){.cmsg_len=CMSG_LEN(f->count*sizeof(int)),.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
-            memcpy(CMSG_DATA(h),numbers+f->offset,f->count*sizeof(int));
+            struct md_cmsghdr *h=MD_CMSG_FIRSTHDR(&m);
+            *h=(struct md_cmsghdr){.cmsg_len=MD_CMSG_LEN(f->count*sizeof(int)),.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
+            memcpy(MD_CMSG_DATA(h),numbers+f->offset,f->count*sizeof(int));
             long value=RAW3(sendmsg,f->endpoint,&m,MSG_DONTWAIT|MSG_NOSIGNAL);
             state=md_guest_buffer_control(p->sent,value,0);
         } else return -EPROTO;

@@ -42,6 +42,7 @@ void debugger_wait_retry(struct thread *t);
 int debug_syscall_exit(struct thread *t, const struct user_pt_regs *regs);
 int debug_host_policy_pending(struct thread *t,const struct user_pt_regs *regs);
 int debugger_at_boundary(const struct thread *t);
+int debugger_context_ready(struct thread *t);
 int debugger_boundary(struct thread *t);
 void debugger_park_complete(struct thread *t,int cancelled);
 int debug_wait_exit(struct thread *t,pid_t pid);

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "namespace_internal.h"
 #include "proc_paths.h"
 #include "proc_control.h"
@@ -16,17 +17,14 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/inotify.h>
-#include <linux/stat.h>
+#include "statx_abi.h"
 #include <linux/openat2.h>
-#ifndef STATX_MNT_ID_UNIQUE
-#define STATX_MNT_ID_UNIQUE 0x4000U
-#endif
 
 static long mount_table_open(const struct md_fs *fs,const struct md_proc_path *ref,
         const char *path,int flags) {
     if (*ref->tail) return -ENOTDIR;
     if (flags&O_DIRECTORY) return -ENOTDIR;
-    if (!(flags&O_PATH) && ((flags&O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) return -EACCES;
+    if (!(flags&O_PATH) && ((flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) return -EACCES;
     if ((flags&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) return -EEXIST;
     enum md_proc_kind kind=ref->kind==MD_PROC_FOREIGN ? ref->foreign_kind : ref->kind;
     struct md_fs_request q={.operation=MD_FS_MOUNT_TABLE,.directory={-1,-1},
@@ -44,7 +42,7 @@ static long fdinfo_open(const struct md_fs *fs,const struct md_proc_path *ref,
     if (*ref->tail) return -ENOTDIR;
     if (ref->kind==MD_PROC_FOREIGN) return -ENOTSUP;
     if (flags&O_DIRECTORY) return -ENOTDIR;
-    if (!(flags&O_PATH) && ((flags&O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) return -EACCES;
+    if (!(flags&O_PATH) && ((flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) return -EACCES;
     if ((flags&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) return -EEXIST;
     char selected[96]="/proc/";
     md_decimal(selected+md_length(selected),(unsigned)ref->process);
@@ -154,7 +152,7 @@ long md_namespace_proc_link_metadata(long nr,const unsigned long *a,const char *
     if (nr==SYS_newfstatat)
         return RAW4(newfstatat,AT_FDCWD,path,a[2],a[3]);
     if (nr!=SYS_statx || !(a[2]&AT_SYMLINK_NOFOLLOW)) return -EINVAL;
-    struct statx st;
+    struct md_statx st;
     long r=RAW5(statx,AT_FDCWD,path,a[2],(a[3]&~(unsigned long)STATX_MNT_ID_UNIQUE)|STATX_MNT_ID,&st);
     if (r<0) return r;
     st.stx_mask|=STATX_MNT_ID; st.stx_mnt_id=mount;
@@ -163,13 +161,13 @@ long md_namespace_proc_link_metadata(long nr,const unsigned long *a,const char *
     return md_write_memory((void *)a[4],&st,sizeof(st));
 }
 long md_namespace_native_statx(const struct md_fs *fs, const unsigned long *args) {
-    struct statx st;
+    struct md_statx st;
     /* Publish ordinary mount IDs, never claim the kernel-global UNIQUE space. */
     long r=RAW5(statx,args[0],args[1],args[2],(args[3]&~(unsigned long)STATX_MNT_ID_UNIQUE)|STATX_MNT_ID,&st);
     if (r<0) return r;
     return md_namespace_native_statx_result(fs,args,&st);
 }
-long md_namespace_native_statx_result(const struct md_fs *fs,const unsigned long *args,struct statx *st) {
+long md_namespace_native_statx_result(const struct md_fs *fs,const unsigned long *args,struct md_statx *st) {
     /* Anonymous kernel files can report MNT_ID with zero: they have no mount
      * placement to translate. Preserve that result instead of rejecting stat. */
     if ((st->stx_mask & STATX_MNT_ID) && st->stx_mnt_id) {

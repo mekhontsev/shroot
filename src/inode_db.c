@@ -8,6 +8,8 @@
 #include "inode_publication.h"
 #include "inode_leaf.h"
 #include "inode_native.h"
+#include "host_open.h"
+#include <linux/fs.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -606,6 +608,27 @@ int mdi_register_object(struct md_inode_store *s,const char *id,mode_t kind,int 
     r=mdi_query_release(q,r);
     return r ? r : mdi_node(s,id,node);
 }
+static int make_unopened(struct md_inode_store *s,const char *id,mode_t mode) {
+    char stage[33];
+    int r=s->recording ? mdi_random_id(stage) : 0;
+    if (r) return r;
+    if (!s->recording) memcpy(stage,id,33);
+    int data=openat(s->objects,stage,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC|O_NOFOLLOW,mode);
+    if (data<0) return -errno;
+    r=mdi_sync(s,data);
+    if (close(data) && !r) r=-errno;
+    /* Preparation has no catalogue identity. Publish only its final name,
+     * under the existing watch gate, without synthesizing a guest data open. */
+    if (!r && s->recording) r=mdi_watch_marker(s,"publication-v1.begin");
+    if (!r && s->recording) {
+        r=(int)md_host_rename(s->objects,stage,s->objects,id,RENAME_NOREPLACE);
+        int end=mdi_watch_marker(s,"publication-v1.end");
+        if (!r) r=end;
+    }
+    if (r) return r;
+    int pin=openat(s->objects,id,O_PATH|O_CLOEXEC|O_NOFOLLOW);
+    return pin<0 ? -errno : pin;
+}
 static int make_object(struct md_inode_store *s, char id[33], mode_t kind, mode_t mode, int flags,
         const char *target, const char *parent, struct mdi_node *node, int *fd) {
     uint32_t uid = s->identity ? s->identity->uid.fs : (uint32_t)geteuid();
@@ -628,20 +651,25 @@ static int make_object(struct md_inode_store *s, char id[33], mode_t kind, mode_
     /* Directory observers can resolve queued native preparation events after
      * commit. Keep their single-open publication path; reserve IO is private
      * only while the store's existing watch-presence gate excludes observers. */
-    int reserved=kind==S_IFREG && s->identity && !s->lifetime->temporary && !s->recording;
+    int reserved=kind==S_IFREG && !(flags&O_PATH) && s->identity && !s->lifetime->temporary && !s->recording;
     if (!reserved && !*id) { int r=mdi_random_id(id); if (r) return r; }
     if (reserved) {
         *fd=mdi_reserve_file(s,id,flags,native);
         if (*fd<0) return *fd;
     } else if (kind == S_IFREG || kind == S_IFSOCK || kind == S_IFIFO || kind == S_IFCHR || kind == S_IFBLK) {
-        *fd = openat(s->objects, id, O_CREAT | O_EXCL | flags | O_CLOEXEC | O_NOFOLLOW, native);
-        if (*fd < 0) return -errno;
+        if (flags&O_PATH) {
+            *fd=make_unopened(s,id,native);
+            if (*fd<0) return *fd;
+        } else {
+            *fd=openat(s->objects,id,O_CREAT|O_EXCL|flags|O_CLOEXEC|O_NOFOLLOW,native);
+            if (*fd<0) return -errno;
+        }
     } else if (kind == S_IFDIR) {
         if (mkdirat(s->objects, id, native)) return -errno;
     } else if (symlinkat(target, s->objects, id)) return -errno;
     struct stat st;
     int r = fstatat(s->objects, id, &st, AT_SYMLINK_NOFOLLOW) ? -errno : 0;
-    if (!r && *fd >= 0) r = mdi_sync(s,*fd);
+    if (!r && *fd >= 0 && !(flags&O_PATH)) r = mdi_sync(s,*fd);
     if (!r && !reserved) r = mdi_sync(s,s->objects);
     if (!r) r = checkpoint(s, MD_OBJECT_SYNCED);
     if (!r) r=mdi_register_object(s,id,kind,s->identity || kind==S_IFIFO || kind==S_IFCHR

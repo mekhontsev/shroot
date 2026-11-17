@@ -723,7 +723,7 @@ static void deferred_reply(void) {
              * the transport deliberately uses nonblocking receives. */
             CHECK(!md_event_wait_fd(socket,POLLIN,md_event_now()+5000000000LL));
             CHECK(md_fs_receive(socket,&q,sizeof(q),&rights)>0); md_fs_close_rights(&rights);
-            struct md_fs_deferred admission={MD_FS_MAGIC,MD_FS_VERSION,-EINPROGRESS};
+            struct md_fs_deferred admission={MD_FS_MAGIC,MD_FS_VERSION,MD_OPERATION_PENDING};
             int fd=open("/dev/null",O_RDONLY|O_CLOEXEC); CHECK(fd>=0);
             if (fault==2) rights=(struct md_fs_rights){.count=1,.fd={fd}};
             if (fault==3) admission.error=0;

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "socket_abi.h"
 #include "launch_registry.h"
 #include <linux/netlink.h>
 #include "adapter_buffer.h"
@@ -387,10 +388,10 @@ void control_progress(struct thread *t) {
     long result=md_buffer_span(&t->fs.buffer,&span);
     if (!result && t->control.size>span.size) result=-EOVERFLOW;
     if (!result) result=pending->resume(pending,span.data,t->control.size);
-    if (result==-EINPROGRESS && md_event_now()<pending->deadline) {
+    if (result==MD_OPERATION_PENDING && md_event_now()<pending->deadline) {
         retry_wait(t,RETRY_CONTROL); control_park(t); return;
     }
-    if (result==-EINPROGRESS) result=-ETIMEDOUT;
+    if (result==MD_OPERATION_PENDING) result=-ETIMEDOUT;
     control_pending_complete(t,result);
     control_reply(t,result);
 }
@@ -1085,7 +1086,7 @@ static struct receive_owner *receive_prepare(struct thread *t,unsigned policy) {
     struct md_buffer_span span;
     CHECK(!md_buffer_span(&t->fs.buffer,&span));
     struct md_task_receive_frame *frame=span.data;
-    struct msghdr *original=&frame->original;
+    struct md_msghdr *original=&frame->original;
     struct iovec local={original,sizeof(*original)},remote={(void *)t->execution.request.args[1],local.iov_len};
     if (process_vm_readv(t->pid,&local,1,&remote,1,0)!=(ssize_t)local.iov_len
             || (int)original->msg_namelen<0 || original->msg_iovlen>8) return 0;
@@ -1094,7 +1095,7 @@ static struct receive_owner *receive_prepare(struct thread *t,unsigned policy) {
     local=(struct iovec){frame->vectors,original->msg_iovlen*sizeof(*frame->vectors)};
     remote=(struct iovec){original->msg_iov,local.iov_len};
     if (local.iov_len && process_vm_readv(t->pid,&local,1,&remote,1,0)!=(ssize_t)local.iov_len) return 0;
-    struct msghdr view=*original;
+    struct md_msghdr view=*original;
     view.msg_iov=frame->vectors; view.msg_controllen=capacity;
     if (view.msg_name) view.msg_namelen=sizeof(struct sockaddr_storage);
     frame->io.batch_count=0;

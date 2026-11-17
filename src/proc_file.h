@@ -78,6 +78,13 @@ void md_proc_file_process_state(struct md_proc_file *,const struct md_identity *
     const struct md_process_limits *);
 struct md_signal_status;
 void md_proc_file_signal_state(struct md_proc_file *,const struct md_signal_status *);
+struct md_proc_syscall_view {
+    long number;
+    uint64_t args[6];
+    uintptr_t stack, instruction;
+};
+/* Optional retained application boundary. NULL keeps the native observation. */
+void md_proc_file_syscall_state(struct md_proc_file *,const struct md_proc_syscall_view *);
 static inline int md_proc_file_directory(enum md_proc_file_kind kind) {
     return kind==MD_PROC_FILE_NS_DIRECTORY || kind==MD_PROC_FILE_PROCESS_DIRECTORY;
 }
@@ -138,7 +145,7 @@ struct md_proc_file *md_proc_file_from_object(struct md_fd_object *);
 /* Map opens retain the target user namespace and opener credentials. Sysctl
  * operations select the caller's current namespace, including after unshare.
  * Path admission/DAC belong to the descriptor host.
- * The supervisor serializes IO; process text retains a per-open read snapshot. */
+ * The supervisor serializes IO; process text retains a snapshot per read pass. */
 struct md_proc_file *md_proc_file_open(struct md_user_namespace *,
     enum md_proc_file_kind, const struct md_identity *opener, int flags);
 struct md_proc_file *md_proc_file_retain(struct md_proc_file *);
@@ -174,6 +181,9 @@ struct md_proc_file_io {
 int md_proc_file_io_begin(struct md_proc_file_io *, struct md_proc_file *,
     enum md_proc_file_operation, int positional, int64_t offset, int whence,
     size_t length, struct md_resource_wakeup *);
+/* Acquire the ready OFD turn before supplying live process state. A new read
+ * from zero refreshes its snapshot, including pread without a preceding seek. */
+int md_proc_file_io_prepare(struct md_proc_file_io *);
 long md_proc_file_io_execute(struct md_proc_file_io *, const struct md_identity *,
     struct md_uts_namespace *,
     void *bytes, size_t capacity, size_t page_size);

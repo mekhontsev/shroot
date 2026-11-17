@@ -1,5 +1,6 @@
 #ifndef MD_TASK_OUTGOING_H
 #define MD_TASK_OUTGOING_H
+#include "socket_abi.h"
 #include "task_send.h"
 #include "task_receive.h"
 #include "ipc_outgoing.h"
@@ -13,7 +14,7 @@ struct md_task_outgoing_frame {
         struct md_task_send_import import;
     } scratch;
     struct md_task_send input;
-    struct msghdr message;
+    struct md_msghdr message;
     struct md_ipc_send_options options;
     struct md_ipc_send_address destination;
     unsigned rights, transport;

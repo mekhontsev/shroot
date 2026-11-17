@@ -232,7 +232,7 @@ static long opened_io(void *data,const struct md_control_actor *actor,unsigned o
     if (!error) {
         struct md_control_fs_operation op={.run=change_run,.destroy=change_destroy,.context=c};
         long result=actor->submit(actor->filesystem,actor,op,pending);
-        if (result==-EINPROGRESS) return result;
+        if (result==MD_OPERATION_PENDING) return result;
         error=(int)result;
     }
     change_destroy(c); return error;

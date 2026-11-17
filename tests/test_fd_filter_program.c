@@ -257,6 +257,11 @@ void test_fd_filter_program(void) {
             int fd=fds[f];
             assert(!md_fd_filter_build(kind,fd,&gates,&built));
             assert(built.count && built.count<=MD_FD_FILTER_INSTRUCTIONS);
+            if (fd==-1 && kind!=MD_FD_SELECTOR_POLL) {
+                struct md_fd_filter_program exact;
+                assert(!md_fd_filter_build(kind,190,&gates,&exact));
+                assert(built.count<exact.count);
+            }
             const unsigned unrelated[]={SYS_gettid,SYS_futex,SYS_clock_gettime,SYS_rt_sigprocmask,SYS_exit};
             for (unsigned n=0;n<sizeof(unrelated)/sizeof(*unrelated);++n) {
                 struct seccomp_data d={.nr=(int)unrelated[n],.instruction_pointer=exempt[0]};

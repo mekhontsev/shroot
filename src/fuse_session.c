@@ -72,7 +72,7 @@ int md_fuse_session_ready(struct md_fuse_session *s) {
     if (ready) { pthread_mutex_unlock(&s->lock); return ready; }
     struct fuse_init_out result={0};
     long size=md_fuse_request_result(s->init,&result,sizeof(result));
-    if (size==-EINPROGRESS) { pthread_mutex_unlock(&s->lock); return 0; }
+    if (size==MD_OPERATION_PENDING) { pthread_mutex_unlock(&s->lock); return 0; }
     if (size<0) error=(int)size;
     /* Both sides advertise their ceiling; a newer daemon speaks our lower
      * offered minor, it is not an incompatible protocol response. */

@@ -556,6 +556,7 @@ static void task_action_call_start(struct task_action *owner) {
         }
         if (!error && !owner->pid_filter) error=md_task_filter_begin(&owner->filter,native_trace,actor->pid,boundary,
             &saved,abi.task_call,abi.task_return,span.data,address,owner->kind,owner->selector_number,&gates);
+        if (!error && !owner->pid_filter) owner->selector_instructions=image->code.count;
     }
     if (error && owner->filter.task.stage) {
         CHECK(error==-ESRCH); actor->resume_lost=1; return;

@@ -8,7 +8,7 @@
 #include <linux/seccomp.h>
 #include <linux/securebits.h>
 #include <linux/shm.h>
-#include <linux/stat.h>
+#include "../src/statx_abi.h"
 #include <signal.h>
 #include <poll.h>
 #include <stddef.h>
@@ -43,7 +43,7 @@ static void mount_identity(void) {
     const char *paths[]={"/","/tmp","/dev/shm","/proc","/dev","/dev/pts","/fixture"};
     unsigned long long ids[sizeof(paths)/sizeof(*paths)]={0};
     for (unsigned i=0; i<sizeof(paths)/sizeof(*paths); ++i) {
-        struct statx named, descriptor;
+        struct md_statx named, descriptor;
         long status=syscall(SYS_statx,AT_FDCWD,paths[i],0,STATX_BASIC_STATS|STATX_MNT_ID,&named);
         if (status) fprintf(stderr,"statx %s: %s\n",paths[i],strerror(errno));
         assert(!status);

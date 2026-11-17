@@ -235,7 +235,7 @@ static int service_request(struct md_filesystem *fs, int socket,
                 else peer->phase=DIRECTORY;
             } else {
                 reply->error=dispatch(&peer->context,&packet,&input,reply,&peer->output,peer->exchange,&origin,&peer->continuation);
-                if (peer->continuation && reply->error==-EINPROGRESS) peer->phase=DEFERRED;
+                if (peer->continuation && reply->error==MD_OPERATION_PENDING) peer->phase=DEFERRED;
             }
             if (!reply->error && packet.operation==MD_FS_WATCH_READ) {
                 peer->watch_reader=input.fd[0]; input.count=0;
@@ -256,7 +256,7 @@ static int service_request(struct md_filesystem *fs, int socket,
 }
 static int admit_wait(struct pollfd *fd,struct peer *peer) {
     if (!peer->admitted_wait) {
-        const struct md_fs_deferred admission={MD_FS_MAGIC,MD_FS_VERSION,-EINPROGRESS};
+        const struct md_fs_deferred admission={MD_FS_MAGIC,MD_FS_VERSION,MD_OPERATION_PENDING};
         const struct md_fs_rights none={0};
         long sent=md_fs_send(fd->fd,&admission,sizeof(admission),&none);
         if (sent==-EAGAIN || sent==-EINTR) { fd->events=POLLOUT; return 0; }

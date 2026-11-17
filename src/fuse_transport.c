@@ -168,7 +168,7 @@ int md_fuse_request_ready(struct md_fuse_request *r) {
 }
 long md_fuse_request_result(struct md_fuse_request *r,void *data,size_t capacity) {
     pthread_mutex_lock(&r->connection->lock);
-    long result=!r->done ? -EINPROGRESS : r->error ? r->error :
+    long result=!r->done ? MD_OPERATION_PENDING : r->error ? r->error :
         r->reply_size>capacity ? -ERANGE : r->reply_size && !data ? -EINVAL : (long)r->reply_size;
     if (result>0) memcpy(data,r->data+r->input_size,r->reply_size);
     pthread_mutex_unlock(&r->connection->lock); return result;

@@ -71,7 +71,7 @@ void __wrap_md_fs_context_execute(struct md_fs_context *context,const struct md_
     continuation->ready=deferred_can_resume; continuation->resume=deferred_resume;
     continuation->destroy=deferred_destroy;
     *output->continuation=continuation;
-    *result=(struct md_fs_result){.fd=-1,.error=-EINPROGRESS};
+    *result=(struct md_fs_result){.fd=-1,.error=MD_OPERATION_PENDING};
     atomic_store_explicit(&deferred_created,1,memory_order_release);
 }
 static struct md_fd_origins *queued_table;

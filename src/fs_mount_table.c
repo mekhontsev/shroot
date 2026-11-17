@@ -478,7 +478,7 @@ static long table_io(void *data,const struct md_control_actor *actor,unsigned op
         .deadline=INT64_MAX,.retry_preparation=1};
     struct md_control_fs_operation work={.run=table_refresh_run,.destroy=table_refresh_release,.context=p};
     result=actor->submit(actor->filesystem,actor,work,&p->work);
-    if (result==-EINPROGRESS) { *pending=&p->pending; return result; }
+    if (result==MD_OPERATION_PENDING) { *pending=&p->pending; return result; }
     table_refresh_release(p);
     table_refresh_dispose(&p->pending);
     return result ? result : -EPROTO;

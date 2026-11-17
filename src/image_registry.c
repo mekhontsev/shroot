@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "image_registry.h"
 #include "image_oci.h"
 #include "image_io.h"
@@ -182,7 +183,7 @@ static int authorize(struct registry *reg,const char *header) {
         free(url); url=next; next=NULL;
     }
     int fd=-1;
-    if (!r && (fd=openat(reg->cache,".",O_TMPFILE|O_RDWR|O_CLOEXEC,0600))<0) r=-errno;
+    if (!r && (fd=(int)md_host_temporary(reg->cache,".",0600))<0) r=fd;
     struct md_http_response response={0};
     if (!r) r=md_http_get(reg->http,url,"application/json",NULL,NULL,fd,JSON_LIMIT,&response);
     if (!r) r=status_error(response.status);
@@ -241,7 +242,8 @@ static int cache_publish(struct registry *reg,struct download *download,const ch
     if (existing>=0) close(existing);
     if (r!=-ENOENT) return r;
     if (fsync(download->fd)) return -errno;
-    if (syscall(SYS_renameat2,reg->cache,download->name,reg->cache,digest+7,RENAME_NOREPLACE)) return -errno;
+    r=(int)md_host_rename(reg->cache,download->name,reg->cache,digest+7,RENAME_NOREPLACE);
+    if (r) return r;
     return fsync(reg->cache) ? -errno : 0;
 }
 static int fetch(struct registry *reg,const struct md_image_descriptor *d,uint64_t limit,int *out) {

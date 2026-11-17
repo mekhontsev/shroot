@@ -145,7 +145,7 @@ void identity_buffer_control(struct thread *t,const struct supervisor_control_re
                 && operation==MD_IDENTITY_COMMIT) {
             struct rlimit next=p->limit,old;
             result=process_limit_apply(t,nr==SYS_setrlimit || (nr==SYS_prlimit64 && call->args[2]) ? &next : NULL,&old);
-            if (result==-EINPROGRESS) return;
+            if (result==MD_OPERATION_PENDING) return;
             if (!result) p->limit=old;
         }
     }
@@ -247,5 +247,5 @@ static int process_limit_capture(struct thread *t,struct thread *target) {
         .authorize=process_limit_capture_allowed,.complete=process_limit_captured};
     t->capture=owner; action->capture=owner;
     CHECK(!md_event_signal(fd_ready));
-    return -EINPROGRESS;
+    return MD_OPERATION_PENDING;
 }

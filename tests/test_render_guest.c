@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 #include <assert.h>
-#include <drm/drm.h>
+#include "../src/drm_abi.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <sched.h>

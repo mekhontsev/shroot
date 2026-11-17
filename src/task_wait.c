@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "task_wait.h"
 #include <errno.h>
+#include <stddef.h>
 #include <sys/wait.h>
 
 void md_task_wait_track(struct md_task_wait *w,struct md_task_wait_member *m,pid_t pid) {

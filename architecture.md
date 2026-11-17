@@ -18,10 +18,12 @@ initial stack/auxv, and enters the distribution's stock glibc/musl loader. Stati
 ELF and raw SVC programs use the same entry admission. No PRoot process, external
 container manager or SELinux change is required.
 
-The freestanding bootstrap is a self-relocating PIE. Each launch retains its
-first placement; the exec owner restores that placement before relocation and
+The freestanding bootstrap is a self-relocating PIE. Initial admission requests
+a free placement below the ordinary top-down mmap region and retains the address
+selected by the kernel, aligned to the ELF's largest load-segment requirement.
+The exec owner restores that placement before relocation and
 guest entry on subsequent execs, preserving inherited seccomp service addresses.
-The common ELF validator supplies its segment layout. File-backed segments move
+The common ELF validator supplies its segment layout and alignment. File-backed segments move
 without copying their code, and writable state belongs to each process. Separate
 launches need no fixed shared address, nesting flag or alternative helper binary.
 
@@ -286,6 +288,10 @@ checkpoint can publish fresh entry views after exec. IP-sensitive inherited
 chains retain Base; old code-pool addresses never authorize a new image.
 Owned service gates use one exact-PC/range matcher with optional syscall scope;
 IP-independent constant-ALLOW exits retain the kernel's cacheable path.
+Routing omits a body delegation already supplied by the first matching entry
+gate with the same syscall, address and decision. The ALLOW cache excludes those
+delegated calls; unrelated calls remain cacheable. All-descriptor selectors
+omit redundant descriptor comparisons without changing their branch decisions.
 IP-dependent policies route owned aliases before evaluation so original-site
 recovery cannot be bypassed by a different ALLOW decision at the alias.
 Application-UID
@@ -416,6 +422,12 @@ helpers and capability-bearing unprivileged launches are not an elevation API.
 Guest flags and signal numbers use the Linux ABI independently of host-libc
 conveniences and reserved signals. Host libc manages the native implementation,
 not the guest's ABI contract.
+`statx_abi.h`, `socket_abi.h` and `resource_abi.h` describe kernel buffers
+explicitly: a musl host must retain guest field widths and buffer sizes even
+when its libc uses narrower fields or larger reserved structures. `linux_abi.h`
+also separates kernel access-mode bits from libc's POSIX O_SEARCH/O_PATH mask.
+Native host-libc calls keep their own types; no conversion is added to ordinary
+native data IO.
 ELF segments use private RW mappings followed by final protections, never RWX.
 Fixed images use `MAP_FIXED_NOREPLACE` and returned-address validation; conflicts
 fail before replacement. Hardened policies may still deny RW-to-RX transitions.

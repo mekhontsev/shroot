@@ -1,5 +1,6 @@
 #ifndef MD_TASK_SEND_H
 #define MD_TASK_SEND_H
+#include "socket_abi.h"
 #include <stdint.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -20,7 +21,7 @@ struct md_task_send {
 struct md_task_send_import {
     uint64_t token;
     struct iovec vector;
-    struct msghdr message;
-    struct { _Alignas(struct cmsghdr) char bytes[CMSG_SPACE(sizeof(int))]; } anchor;
+    struct md_msghdr message;
+    struct { _Alignas(struct md_cmsghdr) char bytes[MD_CMSG_SPACE(sizeof(int))]; } anchor;
 };
 #endif

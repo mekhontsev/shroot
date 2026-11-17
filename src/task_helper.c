@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "socket_abi.h"
 #include "linux_abi.h"
 #include <sys/un.h>
 #include "task_helper.h"
@@ -37,8 +38,8 @@ enum operation { ALLOCATE, PROTECT_STACK, RELEASE_STACK, CLONE, CLEAR, CHANNEL, 
 struct parcel {
     uint64_t token;
     struct iovec vector;
-    struct msghdr message;
-    struct { _Alignas(struct cmsghdr) char bytes[CMSG_SPACE(sizeof(int))]; } control;
+    struct md_msghdr message;
+    struct { _Alignas(struct md_cmsghdr) char bytes[MD_CMSG_SPACE(sizeof(int))]; } control;
     char path[PATH_MAX];
     struct stat metadata;
 };
@@ -240,12 +241,12 @@ static int receive_export(struct helper *m) {
     if (error) { m->result=error; return abort_child(m); }
     p->token=m->capture.request;
     p->vector=(struct iovec){(void *)(m->parcel+offsetof(struct md_task_receive_frame,token)),sizeof(p->token)};
-    p->message=(struct msghdr){.msg_iov=(void *)(m->parcel+offsetof(struct md_task_receive_frame,vector)),.msg_iovlen=1,
-        .msg_control=(void *)(m->parcel+offsetof(struct md_task_receive_frame,control)),.msg_controllen=CMSG_SPACE(p->count*sizeof(int))};
+    p->message=(struct md_msghdr){.msg_iov=(void *)(m->parcel+offsetof(struct md_task_receive_frame,vector)),.msg_iovlen=1,
+        .msg_control=(void *)(m->parcel+offsetof(struct md_task_receive_frame,control)),.msg_controllen=MD_CMSG_SPACE(p->count*sizeof(int))};
     memset(&p->control,0,p->message.msg_controllen);
-    struct cmsghdr *header=(void *)p->control.bytes;
-    *header=(struct cmsghdr){.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS,.cmsg_len=CMSG_LEN(p->count*sizeof(int))};
-    memcpy(CMSG_DATA(header),p->descriptors,p->count*sizeof(int));
+    struct md_cmsghdr *header=(void *)p->control.bytes;
+    *header=(struct md_cmsghdr){.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS,.cmsg_len=MD_CMSG_LEN(p->count*sizeof(int))};
+    memcpy(MD_CMSG_DATA(header),p->descriptors,p->count*sizeof(int));
     m->operation=RECEIVE_EXPORT;
     unsigned long args[6]={m->endpoint,m->parcel+offsetof(struct md_task_receive_frame,message),MSG_NOSIGNAL|MSG_DONTWAIT};
     return call(m,m->child,SYS_sendmsg,args);
@@ -351,22 +352,22 @@ static int advance(struct helper *m, long value) {
             struct md_task_send_import *p=(void *)((char *)span.data+m->send_import-m->parcel);
             if (value!=sizeof(p->token) || p->token!=m->anchor_token) return protocol_error(m,__LINE__);
             if (p->message.msg_flags&MSG_CTRUNC) { m->result=-EMFILE; return abort_child(m); }
-            const struct cmsghdr *header=(void *)p->anchor.bytes;
+            const struct md_cmsghdr *header=(void *)p->anchor.bytes;
             if (p->message.msg_flags&MSG_TRUNC || p->message.msg_controllen!=sizeof(p->anchor)
                     || header->cmsg_level!=SOL_SOCKET || header->cmsg_type!=SCM_RIGHTS
-                    || header->cmsg_len!=CMSG_LEN(sizeof(int))) return protocol_error(m,__LINE__);
-            int fd=-1; memcpy(&fd,CMSG_DATA(header),sizeof(fd));
+                    || header->cmsg_len!=MD_CMSG_LEN(sizeof(int))) return protocol_error(m,__LINE__);
+            int fd=-1; memcpy(&fd,MD_CMSG_DATA(header),sizeof(fd));
             if (fd<0) return protocol_error(m,__LINE__);
             struct sockaddr_un *a=(void *)((char *)span.data+m->send_address-m->parcel);
             *a=(struct sockaddr_un){.sun_family=AF_UNIX};
             int n=snprintf(a->sun_path,sizeof(a->sun_path),"/proc/thread-self/fd/%d",fd);
             if (n<0 || (unsigned)n>=sizeof(a->sun_path)) return protocol_error(m,__LINE__);
-            struct msghdr *message=(void *)((char *)span.data+m->send.message-m->parcel);
+            struct md_msghdr *message=(void *)((char *)span.data+m->send.message-m->parcel);
             message->msg_name=(void *)m->send_address;
             message->msg_namelen=offsetof(struct sockaddr_un,sun_path)+n+1;
             if (m->send_inputs->count>1) {
-                p->message.msg_control=(void *)(m->send.token_slot-CMSG_LEN(0));
-                p->message.msg_controllen=CMSG_SPACE((m->send_inputs->count-1)*sizeof(int));
+                p->message.msg_control=(void *)(m->send.token_slot-MD_CMSG_LEN(0));
+                p->message.msg_controllen=MD_CMSG_SPACE((m->send_inputs->count-1)*sizeof(int));
                 p->message.msg_flags=0; p->token=0;
                 m->operation=SEND_IMPORT; nr=SYS_recvmsg;
                 args[0]=m->endpoint; args[1]=m->send_import+offsetof(struct md_task_send_import,message);
@@ -383,7 +384,7 @@ static int advance(struct helper *m, long value) {
              * alike as CTRUNC. Never send the successfully imported prefix. */
             if (p->message.msg_flags&MSG_CTRUNC) { m->result=-EMFILE; return abort_child(m); }
             if (p->message.msg_flags&MSG_TRUNC
-                    || p->message.msg_controllen!=CMSG_SPACE((m->send_inputs->count-1)*sizeof(int))) return protocol_error(m,__LINE__);
+                    || p->message.msg_controllen!=MD_CMSG_SPACE((m->send_inputs->count-1)*sizeof(int))) return protocol_error(m,__LINE__);
             m->operation=SEND_CLOSE; nr=SYS_close; args[0]=m->endpoint;
             break;
         }
@@ -399,7 +400,7 @@ static int advance(struct helper *m, long value) {
             if (m->send.sendto) {
                 struct md_buffer_span span;
                 if (md_buffer_span(&m->buffer,&span)) return protocol_error(m,__LINE__);
-                struct msghdr *message=(void *)((char *)span.data+m->send.message-m->parcel);
+                struct md_msghdr *message=(void *)((char *)span.data+m->send.message-m->parcel);
                 nr=SYS_sendto; args[1]=(uintptr_t)m->send.payload.iov_base; args[2]=m->send.payload.iov_len;
                 args[3]=(unsigned)m->send.flags; args[4]=(uintptr_t)message->msg_name; args[5]=message->msg_namelen;
             }
@@ -497,11 +498,11 @@ export_open:
             struct parcel *p=span.data;
             p->token=m->capture.request;
             p->vector=(struct iovec){(void *)m->parcel,sizeof(p->token)};
-            p->message=(struct msghdr){.msg_iov=(void *)(m->parcel+offsetof(struct parcel,vector)),.msg_iovlen=1,
+            p->message=(struct md_msghdr){.msg_iov=(void *)(m->parcel+offsetof(struct parcel,vector)),.msg_iovlen=1,
                 .msg_control=(void *)(m->parcel+offsetof(struct parcel,control)),.msg_controllen=sizeof(p->control)};
-            struct cmsghdr *header=(void *)p->control.bytes;
-            *header=(struct cmsghdr){.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS,.cmsg_len=CMSG_LEN(sizeof(int))};
-            int fd=(int)value; memcpy(CMSG_DATA(header),&fd,sizeof(fd));
+            struct md_cmsghdr *header=(void *)p->control.bytes;
+            *header=(struct md_cmsghdr){.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS,.cmsg_len=MD_CMSG_LEN(sizeof(int))};
+            int fd=(int)value; memcpy(MD_CMSG_DATA(header),&fd,sizeof(fd));
             m->operation=EXPORT; nr=SYS_sendmsg;
             args[1]=m->parcel+offsetof(struct parcel,message); args[2]=MSG_NOSIGNAL|MSG_DONTWAIT;
             break;
@@ -597,7 +598,7 @@ static int helper_begin(struct md_task_helpers *manager, pid_t owner, pid_t grou
             && (!path || !*path || strnlen(path,PATH_MAX)==PATH_MAX)) return -EINVAL;
     if (request->kind==MD_TASK_HELPER_SEND_CAPTURED && (!request->send_inputs || request->send_inputs->count<1
             || request->send_inputs->count>MD_TASK_SEND_INPUTS
-            || !request->send.message || (request->send_inputs->count>1 && request->send.token_slot<CMSG_LEN(0)) || request->send.count
+            || !request->send.message || (request->send_inputs->count>1 && request->send.token_slot<MD_CMSG_LEN(0)) || request->send.count
             || request->send.socket<0 || request->send.sendto>1 || request->path || request->flags)) return -EINVAL;
     if (request->kind==MD_TASK_HELPER_SEND_CAPTURED) {
         if (request->send.token_slot>UINTPTR_MAX-(request->send_inputs->count-1)*sizeof(int)) return -EINVAL;
@@ -690,12 +691,12 @@ static int helper_begin(struct md_task_helpers *manager, pid_t owner, pid_t grou
             *(struct md_task_receive_frame *)span.data=(struct md_task_receive_frame){.input=request->receive};
     }
     if (!error && request->kind==MD_TASK_HELPER_SEND_CAPTURED) {
-        uintptr_t control=m->send.token_slot-CMSG_LEN(0);
-        size_t control_size=CMSG_SPACE((m->send_inputs->count-1)*sizeof(int));
+        uintptr_t control=m->send.token_slot-MD_CMSG_LEN(0);
+        size_t control_size=MD_CMSG_SPACE((m->send_inputs->count-1)*sizeof(int));
         if (m->send_import<m->parcel || m->send_import%_Alignof(struct md_task_send_import)
                 || span.size<sizeof(struct md_task_send_import)
                 || m->send_import-m->parcel>span.size-sizeof(struct md_task_send_import)
-                || (m->send_inputs->count>1 && (!control || control%_Alignof(struct cmsghdr)
+                || (m->send_inputs->count>1 && (!control || control%_Alignof(struct md_cmsghdr)
                     || control>UINTPTR_MAX-control_size))
                 || (control<m->send_import+sizeof(struct md_task_send_import)
                     && m->send_import<control+control_size)) error=-EINVAL;
@@ -708,8 +709,8 @@ static int helper_begin(struct md_task_helpers *manager, pid_t owner, pid_t grou
             if (m->send_address || m->send.sendto) {
                 if ((m->send_address && (m->send_address<m->parcel || span.size<sizeof(struct sockaddr_un)
                         || m->send_address-m->parcel>span.size-sizeof(struct sockaddr_un)))
-                        || m->send.message<m->parcel || span.size<sizeof(struct msghdr)
-                        || m->send.message-m->parcel>span.size-sizeof(struct msghdr)) error=-EINVAL;
+                        || m->send.message<m->parcel || span.size<sizeof(struct md_msghdr)
+                        || m->send.message-m->parcel>span.size-sizeof(struct md_msghdr)) error=-EINVAL;
                 else if (m->send_address) {
                     m->send_anchor=fcntl(request->send_anchor,F_DUPFD_CLOEXEC,0);
                     if (m->send_anchor<0) error=-errno;

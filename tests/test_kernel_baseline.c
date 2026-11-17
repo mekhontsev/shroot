@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "kernel_clone.h"
 #include "task_descriptor.h"
 #include "task_lifetime.h"
 #include "fd_filesystem.h"
@@ -79,8 +80,9 @@ static void exercise(int baseline, int protected, int channel) {
     struct thread t={.eof=pipefd[1]};
     void *stack=mmap(NULL,65536,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
     assert(stack!=MAP_FAILED);
-    int tid=clone(child,(char *)stack+65536,CLONE_VM|CLONE_SIGHAND|CLONE_THREAD
+    int tid=md_test_clone(child,(char *)stack+65536,CLONE_VM|CLONE_SIGHAND|CLONE_THREAD
         |CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID,&t,&t.tid,NULL,&t.tid);
+    if (tid<0) fprintf(stderr,"exact-table clone baseline=%d protected=%d error=%d\n",baseline,protected,errno);
     assert(tid>0 && !close(pipefd[1]));
     int replacement=memfd_create("other-table",MFD_CLOEXEC); assert(replacement>=0);
     assert(write(replacement,"b",1)==1 && lseek(replacement,0,SEEK_SET)==0);

@@ -4,4 +4,9 @@
 /* Captured local path/how, under the caller's native identity. Native openat2
  * stays first. The fallback never relaxes unsupported resolution constraints. */
 long md_host_open_resolved(int,const char *,const struct open_how *);
+/* Anonymous private backing, never later linked into a namespace. The caller
+ * supplies an owned scratch directory; no process-global temporary path. */
+long md_host_temporary(int,const char *,unsigned);
+/* Kernel rename flags, including libcs without a renameat2 wrapper. */
+long md_host_rename(int,const char *,int,const char *,unsigned);
 #endif

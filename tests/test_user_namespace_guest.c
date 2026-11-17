@@ -19,7 +19,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <linux/openat2.h>
-#include <linux/stat.h>
 #include <sys/vfs.h>
 #include <linux/magic.h>
 #include <limits.h>

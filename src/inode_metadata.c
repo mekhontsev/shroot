@@ -103,8 +103,8 @@ int mdi_open_permission(struct md_inode_store *s,const struct mdi_node *node,int
     /* The loader reads the ELF on behalf of exec, not as guest file IO.
      * Execute-only helpers must retain X_OK without gaining R_OK. */
     if (s->image_open && node->kind!=S_IFREG) return -EACCES;
-    int access=s->image_open ? X_OK : (flags&O_ACCMODE)==O_WRONLY ? W_OK
-        : (flags&O_ACCMODE)==O_RDWR ? R_OK|W_OK : R_OK;
+    int access=s->image_open ? X_OK : (flags&MD_O_ACCMODE)==O_WRONLY ? W_OK
+        : (flags&MD_O_ACCMODE)==O_RDWR ? R_OK|W_OK : R_OK;
     int r=permission_observed(s,node,access,s->identity,observed);
     if (!r) r=mdi_overlay_permission(s,node,access);
     if (s->image_open) return r;

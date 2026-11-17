@@ -301,8 +301,10 @@ int md_ipc_io_send(struct md_ipc_io *op, const struct md_received_fds *fds,
     unsigned cursor=1;
     for (struct cmsghdr *h=CMSG_FIRSTHDR(&message);h;h=CMSG_NXTHDR(&message,h)) {
         size_t offset=(char *)h-control;
-        if (h->cmsg_len<CMSG_LEN(0) || offset>op->control_capacity
-                || h->cmsg_len>op->control_capacity-offset) { *result=-EINVAL; return 0; }
+        struct md_cmsghdr kernel;
+        memcpy(&kernel,h,sizeof(kernel));
+        if (kernel.cmsg_len<MD_CMSG_LEN(0) || offset>op->control_capacity
+                || kernel.cmsg_len>op->control_capacity-offset) { *result=-EINVAL; return 0; }
         if (h->cmsg_level==SOL_SOCKET && h->cmsg_type==SCM_RIGHTS) {
             unsigned count=(h->cmsg_len-CMSG_LEN(0))/sizeof(int);
             if (count>fds->count-cursor) { *result=-EINVAL; return 0; }

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "readonly_file.h"
 #include "file_open.h"
 #include "file_permissions.h"
@@ -64,7 +65,7 @@ struct md_control_file md_readonly_file_new(int fd) {
     struct stat st;
     int flags=fcntl(fd,F_GETFL);
     int error=flags<0 ? errno : fstat(fd,&st) ? errno : 0;
-    if (!error && ((flags&O_PATH) || (flags&O_ACCMODE)==O_WRONLY || !S_ISREG(st.st_mode)
+    if (!error && ((flags&O_PATH) || (flags&MD_O_ACCMODE)==O_WRONLY || !S_ISREG(st.st_mode)
             || st.st_nlink || fcntl(fd,F_GET_SEALS)<0)) error=EACCES;
     struct readonly_file *f=error ? NULL : calloc(1,sizeof(*f));
     if (!error && !f) error=errno;

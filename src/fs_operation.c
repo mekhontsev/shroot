@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "fs_operation.h"
 #include "ipc_credentials.h"
 #include "posix_acl.h"
@@ -132,7 +133,7 @@ int md_fs_request_validate(const struct md_fs_request *q) {
             || q->mode || q->capacity || q->offset ? -EINVAL : 0;
     if (q->operation==MD_FS_FSPICK)
         return (!*a && !(descriptors&1)) || *b || (descriptors&2)
-            || q->flags&~(O_RDWR|O_CLOEXEC) || (q->flags&O_ACCMODE)!=O_RDWR
+            || q->flags&~(O_RDWR|O_CLOEXEC) || (q->flags&MD_O_ACCMODE)!=O_RDWR
             || q->mode&~AT_SYMLINK_NOFOLLOW || q->capacity || q->offset ? -EINVAL : 0;
     if (q->operation==MD_FS_IOCTL)
         return descriptors!=1 || q->directory[0]<0 || *a || *b

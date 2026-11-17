@@ -16,6 +16,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <asm/ioctl.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
 #include <drm.h>

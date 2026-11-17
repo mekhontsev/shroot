@@ -22,7 +22,10 @@ static struct shroot_result wait_job(shroot_job *job) {
     /* EVENT_WAIT: exact child's exit; a stalled fixture fails after five seconds. */
     assert(poll(&fd, 1, 5000) == 1 && (fd.revents & POLLIN));
     struct shroot_result result, again;
-    assert(!shroot_job_wait(job, 1, &result));
+    int waited=shroot_job_wait(job,1,&result);
+    /* A kernel ptracer can still own exit reaping after pidfd readiness. */
+    if (waited==-EAGAIN) waited=shroot_job_wait(job,0,&result);
+    assert(!waited);
     assert(!shroot_job_wait(job, 1, &again));
     assert(result.error == again.error && result.exit_code == again.exit_code && result.signal == again.signal);
     assert(!shroot_job_cancel(job)); assert(!shroot_job_close(job)); return result;

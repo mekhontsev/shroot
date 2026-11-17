@@ -579,7 +579,7 @@ static void control_dispose(struct md_control_pending *pending) {
 static long control_resume(struct md_control_pending *pending,void *data,size_t size) {
     (void)data; (void)size;
     struct control_work *w=(void *)((char *)pending - offsetof(struct control_work,pending));
-    return atomic_load_explicit(&w->done,memory_order_acquire) ? w->result : -EINPROGRESS;
+    return atomic_load_explicit(&w->done,memory_order_acquire) ? w->result : MD_OPERATION_PENDING;
 }
 static int control_ready(struct md_fs_work *work) {
     struct control_work *w=(void *)work;
@@ -592,9 +592,9 @@ static void control_run(struct md_fs_work *work,struct md_filesystem *fs,int err
     w->context.filesystem=fs;
     w->result=error ? error : w->operation.run(w->operation.context,&w->context,&w->continuation);
     w->context.filesystem=NULL;
-    if (w->result==-EINPROGRESS && w->continuation) work->await=control_ready;
+    if (w->result==MD_OPERATION_PENDING && w->continuation) work->await=control_ready;
     else {
-        if (w->result==-EINPROGRESS) w->result=-EPROTO;
+        if (w->result==MD_OPERATION_PENDING) w->result=-EPROTO;
         atomic_store_explicit(&w->done,1,memory_order_release);
         md_resource_wakeup_signal(w->wakeup);
     }
@@ -622,5 +622,5 @@ long md_fs_worker_control(void *worker,const struct md_control_actor *actor,
         md_resource_wakeup_release(w->worker_wakeup); free(w);
         return error;
     }
-    *pending=&w->pending; return -EINPROGRESS;
+    *pending=&w->pending; return MD_OPERATION_PENDING;
 }

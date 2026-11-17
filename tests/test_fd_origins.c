@@ -36,18 +36,12 @@
 #include <unistd.h>
 
 static int allocation_budget=-1;
-void *__real_malloc(size_t);
-void *__real_calloc(size_t,size_t);
-void *__wrap_malloc(size_t n) {
-    if (!allocation_budget) { errno=ENOMEM; return NULL; }
+static int md_test_allocation_requested(void) {
+    if (!allocation_budget) { errno=ENOMEM; return 1; }
     if (allocation_budget>0) --allocation_budget;
-    return __real_malloc(n);
+    return 0;
 }
-void *__wrap_calloc(size_t n, size_t size) {
-    if (!allocation_budget) { errno=ENOMEM; return NULL; }
-    if (allocation_budget>0) --allocation_budget;
-    return __real_calloc(n,size);
-}
+#include "test_allocation.h"
 static unsigned descriptors(void) {
     DIR *d=opendir("/proc/self/fd"); assert(d);
     unsigned n=0; while (readdir(d)) ++n;
@@ -215,11 +209,12 @@ static void borrowed_file_destroy(struct md_fd_object *object) { (void)object; }
 static struct md_control_file borrowed_readiness(struct md_fd_object *object) {
     (void)object; return (struct md_control_file){0};
 }
-struct closing_file { struct md_fd_object object; unsigned closes,destroyed; };
+struct closing_file { struct md_fd_object object; unsigned closes,destroyed; long result; };
 static void closing_destroy(struct md_fd_object *object) { ++((struct closing_file *)object)->destroyed; }
 static long closing_close(struct md_fd_object *object,const struct md_control_actor *actor,
         struct md_control_pending **pending) {
-    assert(actor && !*pending); ++((struct closing_file *)object)->closes; return -EIO;
+    assert(actor && !*pending); ++((struct closing_file *)object)->closes;
+    return ((struct closing_file *)object)->result;
 }
 static void put_closing(struct md_fd_origins *files,int fd,struct closing_file *file) {
     struct md_fd_origin_update update;
@@ -240,6 +235,16 @@ static void close_lifecycle(void) {
     struct closing_file file={0}; md_fd_object_init(&file.object,&type);
     struct md_fd_origins *files=md_fd_origins_new(); assert(files);
     struct md_fd_closed closed={0}; struct md_fd_mutation op;
+    const long results[]={0,-EIO,-EINPROGRESS,MD_OPERATION_PENDING};
+    for (unsigned i=0;i<sizeof(results)/sizeof(*results);++i) {
+        file.result=results[i]; put_closing(files,10,&file);
+        assert(!md_fd_origins_close_collect(files,10,10,0,&closed));
+        struct md_control_pending *pending=NULL;
+        long result=md_fd_closed_next(&closed,&(struct md_control_actor){0},&pending);
+        assert(result==(results[i]==MD_OPERATION_PENDING ? -EPROTO : results[i]));
+        assert(!pending && !closed.first && !file.destroyed);
+    }
+    file.result=-EIO; file.closes=0;
     put_closing(files,10,&file);
     unsigned long args[6]={10};
     assert(!md_fd_mutation_prepare(files,SYS_close,args,&op));
@@ -822,11 +827,11 @@ static void exchanges(struct md_fs_anchor *a, struct md_fs_anchor *b) {
     assert(receipt!=MAP_FAILED);
     assert(!md_fd_exchange_received(owner));
     assert(!md_fd_receipt_reset(receipt,2));
-    struct cmsghdr *c=(void *)receipt->control;
-    c->cmsg_len=CMSG_LEN(sizeof(targets)); c->cmsg_level=SOL_SOCKET; c->cmsg_type=SCM_RIGHTS;
-    int invalid[]={10,10}; memcpy(CMSG_DATA(c),invalid,sizeof(invalid));
+    struct md_cmsghdr *c=(void *)receipt->control;
+    c->cmsg_len=MD_CMSG_LEN(sizeof(targets)); c->cmsg_level=SOL_SOCKET; c->cmsg_type=SCM_RIGHTS;
+    int invalid[]={10,10}; memcpy(MD_CMSG_DATA(c),invalid,sizeof(invalid));
     assert(md_fd_exchange_received(owner)==-EPROTO);
-    memcpy(CMSG_DATA(c),targets,sizeof(targets));
+    memcpy(MD_CMSG_DATA(c),targets,sizeof(targets));
     assert(md_fd_exchange_offer(worker,a,1)==-EALREADY);
     md_fd_exchange_close(set,owner);
     assert(!md_fd_exchange_acquire(set,id,120,files));
@@ -1008,19 +1013,19 @@ static void deliveries(struct md_fs_anchor *a, struct md_fs_anchor *b) {
         assert(!md_fd_delivery_publish(&delivery));
         assert(!md_fd_receipt_reset(delivery.receipt,3));
         assert(!md_fd_delivery_publish(&delivery));
-        struct cmsghdr *c=(void *)delivery.receipt->control;
-        *c=(struct cmsghdr){.cmsg_len=CMSG_LEN(2*sizeof(int)),.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
+        struct md_cmsghdr *c=(void *)delivery.receipt->control;
+        *c=(struct md_cmsghdr){.cmsg_len=MD_CMSG_LEN(2*sizeof(int)),.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
         int invalid[]={fds[0],fds[0]};
-        delivery.receipt->message.msg_controllen=CMSG_LEN(sizeof(invalid));
-        memcpy(CMSG_DATA(c),invalid,sizeof(invalid));
+        delivery.receipt->message.msg_controllen=MD_CMSG_LEN(sizeof(invalid));
+        memcpy(MD_CMSG_DATA(c),invalid,sizeof(invalid));
         assert(md_fd_delivery_publish(&delivery)==-EPROTO);
         for (unsigned i=0;i<3;++i) expect(files,fds[i],b,0);
         assert(numbers[0]==-9);
         assert(!md_fd_receipt_reset(delivery.receipt,3));
         c=(void *)delivery.receipt->control;
-        c->cmsg_len=CMSG_LEN(count*sizeof(int)); c->cmsg_level=SOL_SOCKET; c->cmsg_type=SCM_RIGHTS;
-        memcpy(CMSG_DATA(c),fds,count*sizeof(int));
-        delivery.receipt->message.msg_controllen=CMSG_LEN(count*sizeof(int));
+        c->cmsg_len=MD_CMSG_LEN(count*sizeof(int)); c->cmsg_level=SOL_SOCKET; c->cmsg_type=SCM_RIGHTS;
+        memcpy(MD_CMSG_DATA(c),fds,count*sizeof(int));
+        delivery.receipt->message.msg_controllen=MD_CMSG_LEN(count*sizeof(int));
         if (count<3) delivery.receipt->message.msg_flags=MSG_CTRUNC;
         /* An admitted delivery retains the table even after its task owner exits. */
         struct md_fd_origins *pin=md_fd_origins_pin(files);
@@ -1059,10 +1064,10 @@ static void receipts(void) {
         assert(!md_fd_receipt_reset(receipt,capacity));
         for (unsigned i=0;i<=MD_FD_RECEIPT_MAX;++i) output[i]=-9;
         assert(!md_fd_receipt_read(receipt,capacity,output) && output[0]==-9);
-        struct cmsghdr *c=(void *)receipt->control;
-        *c=(struct cmsghdr){.cmsg_len=CMSG_LEN(capacity*sizeof(int)),
+        struct md_cmsghdr *c=(void *)receipt->control;
+        *c=(struct md_cmsghdr){.cmsg_len=MD_CMSG_LEN(capacity*sizeof(int)),
             .cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
-        int *numbers=(void *)CMSG_DATA(c);
+        int *numbers=(void *)MD_CMSG_DATA(c);
         for (unsigned i=0;i<capacity;++i) numbers[i]=10+(int)i;
         /* Pointer fields are foreign process addresses, not parser inputs. */
         receipt->message.msg_control=(void *)1; receipt->message.msg_iov=(void *)1;
@@ -1089,8 +1094,8 @@ static void receipts(void) {
         assert(md_fd_receipt_read(receipt,capacity,output)==-EPROTO);
         assert(output[capacity-1]==10+(int)capacity-1 && output[capacity]==-9);
         c->cmsg_type=SCM_RIGHTS;
-        c->cmsg_len=CMSG_LEN(sizeof(int));
-        receipt->message.msg_controllen=CMSG_LEN(sizeof(int));
+        c->cmsg_len=MD_CMSG_LEN(sizeof(int));
+        receipt->message.msg_controllen=MD_CMSG_LEN(sizeof(int));
         receipt->message.msg_flags=MSG_CTRUNC;
         assert(md_fd_receipt_read(receipt,capacity,output)==1 && output[0]==10);
         assert(!md_fd_receipt_reset(receipt,capacity));

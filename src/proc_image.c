@@ -1,4 +1,6 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
+#include "host_open.h"
 #include "proc_paths.h"
 #include "fs.h"
 #include "fs_rpc.h"
@@ -15,7 +17,7 @@
 #include <fcntl.h>
 
 long md_proc_executable_capture(const struct md_fs *fs,int process,int flags) {
-    if (!(flags&O_PATH) && ((flags&O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) return -ETXTBSY;
+    if (!(flags&O_PATH) && ((flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) return -ETXTBSY;
     if ((flags&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) return -EEXIST;
     long fd=md_proc_control_open(&(struct md_proc_path){.process=process,.kind=MD_PROC_EXE},flags,0);
     if (fd!=-EXDEV) return fd;
@@ -33,7 +35,7 @@ long md_proc_executable_open(const struct md_fs *fs, const char *path, int flags
         return md_proc_executable_capture(fs,md_native_tid(),flags);
     if (!fs->image || !fs->image->executable_object[0])
         return md_namespace_open(fs, AT_FDCWD, path, flags, 0);
-    if (!(flags & O_PATH) && ((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC))) return -ETXTBSY;
+    if (!(flags & O_PATH) && ((flags & MD_O_ACCMODE) != O_RDONLY || (flags & O_TRUNC))) return -ETXTBSY;
     if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) return -EEXIST;
     struct md_fs_request q = {.operation = MD_FS_OPEN_OBJECT, .directory = {-1, -1},
         .path = {fs->image->executable_object, NULL}, .flags = (unsigned)(flags & ~(O_CREAT | O_EXCL | O_NOFOLLOW))};
@@ -98,7 +100,7 @@ long md_proc_image_open(const struct md_fs *fs, enum md_proc_kind kind, int flag
     const struct md_process_image *image = fs->image;
     if (!image || !image->auxv_bytes) return -ENOTSUP;
     if (flags & O_DIRECTORY) return -ENOTDIR;
-    if ((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC)) return -EACCES;
+    if ((flags & MD_O_ACCMODE) != O_RDONLY || (flags & O_TRUNC)) return -EACCES;
     if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) return -EEXIST;
     struct image_snapshot snapshot={.image=image,.kind=kind};
     if (fs->endpoint[0]) {
@@ -108,7 +110,7 @@ long md_proc_image_open(const struct md_fs *fs, enum md_proc_kind kind, int flag
         return -ENOTSUP;
 #endif
     }
-    long fd = RAW4(openat, AT_FDCWD, fs->root, O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
+    long fd=md_host_temporary(AT_FDCWD,fs->root,0600);
     if (fd < 0) return fd;
     long r = 0;
     char bytes[4096];

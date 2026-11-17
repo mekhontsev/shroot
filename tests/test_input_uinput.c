@@ -44,7 +44,7 @@ static void configure(struct md_control_file f) {
 static struct md_control_pending *upload(struct md_control_file ev,int id) {
     struct ff_effect e={.type=FF_RUMBLE,.id=(int16_t)id,.u.rumble={1000,2000},.replay={50,0}};
     struct md_control_pending *pending=NULL;
-    assert(ev.ops->ioctl_async(ev.context,NULL,EVIOCSFF,0,&e,sizeof(e),&pending)==-EINPROGRESS);
+    assert(ev.ops->ioctl_async(ev.context,NULL,EVIOCSFF,0,&e,sizeof(e),&pending)==MD_OPERATION_PENDING);
     assert(pending); return pending;
 }
 static void acknowledge(struct md_control_file ui,int result) {
@@ -81,7 +81,7 @@ int main(void) {
     assert(ui.ops->read(ui.context,NULL,&peek,sizeof(peek),0)==sizeof(peek));
     ui.ops->read_commit(ui.context,0);
     struct ff_effect result;
-    assert(pending->resume(pending,&result,sizeof(result))==-EINPROGRESS);
+    assert(pending->resume(pending,&result,sizeof(result))==MD_OPERATION_PENDING);
     acknowledge(ui,0);
     assert(!pending->resume(pending,&result,sizeof(result)) && result.id==0);
     pending->dispose(pending); assert(!poll(&poller,1,0));
@@ -96,7 +96,7 @@ int main(void) {
     struct uinput_ff_upload stale={.request_id=(unsigned)canceled.value};
     assert(control(ui,UI_BEGIN_FF_UPLOAD,0,&stale)==-EINVAL);
     pending=NULL;
-    assert(ev.ops->ioctl_async(ev.context,NULL,EVIOCRMFF,0,NULL,0,&pending)==-EINPROGRESS);
+    assert(ev.ops->ioctl_async(ev.context,NULL,EVIOCRMFF,0,NULL,0,&pending)==MD_OPERATION_PENDING);
     assert(receive(ui).type==EV_FF); /* Stop precedes effect removal. */
     struct input_event erase=receive(ui); assert(erase.code==UI_FF_ERASE);
     struct uinput_ff_erase er={.request_id=(unsigned)erase.value};

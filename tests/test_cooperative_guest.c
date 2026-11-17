@@ -13,7 +13,7 @@
 #include <linux/futex.h>
 #include <linux/landlock.h>
 #include <linux/seccomp.h>
-#include <linux/stat.h>
+#include "../src/statx_abi.h"
 #include <linux/openat2.h>
 #include <linux/if_tun.h>
 #include <linux/if.h>
@@ -1670,7 +1670,7 @@ static void filesystem_operations(void) {
     }
     assert(!direct6(SYS_linkat,AT_FDCWD,(uintptr_t)path,base,(uintptr_t)"linked",0,0));
     assert(!direct6(SYS_symlinkat,(uintptr_t)"linked",base,(uintptr_t)"symlink",0,0,0));
-    struct statx sx;
+    struct md_statx sx;
     assert(!direct6(SYS_statx,base,(uintptr_t)"linked",0,STATX_BASIC_STATS,(uintptr_t)&sx,0));
     struct stat st; assert(!stat(path,&st) && sx.stx_ino==st.st_ino && sx.stx_size==7 && sx.stx_nlink==2);
     assert(direct6(SYS_statx,base,(uintptr_t)"linked",AT_STATX_SYNC_TYPE,STATX_BASIC_STATS,(uintptr_t)&sx,0)==-EINVAL);

@@ -110,7 +110,7 @@ int64_t md_inode_seekdir(struct md_inode_store *s, int fd, int64_t offset, int w
     off_t result = lseek(fd, offset, whence);
     return result < 0 ? -errno : result;
 }
-static ssize_t getdents(struct md_inode_store *s, int fd, void *out, size_t capacity,
+static ssize_t read_entries(struct md_inode_store *s, int fd, void *out, size_t capacity,
         int (*deliver)(void *, const void *, size_t), void *context, int64_t *next) {
     if (!out) return -EFAULT;
     if (capacity > INT_MAX) return -EINVAL;
@@ -158,11 +158,11 @@ static ssize_t getdents(struct md_inode_store *s, int fd, void *out, size_t capa
 }
 ssize_t md_inode_getdents_prepare(struct md_inode_store *s, int fd, void *out, size_t capacity, int64_t *next) {
     if (!next) return -EINVAL;
-    return getdents(s,fd,out,capacity,NULL,NULL,next);
+    return read_entries(s,fd,out,capacity,NULL,NULL,next);
 }
 ssize_t md_inode_getdents_deliver(struct md_inode_store *s, int fd, void *out, size_t capacity,
         int (*deliver)(void *, const void *, size_t), void *context) {
-    return getdents(s,fd,out,capacity,deliver,context,NULL);
+    return read_entries(s,fd,out,capacity,deliver,context,NULL);
 }
 ssize_t md_inode_getdents(struct md_inode_store *s, int fd, void *out, size_t capacity) {
     return md_inode_getdents_deliver(s, fd, out, capacity, NULL, NULL);

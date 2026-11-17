@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "socket_abi.h"
 #include "socket_calls.h"
 #include "file_calls.h"
 #include "socket_routes.h"
@@ -71,7 +72,7 @@ long md_socket_offline_error(long nr, const unsigned long *a) {
     if (nr==SYS_sendto) return a[4] && a[5] ? -EOPNOTSUPP : 0;
     if (nr==SYS_sendmmsg) return -EOPNOTSUPP;
     if (nr==SYS_sendmsg) {
-        struct msghdr message;
+        struct md_msghdr message;
         long error=md_read_memory(&message,(void *)a[1],sizeof(message));
         if (error) return error;
         return message.msg_name && message.msg_namelen ? -EOPNOTSUPP : 0;
@@ -92,7 +93,7 @@ static long connect_socket(const struct md_fs *fs, int fd, const struct sockaddr
 static int message_remaining(uintptr_t pointer, unsigned sent) {
     // import_iovec limits the kernel's iterator even for a larger user vector.
     if (md_page_size && sent == ((unsigned)INT_MAX & ~(md_page_size - 1))) return 0;
-    struct msghdr message;
+    struct md_msghdr message;
     if (md_read_memory(&message, (void *)pointer, sizeof(message)) < 0) return 1;
     // The successful send already validated the iovecs. A concurrent change
     // must not turn a completed message into an error or trigger a replay.
@@ -118,14 +119,14 @@ static long send_batch(const struct md_fs *fs, const char *exe, const unsigned l
     if (!count) return md_socket_invoke(SYS_sendmmsg,a);
     if (count > 1024) count = 1024; // Linux caps the vector at UIO_MAXIOV.
     for (unsigned i = 0; i < count; ++i) {
-        uintptr_t offset = i * sizeof(struct mmsghdr), pointer = a[1] + offset;
+        uintptr_t offset = i * sizeof(struct md_mmsghdr), pointer = a[1] + offset;
         long r = -EFAULT;
-        if (pointer >= a[1] && pointer <= UINTPTR_MAX - sizeof(struct mmsghdr)) {
+        if (pointer >= a[1] && pointer <= UINTPTR_MAX - sizeof(struct md_mmsghdr)) {
             unsigned long args[6] = {a[0], pointer, a[3]};
             r = md_socket_call(fs, exe, SYS_sendmsg, args,0);
             if (r >= 0) {
                 unsigned length = (unsigned)r;
-                r = md_write_memory((void *)(pointer + offsetof(struct mmsghdr, msg_len)),
+                r = md_write_memory((void *)(pointer + offsetof(struct md_mmsghdr, msg_len)),
                     &length, sizeof(length));
                 if (!r && i + 1 < count && message_remaining(pointer, length)) return i + 1;
             }
@@ -176,7 +177,7 @@ long md_socket_address_call(const struct md_fs *fs, const char *exe, long nr, co
     unsigned length_index = address_index + 1;
     const void *pointer = (void *)a[address_index];
     unsigned length = (unsigned)a[length_index];
-    struct msghdr message;
+    struct md_msghdr message;
     if (nr == SYS_sendmsg) {
         long r = md_read_memory(&message, (void *)a[1], sizeof(message));
         if (r < 0) return r;

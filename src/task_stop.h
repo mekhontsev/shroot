@@ -1,6 +1,7 @@
 #ifndef MD_TASK_STOP_H
 #define MD_TASK_STOP_H
 #include <errno.h>
+#include <stddef.h>
 #include <signal.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>

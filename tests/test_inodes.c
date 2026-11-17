@@ -4,6 +4,7 @@
 #include "fs_operation.h"
 #include "linux_abi.h"
 #include "test_sql_plan.h"
+#include "test_capabilities.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -532,6 +533,8 @@ static void symlinks(void) {
     puts("PASS relative/absolute symlinks, hard-linked symlink inodes, follow flags and 40-link bound");
 }
 static void permissions(void) {
+    struct __user_cap_data_struct capabilities[2];
+    md_test_capabilities_suspend((UINT64_C(1)<<CAP_DAC_OVERRIDE)|(UINT64_C(1)<<CAP_DAC_READ_SEARCH),capabilities);
     struct md_inode_store *s = store("permissions", 1);
     CHECK(md_inode_mkdir(s, MD_INODE_ROOT, "dir", 0755) == 0);
     int dir = directory(s, "dir");
@@ -561,6 +564,7 @@ static void permissions(void) {
     CHECK(md_inode_create(s, closed, "blocked", 0600) == -EACCES);
     CHECK(md_inode_unlink(s, MD_INODE_ROOT, "closed", AT_REMOVEDIR) == 0);
     close(closed); close(dir); md_inode_store_close(s);
+    md_test_capabilities_restore(capabilities);
     puts("PASS real directory search/write permissions and mode-zero directories");
 }
 static void equal_result(const char *operation, const char *name, long got, long expected) {
@@ -1757,7 +1761,15 @@ static void native_plans(void) {
         CHECK(!fstat(directory,&st) && S_ISDIR(st.st_mode));
         char path[64]; unsigned flags=md_open_plan_path(path,0,(unsigned)directory,directories[i],st.st_mode);
         int opened=open(path,flags); CHECK(opened>=0);
-        CHECK((fcntl(opened,F_GETFL)&~MD_O_LARGEFILE)==(int)directories[i]);
+        int observed=fcntl(opened,F_GETFL)&~MD_O_LARGEFILE;
+        if (observed!=(int)directories[i]) fprintf(stderr,"reopened directory flags=%#x expected=%#x\n",observed,directories[i]);
+        CHECK(observed==(int)directories[i]);
+        close(opened);
+        opened=md_inode_reopen(s,directory,directories[i],0);
+        CHECK(opened>=0 && (fcntl(opened,F_GETFL)&~MD_O_LARGEFILE)==(int)directories[i]);
+        close(opened);
+        opened=md_inode_open(s,-1,"directory",directories[i],0);
+        CHECK(opened>=0 && (fcntl(opened,F_GETFL)&~MD_O_LARGEFILE)==(int)directories[i]);
         close(opened);
         CHECK(!close(directory));
         CHECK(md_inode_plan_open(s,-1,"missing",directories[i],0,0,&completion,1,NULL)==-ENOENT);

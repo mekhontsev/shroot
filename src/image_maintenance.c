@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "image_maintenance.h"
 #include "image_publish.h"
 #include "private_tree.h"
@@ -39,7 +40,7 @@ int md_image_remove(const char *directory, int layer) {
     if (!r && (fstat(root, &opened) || fstatat(parent, resumed ? tomb : name, &named, AT_SYMLINK_NOFOLLOW)
             || opened.st_dev != named.st_dev || opened.st_ino != named.st_ino)) r = -ESTALE;
     if (!r) {
-        if (!resumed && syscall(SYS_renameat2, parent, name, parent, tomb, RENAME_NOREPLACE)) r = -errno;
+        if (!resumed) r=(int)md_host_rename(parent,name,parent,tomb,RENAME_NOREPLACE);
         if (!r && fsync(parent)) r = -errno;
         if (!r) r = md_private_tree_discard(parent, tomb);
         if (!r && fsync(parent)) r = -errno;

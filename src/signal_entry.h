@@ -14,7 +14,7 @@ struct md_signal_frame { siginfo_t info; ucontext_t context; };
 /* EXTRA records contain location-relative pointers. Unknown records keep the
  * original kernel path rather than guessing how to relocate their payload. */
 static inline int md_signal_frame_relocatable(const struct md_signal_frame *frame) {
-    const unsigned char *data=frame->context.uc_mcontext.__reserved;
+    const unsigned char *data=(const unsigned char *)frame->context.uc_mcontext.__reserved;
     size_t size=sizeof(frame->context.uc_mcontext.__reserved);
     for (size_t offset=0;offset+8<=size;) {
         uint32_t header[2]; memcpy(header,data+offset,sizeof(header));

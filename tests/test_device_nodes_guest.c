@@ -2,7 +2,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/stat.h>
+#include "../src/statx_abi.h"
 #include <poll.h>
 #include <sched.h>
 #include <stdio.h>
@@ -29,7 +29,7 @@ static void same(int fd,const struct stat *expected) {
         && st.st_rdev==expected->st_rdev && st.st_mode==expected->st_mode);
     assert(!fstatat(fd,"",&st,AT_EMPTY_PATH) && st.st_ino==expected->st_ino
         && st.st_dev==expected->st_dev && st.st_rdev==expected->st_rdev && st.st_mode==expected->st_mode);
-    struct statx x;
+    struct md_statx x;
     assert(!syscall(SYS_statx,fd,"",AT_EMPTY_PATH,STATX_BASIC_STATS,&x));
     assert(x.stx_ino==expected->st_ino && x.stx_mode==expected->st_mode
         && makedev(x.stx_dev_major,x.stx_dev_minor)==expected->st_dev

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "devpts_view.h"
 #include "directory_record.h"
 #include "file_permissions.h"
@@ -168,7 +169,7 @@ int md_devpts_step(struct md_devpts *p,int directory,const char *name) {
 int md_devpts_open(struct md_devpts *p,int fd,int flags,const struct md_identity *id) {
     struct stat st; int r=md_devpts_stat(p,fd,&st); if (r) return r;
     if (!(flags&O_PATH)) {
-        r=md_file_permissions(&st,(flags&O_ACCMODE)==O_RDWR ? R_OK|W_OK : (flags&O_ACCMODE)==O_WRONLY ? W_OK : R_OK,id);
+        r=md_file_permissions(&st,(flags&MD_O_ACCMODE)==O_RDWR ? R_OK|W_OK : (flags&MD_O_ACCMODE)==O_WRONLY ? W_OK : R_OK,id);
         if (r) return r;
     }
     char path[64]; snprintf(path,sizeof(path),"/proc/self/fd/%d",fd);

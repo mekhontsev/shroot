@@ -55,7 +55,7 @@ struct table_work {
 static long table_work_resume(struct md_control_pending *pending,void *out,size_t size) {
     (void)out; (void)size;
     struct table_work *w=(void *)pending;
-    return w->done ? w->result : -EINPROGRESS;
+    return w->done ? w->result : MD_OPERATION_PENDING;
 }
 static void table_work_dispose(struct md_control_pending *pending) {
     struct table_work *w=(void *)pending;
@@ -69,7 +69,7 @@ static long table_submit(void *context,const struct md_control_actor *actor,
     assert(!w->operation.run || w->disposed);
     w->operation=operation; w->done=w->disposed=0;
     w->pending=(struct md_control_pending){.resume=table_work_resume,.dispose=table_work_dispose};
-    *pending=&w->pending; return -EINPROGRESS;
+    *pending=&w->pending; return MD_OPERATION_PENDING;
 }
 static void table_work_run(struct table_work *w) {
     struct md_fs_context context={.filesystem=w->fs};
@@ -115,9 +115,9 @@ static void mount_table_reads(struct md_filesystem *fs) {
     assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),1,&pending)==size-1);
     assert(!pending && !memcmp(after,before+1,(size_t)size-1));
     assert(poll(&event,1,0)==1);
-    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==-EINPROGRESS);
+    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==MD_OPERATION_PENDING);
     assert(pending && pending->retry_preparation && !work.done);
-    assert(pending->resume(pending,after,sizeof(after))==-EINPROGRESS);
+    assert(pending->resume(pending,after,sizeof(after))==MD_OPERATION_PENDING);
     table_work_run(&work);
     size=pending->resume(pending,after,sizeof(after)-1);
     assert(size>0); after[size]=0;
@@ -127,14 +127,14 @@ static void mount_table_reads(struct md_filesystem *fs) {
     q=(struct md_fs_request){.operation=MD_FS_MOUNT,.mode=MD_FS_MOUNT_UMOUNT,
         .directory={-1,-1},.path={"/table-alias",NULL}};
     md_fs_execute(fs,&q,&r,NULL); assert(!r.error);
-    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==-EINPROGRESS);
+    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==MD_OPERATION_PENDING);
     pending->dispose(pending); pending=NULL;
     assert(poll(&event,1,0)==1);
-    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==-EINPROGRESS);
+    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==MD_OPERATION_PENDING);
     table_work_run(&work);
     pending->dispose(pending); pending=NULL;
     assert(poll(&event,1,0)==1);
-    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==-EINPROGRESS);
+    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==MD_OPERATION_PENDING);
     table_work_run(&work);
     /* A later change stays signalled even when an older read completes. */
     md_fs_mount_table_changed(fs);
@@ -142,7 +142,7 @@ static void mount_table_reads(struct md_filesystem *fs) {
     assert(size>0); after[size]=0; assert(!strstr(after," /table-alias "));
     pending->dispose(pending); pending=NULL;
     assert(poll(&event,1,0)==1);
-    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==-EINPROGRESS);
+    assert(file.ops->io(file.context,&actor,MD_CONTROL_READ,after,sizeof(after),0,&pending)==MD_OPERATION_PENDING);
     md_control_file_release(file); close(fd);
     table_work_run(&work);
     assert(pending->resume(pending,after,sizeof(after))>0);

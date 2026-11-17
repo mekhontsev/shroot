@@ -47,8 +47,8 @@ static int proc_task_apply(struct md_filesystem *fs,struct md_fs_anchor *origin,
             : md_proc_file_task_access(fs->store->identity,&st,q->mode,1);
         break;
     case MD_FS_OPEN: case MD_FS_REOPEN: {
-        unsigned mode=(q->flags&O_PATH) ? 0 : (q->flags&O_ACCMODE)==O_RDWR ? R_OK|W_OK
-            : (q->flags&O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
+        unsigned mode=(q->flags&O_PATH) ? 0 : (q->flags&MD_O_ACCMODE)==O_RDWR ? R_OK|W_OK
+            : (q->flags&MD_O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
         if (!(q->flags&O_PATH) && (q->flags&O_TRUNC)) mode|=W_OK;
         error=(mode&W_OK) && md_view_readonly(origin->mount) ? -EROFS
             : md_proc_file_task_access(fs->store->identity,&st,mode,1);
@@ -170,12 +170,12 @@ static void proc_capture_begin(struct md_fs_anchor *origin,struct md_task_snapsh
     capture->base.ready=proc_capture_ready; capture->base.resume=proc_capture_resume;
     capture->base.destroy=proc_capture_destroy;
     *output->continuation=&capture->base;
-    *out=(struct md_fs_result){.fd=-1,.error=-EINPROGRESS};
+    *out=(struct md_fs_result){.fd=-1,.error=MD_OPERATION_PENDING};
 }
 int md_fs_proc_capture_open(struct md_filesystem *fs,struct md_mount_namespace *view,
         struct md_view_mount *mount,int fd,const struct stat *metadata,unsigned flags,int denied,const struct md_fs_request *q,
         struct md_fs_result *out,const struct md_fs_output *output) {
-    if (!fs->actor || (flags&O_ACCMODE)!=O_RDONLY || (flags&(O_CREAT|O_EXCL|O_TRUNC))) return 0;
+    if (!fs->actor || (flags&MD_O_ACCMODE)!=O_RDONLY || (flags&(O_CREAT|O_EXCL|O_TRUNC))) return 0;
     struct stat st;
     if (metadata) st=*metadata;
     else if (fstat(fd,&st)) return 0;
@@ -315,7 +315,7 @@ int md_fs_proc_operation(struct md_filesystem *fs,struct md_mount_namespace *vie
             }
             case MD_FS_OPEN: case MD_FS_REOPEN:
                 if (q->flags&O_PATH) return 0;
-                if (!(q->flags&(O_ACCMODE|O_TRUNC))) {
+                if (!(q->flags&(MD_O_ACCMODE|O_TRUNC))) {
                     if (!(q->flags&O_NOATIME)) return 0;
                     struct stat st={.st_uid=0,.st_gid=0,.st_mode=S_IFREG|0444};
                     r=md_file_noatime(&st,fs->store->identity);
@@ -400,7 +400,7 @@ int md_fs_proc_operation(struct md_filesystem *fs,struct md_mount_namespace *vie
         if (metadata) st=*metadata;
         else if (fstat(fd,&st)) r=-errno;
         if (!r) r=md_procfs_ownership(fs,path,&st);
-        if (!r) r=(q->flags&(O_ACCMODE|O_TRUNC)) && md_view_readonly(mount) ? -EROFS
+        if (!r) r=(q->flags&(MD_O_ACCMODE|O_TRUNC)) && md_view_readonly(mount) ? -EROFS
             : md_procfs_open_access(fs,path,&st,q->flags);
         if (r) { out->error=r; return 1; }
     }
@@ -485,7 +485,7 @@ int md_fs_proc_operation(struct md_filesystem *fs,struct md_mount_namespace *vie
         break;
     case MD_FS_OPEN: case MD_FS_REOPEN: {
         if (q->flags&O_DIRECTORY) { r=-ENOTDIR; break; }
-        if (q->flags&~(O_ACCMODE|O_CLOEXEC|O_APPEND|O_TRUNC|O_NONBLOCK|O_NOCTTY|O_NOFOLLOW|O_PATH|O_CREAT|O_EXCL|MD_O_LARGEFILE|O_NOATIME)) {
+        if (q->flags&~(MD_O_ACCMODE|O_CLOEXEC|O_APPEND|O_TRUNC|O_NONBLOCK|O_NOCTTY|O_NOFOLLOW|O_PATH|O_CREAT|O_EXCL|MD_O_LARGEFILE|O_NOATIME)) {
             r=-EOPNOTSUPP; break;
         }
         if (q->operation==MD_FS_REOPEN && (q->mode&MD_FS_REOPEN_MUTABLE)) { r=-EOPNOTSUPP; break; }

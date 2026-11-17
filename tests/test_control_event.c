@@ -23,18 +23,11 @@ static int allocation_fails(void) {
     if (left!=1) return 0;
     errno=ENOMEM; return 1;
 }
-void *__real_malloc(size_t);
-void *__real_calloc(size_t,size_t);
-void *__wrap_malloc(size_t size) {
+static int md_test_allocation_requested(void) {
     assert(!atomic_load(&no_allocation));
-    if (allocation_fails()) return NULL;
-    return __real_malloc(size);
+    return allocation_fails();
 }
-void *__wrap_calloc(size_t n,size_t size) {
-    assert(!atomic_load(&no_allocation));
-    if (allocation_fails()) return NULL;
-    return __real_calloc(n,size);
-}
+#include "test_allocation.h"
 static void ready(int fd,int expected) {
     struct pollfd p={fd,POLLIN,0};
     assert(poll(&p,1,0)==expected);

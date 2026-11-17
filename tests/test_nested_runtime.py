@@ -14,7 +14,7 @@ from client_fixture import archive_fixture
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('build', type=Path)
-    parser.add_argument('--case', choices=('debugger', 'nested'), default='debugger')
+    parser.add_argument('--case', choices=('debugger', 'signals', 'nested'), default='debugger')
     parser.add_argument('--diagnostics', action='store_true')
     parser.add_argument('--native-control', action='store_true')
     parser.add_argument('--depth', type=int, default=2, help='Runtime levels in the nested case')
@@ -26,8 +26,9 @@ def main():
           f'machine={os.uname().machine} page_size={os.sysconf("SC_PAGE_SIZE")}', flush=True)
     build = args.build.resolve()
     cli = [str(build / 'shroot'), '--runtime', str(build)]
-    scenarios = args.scenario or ['seccomp-trace', 'syscall-emulation', 'seccomp-interrupt',
-                                 'pidfd-copy', 'proc-fd', 'service-gates', 'pending-peek']
+    scenarios = args.scenario or ['syscall-info', 'syscall-signal', 'seccomp-trace', 'syscall-emulation', 'seccomp-interrupt',
+                                 'pidfd-copy', 'proc-fd', 'service-gates', 'pending-peek',
+                                 'owner-exit', 'exitkill', 'exitkill-terminal']
 
     def run(argv, expected=0):
         print('RUN', *map(str, argv), flush=True)
@@ -37,10 +38,19 @@ def main():
         print(f'PASS exit={result.returncode} elapsed={time.monotonic() - started:.3f}s', flush=True)
         return result
 
-    if args.native_control:
+    signal_fixtures = {'signal_delivery': [()], 'svc_machine_signal': [()],
+                       'signal_checkpoint': [('--checkpoint-borrow',), ('--terminal-race',)]}
+    if args.native_control and args.case == 'signals':
+        for fixture, cases in signal_fixtures.items():
+            for case in cases:
+                run([str(build / f'libshroot_guest_test_{fixture}.so'), *case])
+    elif args.native_control:
         for scenario in scenarios:
             run([str(build / 'libshroot_guest_debugger_guest.so'), scenario])
     binaries = [(build / 'libshroot_guest_debugger_guest.so', 'bin/debugger')]
+    if args.case == 'signals':
+        binaries = [(build / f'libshroot_guest_test_{fixture}.so', f'bin/{fixture}')
+                    for fixture in signal_fixtures]
     for name in (('run', 'supervisor', 'service', 'bootstrap') if args.case == 'nested' else ()):
         binary = 'libshroot_guest_' + name + '.so'
         binaries.append((build / binary, 'runtime/' + binary))
@@ -58,6 +68,10 @@ def main():
             if args.case == 'debugger':
                 for scenario in scenarios:
                     run(command + ['--', '/bin/debugger', scenario])
+            elif args.case == 'signals':
+                for fixture, cases in signal_fixtures.items():
+                    for case in cases:
+                        run(command + ['--', f'/bin/{fixture}', *case])
             else:
                 for entries in itertools.product(('0', '1'), repeat=args.depth-1):
                     nested = command + ['--user', str(os.getuid()) + ':' + str(os.getgid()),

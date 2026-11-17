@@ -9,7 +9,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <linux/magic.h>
-#include <linux/stat.h>
+#include "statx_abi.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -135,7 +135,7 @@ void md_fs_fdinfo(struct md_filesystem *fs,const struct md_fs_request *q,
         } else md_fs_view_execute(fs,&metadata,&info,NULL);
         if (info.error && info.error!=-EXDEV) result->error=info.error;
         if (!info.error) { f->mount_id=info.info.mount_id; f->inode=info.info.inode; }
-        struct statx native;
+        struct md_statx native;
         if (!result->error && syscall(SYS_statx,q->directory[1],"",AT_EMPTY_PATH,
                 STATX_MNT_ID|STATX_INO,&native)) result->error=-errno;
         if (!result->error) {
@@ -150,7 +150,7 @@ void md_fs_fdinfo(struct md_filesystem *fs,const struct md_fs_request *q,
             result->error=control.ops->stat(control.context,&st);
             if (!result->error) f->inode=st.st_ino;
             if (!result->error && !origin && control.ops->filesystem==PROC_SUPER_MAGIC) {
-                struct statx proc;
+                struct md_statx proc;
                 if (syscall(SYS_statx,AT_FDCWD,"/proc",0,STATX_MNT_ID,&proc)) result->error=-errno;
                 else result->error=md_fs_native_mount(fs,proc.stx_mnt_id,&f->mount_id);
             }

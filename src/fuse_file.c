@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "fuse_view_internal.h"
 #include "fuse_image.h"
 #include "fs_control.h"
@@ -45,7 +46,7 @@ static void file_release(void *context) {
     struct fuse_file *f=context;
     if (atomic_fetch_sub_explicit(&f->references,1,memory_order_acq_rel)!=1) return;
     if (f->published) md_fuse_file_event(f->view,f->node,f->name,
-        (f->flags&O_ACCMODE)==O_RDONLY ? IN_CLOSE_NOWRITE : IN_CLOSE_WRITE);
+        (f->flags&MD_O_ACCMODE)==O_RDONLY ? IN_CLOSE_NOWRITE : IN_CLOSE_WRITE);
     md_fuse_node_closed(f->view,f->node);
     if (f->opened) md_fuse_file_release_handle(f->view,f->node,&f->opener,f->handle,f->flags);
     md_fuse_name_release(f->view,f->name);
@@ -152,7 +153,7 @@ static long io_resume(struct md_control_pending *base,void *data,size_t capacity
     }
     if (io->flush) {
         long n=md_fuse_request_result(io->request,NULL,0);
-        if (n!=-EINPROGRESS) io->completed=1;
+        if (n!=MD_OPERATION_PENDING) io->completed=1;
         if (n==-ENOSYS) atomic_store_explicit(&io->file->view->no_flush,1,memory_order_relaxed);
         return n==-ENOSYS ? 0 : n;
     }
@@ -163,7 +164,7 @@ static long io_resume(struct md_control_pending *base,void *data,size_t capacity
     if (io->command) {
         struct fuse_attr_out result; struct stat st;
         long n=md_fuse_request_result(io->request,&result,sizeof(result));
-        if (n!=-EINPROGRESS) io->completed=1;
+        if (n!=MD_OPERATION_PENDING) io->completed=1;
         if (io->command!=MD_CONTROL_TRUNCATE) return n==-ENOSYS ? 0 : n>0 ? -EPROTO : n;
         if (n<0) return n;
         int error=n!=sizeof(result) ? -EPROTO : md_fuse_view_attributes(io->file->view,&result.attr,&st);
@@ -193,7 +194,7 @@ static long io_resume(struct md_control_pending *base,void *data,size_t capacity
     if (io->operation==MD_CONTROL_WRITE) {
         struct fuse_write_out result;
         long n=md_fuse_request_result(io->request,&result,sizeof(result));
-        if (n!=-EINPROGRESS) io->completed=1;
+        if (n!=MD_OPERATION_PENDING) io->completed=1;
         if (n<0) return n;
         if (n!=sizeof(result) || result.size>io->length) return -EPROTO;
         struct fuse_view *v=io->file->view;
@@ -268,7 +269,7 @@ static long file_flush(void *context,const struct md_control_actor *actor,struct
     int error=md_fuse_session_request(f->view->session,actor->identity,md_fuse_view_pid(f->view,actor->pid),
         FUSE_FLUSH,f->node->id,&in,sizeof(in),0,0,actor->wakeup,&io->request);
     if (error) { io_destroy(&io->base); return error; }
-    *out=&io->base; return -EINPROGRESS;
+    *out=&io->base; return MD_OPERATION_PENDING;
 }
 static long file_seek(void *context,const struct md_control_actor *actor,int64_t offset,int whence,
         struct md_control_pending **out) {
@@ -283,7 +284,7 @@ static long file_seek(void *context,const struct md_control_actor *actor,int64_t
     int error=md_fuse_session_request(f->view->session,actor->identity,md_fuse_view_pid(f->view,actor->pid),
         FUSE_GETATTR,f->node->id,&in,sizeof(in),sizeof(struct fuse_attr_out),0,actor->wakeup,&io->request);
     if (error) { io_destroy(&io->base); return error; }
-    *out=&io->base; return -EINPROGRESS;
+    *out=&io->base; return MD_OPERATION_PENDING;
 }
 static long file_command(void *context,const struct md_control_actor *actor,unsigned command,int64_t value,
         struct md_control_pending **out) {
@@ -293,7 +294,7 @@ static long file_command(void *context,const struct md_control_actor *actor,unsi
     union { struct fuse_setattr_in truncate; struct fuse_fsync_in sync; } input={0};
     unsigned opcode; size_t size,capacity=0;
     if (command==MD_CONTROL_TRUNCATE) {
-        if (directory || value<0 || (f->flags&O_ACCMODE)==O_RDONLY) return -EINVAL;
+        if (directory || value<0 || (f->flags&MD_O_ACCMODE)==O_RDONLY) return -EINVAL;
         if (md_fs_anchor_policy(f->origin)&MD_MOUNT_READONLY) return -EROFS;
         input.truncate=(struct fuse_setattr_in){.valid=FATTR_SIZE|FATTR_FH,.fh=f->handle,.size=value};
         opcode=FUSE_SETATTR; size=sizeof(input.truncate); capacity=sizeof(struct fuse_attr_out);
@@ -309,13 +310,13 @@ static long file_command(void *context,const struct md_control_actor *actor,unsi
         io->identity=md_identity_copy(actor->identity); io->offset=value;
         io->pid=md_fuse_view_pid(f->view,actor->pid); io->wakeup=md_resource_wakeup_retain(actor->wakeup);
         int error=(int)write_advance(io);
-        if (error && error!=-EINPROGRESS) { io_destroy(&io->base); return error; }
-        *out=&io->base; return -EINPROGRESS;
+        if (error && error!=MD_OPERATION_PENDING) { io_destroy(&io->base); return error; }
+        *out=&io->base; return MD_OPERATION_PENDING;
     }
     int error=md_fuse_session_request(f->view->session,actor->identity,md_fuse_view_pid(f->view,actor->pid),
         opcode,f->node->id,&input,size,capacity,0,actor->wakeup,&io->request);
     if (error) { io_destroy(&io->base); return error; }
-    *out=&io->base; return -EINPROGRESS;
+    *out=&io->base; return MD_OPERATION_PENDING;
 }
 static long file_io(void *context,const struct md_control_actor *actor,unsigned operation,
         void *data,size_t size,int64_t offset,struct md_control_pending **out) {
@@ -338,8 +339,8 @@ static long file_io(void *context,const struct md_control_actor *actor,unsigned 
         io->pid=md_fuse_view_pid(f->view,actor->pid); io->wakeup=md_resource_wakeup_retain(actor->wakeup);
         memcpy(io->bytes+sizeof(struct fuse_write_in),data,size);
         int error=(int)write_advance(io);
-        if (error && error!=-EINPROGRESS) { io_destroy(&io->base); return error; }
-        *out=&io->base; return -EINPROGRESS;
+        if (error && error!=MD_OPERATION_PENDING) { io_destroy(&io->base); return error; }
+        *out=&io->base; return MD_OPERATION_PENDING;
     }
     if (operation==MD_CONTROL_READ && S_ISREG(f->node->type) && !(f->open_flags&FOPEN_DIRECT_IO)) {
         pthread_mutex_lock(&f->view->lock);
@@ -357,7 +358,7 @@ static long file_io(void *context,const struct md_control_actor *actor,unsigned 
             f->node->id,&in,sizeof(in),sizeof(struct fuse_attr_out),0,actor->wakeup,&io->request);
     } else error=read_submit(io,actor->identity,md_fuse_view_pid(f->view,actor->pid),actor->wakeup);
     if (error) { io_destroy(&io->base); return error; }
-    *out=&io->base; return -EINPROGRESS;
+    *out=&io->base; return MD_OPERATION_PENDING;
 }
 struct file_mapping {
     struct md_control_pending base;
@@ -434,7 +435,7 @@ static long file_mapping(void *context,const struct md_control_actor *actor,unsi
     error=md_fuse_session_request(f->view->session,actor->identity,p->pid,FUSE_GETATTR,f->node->id,
         &in,sizeof(in),sizeof(struct fuse_attr_out),0,actor->wakeup,&p->attributes);
     if (error) { mapping_destroy(&p->base); return error; }
-    *out=&p->base; return -EINPROGRESS;
+    *out=&p->base; return MD_OPERATION_PENDING;
 }
 static void file_read_commit(void *context,size_t copied) {
     struct fuse_file *f=context;

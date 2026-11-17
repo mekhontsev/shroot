@@ -372,8 +372,25 @@ static unsigned constant_allow_prefix(struct sock_filter *out,const struct md_se
     }
     return used;
 }
+static int gates_delegate(const struct md_seccomp_route *route,const uint32_t *calls,size_t count,uint16_t cookie) {
+    if (!route->entry_first || !route->delegation_pc || !count || !calls) return 0;
+    for (size_t i=0;i<count;++i) {
+        size_t n;
+        for (n=0;n<route->gate_count;++n) {
+            const struct md_seccomp_gate *gate=route->gates+n;
+            if (gate->number>=0 && (uint64_t)gate->number!=calls[i]) continue;
+            uint64_t pc=route->delegation_pc;
+            if (pc<gate->first || (gate->first==gate->end ? pc!=gate->first : pc>=gate->end)) continue;
+            if (gate->decision!=(SECCOMP_RET_TRACE|cookie)) return 0;
+            break;
+        }
+        if (n==route->gate_count) return 0;
+    }
+    return 1;
+}
 int md_seccomp_policy_route(const struct md_seccomp_policy *p,const uint32_t *calls,size_t count,
         uint16_t cookie,struct sock_filter *out,size_t capacity,const struct md_seccomp_route *route) {
+    if (count>(BPF_MAXINSNS-2U)/2U) return -E2BIG;
     if (route && (route->internal_gate_count>route->gate_count
             || (route->internal_gate_count && (!route->entry_first || !route->entry_image)))) return -EINVAL;
     if (!route || !route->gate_count) return policy_route(p,calls,count,cookie,out,capacity,route);
@@ -390,7 +407,10 @@ int md_seccomp_policy_route(const struct md_seccomp_policy *p,const uint32_t *ca
     }
     struct sock_filter *code=calloc(BPF_MAXINSNS,sizeof(*code));
     if (!code) return -ENOMEM;
-    int length=policy_route(p,calls,count,cookie,code,BPF_MAXINSNS,route);
+    /* An entry gate may already implement the exact scoped delegation. Do not
+     * duplicate that dispatch in every persistent filter's original body. */
+    int delegated=gates_delegate(route,calls,count,cookie);
+    int length=policy_route(p,calls,delegated ? 0 : count,cookie,code,BPF_MAXINSNS,route);
     if (length<0) { free(code); return length; }
     unsigned used=(unsigned)length;
     if (route->entry_first) {
@@ -400,6 +420,9 @@ int md_seccomp_policy_route(const struct md_seccomp_policy *p,const uint32_t *ca
         struct sock_fprog program={used,code};
         struct md_seccomp_cache cache;
         md_seccomp_cache_build(&cache,&program,NULL);
+        if (delegated) for (size_t i=0;i<count;++i)
+            if (calls[i]<64*MD_SECCOMP_CACHE_WORDS)
+                cache.allow[calls[i]/64]&=~(UINT64_C(1)<<(calls[i]%64));
         unsigned prefix=constant_allow_prefix(NULL,&cache)+gates+1;
         int error=prefix>BPF_MAXINSNS-used ? -E2BIG : used+prefix>capacity ? -ENOSPC : 0;
         if (error) { free(code); return error; }

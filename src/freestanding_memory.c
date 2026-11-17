@@ -1,5 +1,12 @@
 #include <stddef.h>
 #include <stdint.h>
+#include <endian.h>
+
+/* libc may expose these as calls instead of header-only byte swaps. */
+uint16_t (htons)(uint16_t value) { return htobe16(value); }
+uint16_t (ntohs)(uint16_t value) { return be16toh(value); }
+uint32_t (htonl)(uint32_t value) { return htobe32(value); }
+uint32_t (ntohl)(uint32_t value) { return be32toh(value); }
 
 /* AArch64 ordinary memory permits unaligned words. These internal-buffer
  * routines never touch beyond n or use SIMD; guarded guest copies are separate. */

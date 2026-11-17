@@ -3,6 +3,7 @@
 #define main supervisor_program_main
 #include "../src/supervisor.c"
 #undef main
+#include "test_capabilities.h"
 #include "../src/supervisor_identity.c"
 #include "../src/supervisor_signals.c"
 #include "../src/supervisor_seccomp.c"
@@ -88,6 +89,44 @@ static void scalar_stopped_transport(void) {
     assert(!kill(child,SIGKILL));
     assert(waitpid(child,&status,0)==child && WIFSIGNALED(status));
     puts("PASS scalar stopped transport: signed results, bounded reads and unchanged arguments, PC, SP and PSTATE");
+}
+static void bootstrap_reservation(void) {
+    assert(!bootstrap_layout.segments && !bootstrap_layout.size);
+    pid_t child=fork(); assert(child>=0);
+    if (!child) { assert(!ptrace(PTRACE_TRACEME,0,NULL,NULL)); raise(SIGSTOP); _exit(0); }
+    int status; assert(waitpid(child,&status,0)==child && WIFSTOPPED(status));
+    struct thread t={.pid=child,.kernel_stopped=1};
+    assert(!thread_index[(unsigned)child%THREAD_BUCKETS]);
+    thread_index[(unsigned)child%THREAD_BUCKETS]=&t;
+    struct bootstrap_move move={.source=0x1234567000}; t.bootstrap_move=&move;
+    bootstrap_layout.size=3*md_page_size; bootstrap_layout.count=1;
+    bootstrap_layout.base=0x80000000;
+    for (size_t alignment=md_page_size;alignment<=2*1024*1024;alignment*=2) {
+        bootstrap_layout.alignment=alignment;
+        for (int initial=0;initial<2;++initial) {
+            move.initial_placement=initial; move.step=0;
+            struct user_pt_regs regs={0};
+            assert(image_layout_call(&t,&regs));
+            assert(regs.regs[8]==SYS_mmap && !(regs.regs[0]&(alignment-1)));
+            assert(regs.regs[1]==bootstrap_layout.size+(initial ? alignment-md_page_size : 0));
+            assert(!!(regs.regs[3]&MAP_FIXED_NOREPLACE)==!initial);
+            assert(regs.regs[2]==PROT_NONE);
+        }
+    }
+    move.allocation=bootstrap_layout.base-md_page_size;
+    move.prefix=md_page_size; move.suffix=2*md_page_size;
+    for (unsigned i=0;i<2;++i) {
+        move.step=bootstrap_layout.count+2+i;
+        struct user_pt_regs regs={0}; assert(image_layout_call(&t,&regs));
+        assert(regs.regs[8]==SYS_munmap);
+        assert(regs.regs[0]==(i ? bootstrap_layout.base+bootstrap_layout.size : move.allocation));
+        assert(regs.regs[1]==(i ? move.suffix : move.prefix));
+    }
+    assert(!kill(child,SIGKILL));
+    assert(waitpid(child,&status,0)==child && WIFSIGNALED(status));
+    thread_index[(unsigned)child%THREAD_BUCKETS]=NULL;
+    memset(&bootstrap_layout,0,sizeof(bootstrap_layout));
+    puts("PASS bootstrap reservation: ELF-aligned first placement, exact exec placement and padding retirement");
 }
 static void terminal_cleanup_custody(void) {
     assert(!task_wait.cursor);
@@ -942,12 +981,14 @@ static void metadata_mask_mutation(void) {
     puts("PASS metadata admission: signal-mask mutations retain their native completion owner");
 }
 static unsigned metadata_replay_step;
+static int metadata_replay_borrowed;
 static uint64_t metadata_replay_mask;
 static long metadata_replay_value;
 static struct user_pt_regs metadata_replay_saved;
 static long metadata_replay_trace(int request,pid_t pid,void *address,void *data) {
     assert(pid==123);
     unsigned step=metadata_replay_step++;
+    if (metadata_replay_borrowed && step>=5) step+=2;
     if (step==0 || step==5) {
         assert(request==PTRACE_GETREGSET && (uintptr_t)address==NT_PRSTATUS);
         struct user_pt_regs *regs=((struct iovec *)data)->iov_base;
@@ -983,7 +1024,8 @@ static long metadata_replay_trace(int request,pid_t pid,void *address,void *data
 static void metadata_replay_completion(void) {
     debugger=md_debugger_create(&(struct md_debugger_host){0}); assert(debugger);
     const long values[]={0,-EACCES,-3};
-    for (unsigned host=0;host<2;++host) for (unsigned blocked=0;blocked<2;++blocked)
+    for (unsigned completion=0;completion<3;++completion)
+        for (unsigned host=0;host<2;++host) for (unsigned blocked=0;blocked<2;++blocked)
             for (unsigned i=0;i<sizeof(values)/sizeof(*values);++i) {
         struct thread t={.pid=123,.phase=IDLE,.kernel_stopped=1,.signals.host=host,
             .memory=md_memory_new(),.metadata_restart=calloc(1,sizeof(struct metadata_restart))};
@@ -993,6 +1035,7 @@ static void metadata_replay_completion(void) {
         metadata_replay_saved.regs[0]=(unsigned long)-3; metadata_replay_saved.regs[8]=SYS_fstat;
         metadata_replay_mask=(UINT64_C(1)<<(SIGUSR2-1))|(blocked ? MD_SIGNAL_SYS_BIT : 0);
         metadata_replay_value=values[i]; metadata_replay_step=0;
+        metadata_replay_borrowed=completion!=0;
         *t.metadata_restart=(struct metadata_restart){.saved=metadata_replay_saved,
             .stage=METADATA_ENTRY,.mask=metadata_replay_mask,.requeued_signal=SIGALRM};
         t.broker_event.held=t.broker_event.has_info=1;
@@ -1000,14 +1043,19 @@ static void metadata_replay_completion(void) {
         int status=((SIGTRAP|0x80)<<8)|0x7f;
         assert(metadata_restart_event(&t,status) && metadata_replay_step==5);
         assert(t.metadata_restart->stage==METADATA_WAIT && t.signals.shielded);
-        assert(metadata_restart_event(&t,status) && metadata_replay_step==10);
+        if (completion) {
+            struct user_pt_regs returned=metadata_replay_saved; returned.pc+=4;
+            return_task_value(&t,&returned,metadata_replay_value,
+                completion==1 ? MD_TASK_CALL_USER : MD_TASK_CALL_EXIT);
+            assert(metadata_replay_step==8);
+        } else assert(metadata_restart_event(&t,status) && metadata_replay_step==10);
         assert(!t.metadata_restart && !t.broker_event.held && !t.signals.shielded
             && !t.kernel_stopped && t.metadata_signal_requeued==SIGALRM && t.phase==IDLE);
         checkpoints.trace=checkpoint_native_trace; thread_index[t.pid%THREAD_BUCKETS]=NULL;
         md_memory_release(t.memory);
     }
     md_debugger_destroy(debugger); debugger=NULL;
-    puts("PASS metadata replay: native policy mask, original registers and direct exit without service execution");
+    puts("PASS metadata replay: policy mask and original registers after native or borrowed-call completion");
 }
 extern void test_wait_svc(void);
 static volatile sig_atomic_t replay_traps,replay_alarms;
@@ -1899,6 +1947,33 @@ static void nonblocking_socket_admission(void) {
     }
     puts("PASS socket admission: per-call and OFD nonblocking, fresh blocking deadlines and exact socket validation");
 }
+static void socket_control_lengths(void) {
+    const int families[]={AF_INET,AF_INET6};
+    struct md_network_namespace *space=md_network_namespace_new(NULL,MD_NETWORK_ROUTED); assert(space);
+    struct md_identity identity=md_identity_new(0,0);
+    for (unsigned i=0;i<2;++i) {
+        struct md_network_io network={.identity=&identity,.number=SYS_sendmsg};
+        struct md_received_fds *fds=NULL;
+        assert(!md_received_fds_reserve(&fds,1));
+        assert(!md_network_endpoint_open(space,0,families[i],SOCK_DGRAM,0,&network.endpoint,&fds->fds[0]));
+        fds->count=1;
+        struct md_ipc_io op={0};
+        struct md_ipc_io_message *io=calloc(1,sizeof(*io)); assert(io);
+        io->size=1; io->control_size=MD_CMSG_SPACE(sizeof(int));
+        struct md_cmsghdr header={.cmsg_len=MD_CMSG_LEN(sizeof(int))|(UINT64_C(1)<<32),
+            .cmsg_level=i ? IPPROTO_IPV6 : IPPROTO_IP,.cmsg_type=i ? IPV6_HOPLIMIT : IP_TTL};
+        int hops=42;
+        memcpy(io->control,&header,sizeof(header)); memcpy(io->control+sizeof(header),&hops,sizeof(hops));
+        long result=0;
+        assert(!md_network_io_progress(&network,&op,&fds,io,&result));
+        assert(result==-EINVAL && !network.started && !op.initialized);
+        assert(!md_ipc_io_send(&op,fds,io,MSG_DONTWAIT,&result) && result==-EINVAL);
+        md_network_io_release(&network,&op); md_ipc_io_release(&op);
+        md_received_fds_release(fds); free(io);
+    }
+    md_identity_release(&identity); md_network_namespace_release(space);
+    puts("PASS socket control lengths: full-width kernel fields in IPv4, IPv6 and native IO admission");
+}
 static void receive_layouts(void) {
     struct md_ipc_io_message *io=calloc(1,sizeof(*io)); assert(io);
     struct md_ipc_io op={0};
@@ -1970,7 +2045,10 @@ static void native_capture_retained(void) {
     for (unsigned i=0;i<sizeof(commands);++i) {
         assert(write(channels[0],commands+i,1)==1);
         assert(read(channels[0],&byte,1)==1 && byte==commands[i]);
+        struct __user_cap_data_struct capabilities[2];
+        md_test_capabilities_suspend(UINT64_C(1)<<CAP_SYS_PTRACE,capabilities);
         int captured=md_fd_capture_native(child,&process,&file,1,&received);
+        md_test_capabilities_restore(capabilities);
         assert(process==handle);
         if (commands[i]=='d') assert(!captured && !received);
         else {
@@ -1992,7 +2070,10 @@ static void native_capture_retained(void) {
             if (fd<0) { assert(errno==EMFILE); break; }
             assert(count<32); fillers[count++]=fd;
         }
-        assert(md_fd_capture_native(child,&process,&file,1,&received)==-EMFILE && !received);
+        int exhausted=md_fd_capture_native(child,&process,&file,1,&received);
+        if (exhausted!=-EMFILE || received)
+            fprintf(stderr,"exhausted native capture result=%d received=%p\n",exhausted,(void *)received);
+        assert(exhausted==-EMFILE && !received);
         assert(process==handle && fcntl(handle,F_GETFD)>=0);
         while (count) close(fillers[--count]);
         assert(!setrlimit(RLIMIT_NOFILE,&previous));
@@ -2629,22 +2710,33 @@ static long readiness_cancel_trace(int request,pid_t pid,void *address,void *dat
             .instruction_pointer=abi.task_return,.entry={.nr=SYS_epoll_pwait}};
         break;
     }
-    case 2:
-        assert(request==PTRACE_SETREGSET && (uintptr_t)address==NT_ARM_SYSTEM_CALL
-            && *(int *)((struct iovec *)data)->iov_base==-1);
+    case 2: {
+        assert(request==PTRACE_GETREGSET && (uintptr_t)address==NT_PRSTATUS);
+        *(struct user_pt_regs *)((struct iovec *)data)->iov_base=(struct user_pt_regs){.pc=abi.task_return};
         break;
-    case 3:
+    }
+    case 3: {
+        assert(request==PTRACE_SETREGSET && (uintptr_t)address==NT_PRSTATUS);
+        struct user_pt_regs *regs=((struct iovec *)data)->iov_base;
+        assert(regs->pc==abi.task_return && regs->regs[8]==SYS_gettid);
+        break;
+    }
+    case 4:
+        assert(request==PTRACE_SETREGSET && (uintptr_t)address==NT_ARM_SYSTEM_CALL
+            && *(int *)((struct iovec *)data)->iov_base==SYS_gettid);
+        break;
+    case 5:
         assert(request==PTRACE_SYSCALL && !address && !data);
         break;
-    case 4:
+    case 6:
         assert(request==PTRACE_GET_SYSCALL_INFO);
         *(struct ptrace_syscall_info *)data=(struct ptrace_syscall_info){.op=PTRACE_SYSCALL_INFO_EXIT};
         break;
-    case 5:
+    case 7:
         assert(request==PTRACE_SETREGSET && (uintptr_t)address==NT_PRSTATUS);
         assert((long)((struct user_pt_regs *)((struct iovec *)data)->iov_base)->regs[0]==readiness_cancel_error);
         break;
-    case 6:
+    case 8:
         assert(request==PTRACE_CONT && !address && !data);
         break;
     default: assert(!"unexpected readiness cancellation request");
@@ -2652,6 +2744,8 @@ static long readiness_cancel_trace(int request,pid_t pid,void *address,void *dat
     return 0;
 }
 static void readiness_cancel_entry(void) {
+    uintptr_t saved_return=abi.task_return;
+    abi.task_return=0x1004;
     struct readiness_owner owner={.evicting=1,.native_call={.number=SYS_epoll_pwait}};
     struct thread t={.pid=123,.phase=EPOLL_CALL,.kernel_stopped=1,.readiness=&owner};
     thread_index[t.pid%THREAD_BUCKETS]=&t;
@@ -2660,15 +2754,15 @@ static void readiness_cancel_entry(void) {
     int status=((SIGTRAP|0x80)<<8)|0x7f;
     assert(readiness_native_event(&t,status));
     assert(t.phase==WAIT_CANCEL_EXIT && t.execution.wait_resume==EPOLL_CALL && !owner.parked);
-    assert(readiness_cancel_step==4);
+    assert(readiness_cancel_step==6);
     uint64_t events;
     assert(read(fd_ready,&events,sizeof(events))==-1 && errno==EAGAIN);
     /* A pending signal/interrupt cannot publish a still-entering wait. */
     assert(!readiness_native_event(&t,(PTRACE_EVENT_STOP<<16)|(SIGTRAP<<8)|0x7f));
-    assert(!owner.parked && readiness_cancel_step==4);
+    assert(!owner.parked && readiness_cancel_step==6);
     t.kernel_stopped=1;
     assert(readiness_native_event(&t,status));
-    assert(owner.parked && t.phase==DISPATCHING && t.execution.wait_resume==IDLE && readiness_cancel_step==5);
+    assert(owner.parked && t.phase==DISPATCHING && t.execution.wait_resume==IDLE && readiness_cancel_step==7);
     assert(read(fd_ready,&events,sizeof(events))==sizeof(events) && events==1);
     /* A failed observer registration has the same entry/exit fence, but
      * returns its error instead of parking for another file-table owner. */
@@ -2682,12 +2776,12 @@ static void readiness_cancel_entry(void) {
     assert(readiness_native_event(&t,status));
     assert(t.phase==WAIT_CANCEL_EXIT && t.execution.wait_resume==EPOLL_CALL && owner.finishing && !owner.done);
     readiness_cancel_error=owner.finish_result; assert(readiness_cancel_error<0);
-    assert(readiness_cancel_step==4 && !owner.parked);
+    assert(readiness_cancel_step==6 && !owner.parked);
     assert(read(fd_ready,&events,sizeof(events))==-1 && errno==EAGAIN);
     t.kernel_stopped=1;
     assert(readiness_native_event(&t,status));
     assert(owner.done && !owner.parked && t.phase==DISPATCHING && t.execution.wait_resume==IDLE);
-    assert(readiness_cancel_step==7);
+    assert(readiness_cancel_step==9);
     assert(read(fd_ready,&events,sizeof(events))==-1 && errno==EAGAIN);
     assert(!owner.wait.job.started);
     md_control_epoll_release(queue);
@@ -2695,6 +2789,7 @@ static void readiness_cancel_entry(void) {
     close(fd_ready); fd_ready=-1;
     checkpoints.trace=checkpoint_native_trace;
     thread_index[t.pid%THREAD_BUCKETS]=NULL;
+    abi.task_return=saved_return;
     puts("PASS epoll loan revocation: skipped entry drains before descriptor retirement or adapter reply");
 }
 static unsigned readiness_pending_resumes;
@@ -3934,7 +4029,7 @@ static long duplicate_close_flush(void *context,const struct md_control_actor *a
     static struct md_control_pending completion={.resume=duplicate_close_resume,.dispose=duplicate_close_dispose};
     assert(actor->pid==123 && !duplicate_close_owner->descriptors.order.table);
     ++duplicate_close_flushes;
-    if (duplicate_close_result==-EINPROGRESS) *pending=&completion;
+    if (duplicate_close_result==MD_OPERATION_PENDING) *pending=&completion;
     return duplicate_close_result;
 }
 static void duplicate_close_transport(void) {
@@ -3958,7 +4053,7 @@ static void duplicate_close_transport(void) {
         assert(!md_fd_origins_close_collect(files,9,9,0,&t.close.closed));
         assert(t.close.closed.first);
         duplicate_close_owner=&t; duplicate_close_flushes=duplicate_close_disposals=0;
-        duplicate_close_result=deferred ? -EINPROGRESS : 0;
+        duplicate_close_result=deferred ? MD_OPERATION_PENDING : 0;
         thread_index[t.pid%THREAD_BUCKETS]=&t; checkpoints.trace=no_trace;
         debug_stop_reply=&channel; debug_reply_value=0;
         debug_reply_outcome=resident ? MD_ENTRY_COMPLETED : MD_ENTRY_DECLINED;
@@ -4267,19 +4362,21 @@ static void close_test_complete(struct thread *t,long result) {
     close_test_result=result; ++close_test_completed;
 }
 static void close_shared_completion(void) {
-    for (unsigned cancel=0;cancel<2;++cancel) for (unsigned errors=0;errors<2;++errors) {
+    const long results[]={0,-EIO,-EINPROGRESS};
+    for (unsigned cancel=0;cancel<2;++cancel) for (unsigned errors=0;errors<2;++errors)
+    for (unsigned i=0;i<sizeof(results)/sizeof(*results);++i) {
         struct md_entry_channel channel={.call={.reserved=MD_ENTRY_EFFECT_DONE}};
         struct thread t={.pid=123,.entry={.control=&channel,.admission=1},
             .close={.complete=close_test_complete,.errors=errors}};
         struct md_control_pending pending={.resume=close_test_resume,.dispose=close_test_dispose};
         t.close.pending=&pending;
-        close_test_result=-EINPROGRESS; close_test_disposed=close_test_completed=0;
+        close_test_result=MD_OPERATION_PENDING; close_test_disposed=close_test_completed=0;
         close_progress(&t);
         assert(t.close.pending && !t.close.done && ((t.retries[0].mask|t.retries[1].mask)&RETRY_CLOSE));
         assert(entry_wait_begin(&t,INT64_MAX,close_entry_ready));
         if (cancel) entry_wait_complete(&t,-EINTR);
-        else { close_test_result=-EIO; close_progress(&t); }
-        assert(close_test_result==(errors ? (cancel ? -EINTR : -EIO) : 0));
+        else { close_test_result=results[i]; close_progress(&t); }
+        assert(close_test_result==(errors ? (cancel ? -EINTR : results[i]) : 0));
         assert(close_test_disposed==1 && close_test_completed==1 && !t.close.done);
         assert(!t.retries[0].mask && !t.retries[1].mask && !entry_wait_deadline_owner());
         entry_wait_complete(&t,-EINTR);
@@ -4395,6 +4492,9 @@ static void entry_fence_ownership(void) {
     }
     peer.execution.request.nr=SYS_rt_sigtimedwait; assert(!entry_fence_drained(&peer));
     peer.execution.request.nr=SYS_process_vm_writev; assert(!entry_fence_drained(&peer));
+    peer.phase=DEBUG_PARK_EXIT; assert(entry_fence_drained(&peer));
+    peer.machine.draining=1; assert(!entry_fence_drained(&peer)); peer.machine.draining=0;
+    peer.phase=DEBUG_PARK_ENTRY; assert(!entry_fence_drained(&peer));
     struct md_entry_channel channel={0};
     peer.phase=DISPATCHING; peer.entry.execution=&channel;
     peer.entry.control=&channel; peer.entry.effect=entry_watch_ready; peer.entry.waiting=1;
@@ -4730,7 +4830,7 @@ static void notification_queue(void) {
         struct md_buffer_span span; assert(!md_buffer_span(&t.fs.buffer,&span));
         struct seccomp_notif *received=span.data;
         memset(received,0,sizeof(*received));
-        assert(notify_ioctl(file,SECCOMP_IOCTL_NOTIF_RECV,received,sizeof(*received),&t.control.pending)==-EINPROGRESS);
+        assert(notify_ioctl(file,SECCOMP_IOCTL_NOTIF_RECV,received,sizeof(*received),&t.control.pending)==MD_OPERATION_PENDING);
         assert(t.control.pending && t.control.pending->deadline==INT64_MAX);
         struct seccomp_data call={.nr=SYS_getpid,.arch=AUDIT_ARCH_AARCH64,.instruction_pointer=0x12345004,
             .args={1,2,3,4,5,6}};
@@ -5204,7 +5304,10 @@ static void captured_writes(void) {
     }
     close(ready[1]); char value; assert(read(ready[0],&value,1)==1); close(ready[0]);
     t.pid=child; t.execution.request.args[1]=(uintptr_t)bytes;
+    struct __user_cap_data_struct saved[2];
+    md_test_capabilities_suspend(UINT64_C(1)<<CAP_SYS_PTRACE,saved);
     assert(!proc_write_capture(&t,&total) && !t.fs.buffer.pool && !t.proc.io.file);
+    md_test_capabilities_restore(saved);
     assert(!kill(child,SIGKILL)); int status; assert(waitpid(child,&status,0)==child && WIFSIGNALED(status));
     md_proc_file_release(t.proc.file); md_memory_release(t.memory);
     puts("PASS write capture: scalar/vector prefix, empty vector, overflow, partial fault, protected caller and pressure without IO effects");
@@ -5511,7 +5614,10 @@ static int debugger_test_attachable(pid_t caller,pid_t target) { (void)caller; r
 static int debugger_test_observe(pid_t pid) { (void)pid; return 0; }
 static int debugger_test_options(pid_t pid,unsigned long options) { (void)pid; (void)options; return 0; }
 static uid_t debugger_test_uid(pid_t pid) { (void)pid; return 0; }
-static void debugger_test_usage(pid_t pid,struct rusage *usage) { (void)pid; *usage=(struct rusage){0}; }
+static void debugger_test_usage(pid_t pid,struct rusage *usage) {
+    (void)pid;
+    *usage=(struct rusage){.ru_utime={11,12},.ru_stime={13,14},.ru_maxrss=15,.ru_nivcsw=28};
+}
 static void debugger_test_complete(pid_t pid,long value) {
     (void)pid; debugger_result=value;
 }
@@ -5768,14 +5874,23 @@ static void debugger_quiescence(void) {
             original.regs[8]=SYS_getpid;
             assert(md_debugger_seccomp(debugger,123,&call,original.sp,0x321));
             siginfo_t event={0};
-            struct seccomp_data wait={.nr=SYS_waitid,.args={P_PID,123,(uintptr_t)&event,WSTOPPED|WNOWAIT}};
+            struct { uint64_t data[18], guard[16]; } usage;
+            memset(&usage,0x5a,sizeof(usage));
+            struct seccomp_data wait={.nr=SYS_waitid,.args={P_PID,123,(uintptr_t)&event,WSTOPPED|WNOWAIT,(uintptr_t)&usage}};
             assert(md_debugger_call(debugger,getpid(),wait)==MD_DEBUG_CALL_HANDLED && !debugger_result);
             assert(event.si_pid==123 && event.si_code==CLD_TRAPPED);
-            wait=(struct seccomp_data){.nr=SYS_wait4,.args={123,1,__WALL}};
+            for (unsigned i=0;i<16;++i) assert(usage.guard[i]==UINT64_C(0x5a5a5a5a5a5a5a5a));
+            assert(usage.data[0]==11 && usage.data[1]==12 && usage.data[2]==13
+                && usage.data[3]==14 && usage.data[4]==15 && usage.data[17]==28);
+            memset(&usage,0x5a,sizeof(usage));
+            wait=(struct seccomp_data){.nr=SYS_wait4,.args={123,1,__WALL,(uintptr_t)&usage}};
             assert(md_debugger_call(debugger,getpid(),wait)==MD_DEBUG_CALL_HANDLED && debugger_result==-EFAULT);
             int status=0; wait.args[1]=(uintptr_t)&status;
             assert(md_debugger_call(debugger,getpid(),wait)==MD_DEBUG_CALL_HANDLED && debugger_result==123);
             assert(WIFSTOPPED(status) && (unsigned)status>>16==PTRACE_EVENT_SECCOMP);
+            for (unsigned i=0;i<16;++i) assert(usage.guard[i]==UINT64_C(0x5a5a5a5a5a5a5a5a));
+            assert(usage.data[0]==11 && usage.data[1]==12 && usage.data[2]==13
+                && usage.data[3]==14 && usage.data[4]==15 && usage.data[17]==28);
             struct ptrace_syscall_info info={0};
             request.regs[0]=PTRACE_GET_SYSCALL_INFO; request.regs[2]=sizeof(info);
             request.regs[3]=(uintptr_t)&info;
@@ -6122,6 +6237,8 @@ static void provider_wait_boundaries(void) {
             raise(SIGSTOP);
             struct sock_filter code[]={
                 BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,UINT32_MAX,0,1),
+                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRAP),
                 BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getpid,0,1),
                 BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE),
                 BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW),
@@ -7012,7 +7129,7 @@ static void signal_descriptor_rollback(void) {
 }
 static void signal_frame_records(void) {
     struct md_signal_frame frame={0};
-    unsigned char *data=frame.context.uc_mcontext.__reserved;
+    unsigned char *data=(unsigned char *)frame.context.uc_mcontext.__reserved;
     assert(md_signal_frame_relocatable(&frame));
     uint32_t header[]={0x46508001,528};
     memcpy(data,header,sizeof(header));
@@ -7401,6 +7518,7 @@ int main(void) {
     filter_replay_ownership();
     receive_error_queue();
     nonblocking_socket_admission();
+    socket_control_lengths();
     resident_receive_admission();
     alarm(30);
     event_completion();
@@ -7451,6 +7569,7 @@ int main(void) {
     mapping_shared_provider();
     mapping_shared_admission();
     scalar_stopped_transport();
+    bootstrap_reservation();
     signal_group_resource();
     thread_exit_target();
     stopped_call_context();

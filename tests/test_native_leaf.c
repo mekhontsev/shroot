@@ -114,7 +114,7 @@ static void ordinary(int directory) {
         metadata(fd,0,0,0644,1);
         assert(!mdi_native_metadata(fd,0,0,0755,true)); metadata(fd,0,0,0755,1);
         assert(!mdi_native_metadata(fd,0,0,0644,true));
-        assert(!renameat2(directory,"ordinary",directory,"renamed",RENAME_NOREPLACE));
+        assert(!syscall(SYS_renameat2,directory,"ordinary",directory,"renamed",RENAME_NOREPLACE));
         assert(!unlinkat(directory,"renamed",0));
         metadata(fd,0,0,0644,0); close(fd);
     }
@@ -236,7 +236,7 @@ static void staged(int directory) {
     reset();
     int fd=mdi_native_prepare(directory,"staged",O_WRONLY,42,43,0400,true); assert(fd>=0);
     assert(syncs==1 && sets==1);
-    assert(!renameat2(directory,"staged",directory,"published",RENAME_NOREPLACE));
+    assert(!syscall(SYS_renameat2,directory,"staged",directory,"published",RENAME_NOREPLACE));
     metadata(fd,42,43,0400,1); close(fd);
     fd=openat(directory,"published",O_PATH); assert(fd>=0); metadata(fd,42,43,0400,1); close(fd);
     assert(!unlinkat(directory,"published",0));
@@ -324,6 +324,8 @@ static void catalogue(const char *path) {
     assert(!mdi_native_metadata(fd,42,43,0640,true));
     assert(!fsetxattr(fd,"user.visible","yes",3,0));
     struct stat physical; assert(!fstat(fd,&physical));
+    char marker[256]; ssize_t marker_size=fgetxattr(fd,MDI_NATIVE_METADATA,marker,sizeof(marker));
+    assert(marker_size>0);
     struct mdi_node parent,node;
     assert(!mdi_begin(s,0) && !mdi_fd(s,directory,&parent));
     assert(!mdi_publication_promote(s,&parent,"leaf",&physical,&node));
@@ -341,9 +343,27 @@ static void catalogue(const char *path) {
     struct md_fs_request q={.operation=MD_FS_XATTR_OBJECT,.directory={fd,-1},
         .path={NULL,MDI_NATIVE_METADATA},.mode=MD_FS_XATTR_SET,.value="bad",.value_size=3,.capacity=3};
     struct md_fs_result result={0};
-    md_inode_xattr(s,&q,&result,NULL); assert(result.error==-EPERM);
+    q.flags=XATTR_REPLACE;
+    md_inode_xattr(s,&q,&result,NULL); assert(result.error==-ENODATA);
+    q.flags=XATTR_CREATE;
+    md_inode_xattr(s,&q,&result,NULL); assert(!result.error);
+    md_inode_xattr(s,&q,&result,NULL); assert(result.error==-EEXIST);
+    assert(!mdi_begin(s,0));
+    assert(mdi_xattr_get(s,&node,MDI_NATIVE_METADATA,names,sizeof(names))==3 && !memcmp(names,"bad",3));
+    for (int internal=0;internal<2;++internal) {
+        ssize_t n=mdi_xattr_names(s,&node,names,sizeof(names),internal);
+        assert(n>0 && contains(names,n,MDI_NATIVE_METADATA));
+    }
+    assert(!mdi_finish(s,0));
+    assert(!md_inode_fstat(s,fd,&st) && st.st_uid==42 && st.st_gid==43 && (st.st_mode&07777)==0640);
     q.mode=MD_FS_XATTR_REMOVE; q.value=NULL; q.value_size=q.capacity=0;
-    md_inode_xattr(s,&q,&result,NULL); assert(result.error==-EPERM);
+    q.flags=0;
+    md_inode_xattr(s,&q,&result,NULL); assert(!result.error);
+    md_inode_xattr(s,&q,&result,NULL); assert(result.error==-ENODATA);
+    q.mode=MD_FS_XATTR_SET; q.value="guest"; q.value_size=5;
+    md_inode_xattr(s,&q,&result,NULL); assert(!result.error);
+    assert(fgetxattr(fd,MDI_NATIVE_METADATA,names,sizeof(names))==marker_size
+        && !memcmp(names,marker,(size_t)marker_size));
     int copy=md_inode_create(s,-1,"copy",0600); assert(copy>=0);
     assert(!mdi_copy_attributes(fd,copy));
     assert(fgetxattr(copy,MDI_NATIVE_METADATA,NULL,0)==-1 && errno==ENODATA);
@@ -355,8 +375,18 @@ static void catalogue(const char *path) {
     assert(fgetxattr(copy,MDI_NATIVE_METADATA,names,sizeof(names))==11 && !memcmp(names,"destination",11));
     assert(!mdi_replace_attributes(copy,copy) && !mdi_overlay_replace_attributes(copy,copy));
     assert(fgetxattr(copy,"user.visible",names,sizeof(names))==3 && !memcmp(names,"yes",3));
+    /* A private-name guest write promotes an ordinary native leaf, while
+     * leaving any inactive physical marker out of guest authority. */
+    q.directory[0]=copy;
+    md_inode_xattr(s,&q,&result,NULL); assert(!result.error);
+    struct mdi_node destination;
+    assert(!mdi_begin(s,0) && !mdi_fd(s,copy,&destination) && !destination.native);
+    assert(mdi_xattr_get(s,&destination,MDI_NATIVE_METADATA,names,sizeof(names))==5
+        && !memcmp(names,"guest",5));
+    assert(!mdi_finish(s,0));
+    assert(fgetxattr(copy,MDI_NATIVE_METADATA,names,sizeof(names))==11 && !memcmp(names,"destination",11));
     close(copy); close(fd); close(directory); md_inode_store_close(s);
-    puts("PASS promotion captures native metadata; guest/export/COW hide private attributes and preserve destination ownership");
+    puts("PASS promotion and COW retain private host metadata; same-named guest attributes have independent custody");
 }
 static void restored(const char *path) {
     struct md_inode_store *s; assert(!md_inode_store_open_inspect(path,&s));
@@ -365,6 +395,10 @@ static void restored(const char *path) {
     assert(st.st_uid==42 && st.st_gid==43 && (st.st_mode&07777)==0640);
     assert(fgetxattr(fd,MDI_NATIVE_METADATA,NULL,0)==-1 && errno==ENODATA);
     char data[16]; assert(fgetxattr(fd,"user.visible",data,sizeof(data))==3 && !memcmp(data,"yes",3));
+    struct mdi_node node;
+    assert(!mdi_begin(s,0) && !mdi_fd(s,fd,&node));
+    assert(mdi_xattr_get(s,&node,MDI_NATIVE_METADATA,data,sizeof(data))==5 && !memcmp(data,"guest",5));
+    assert(!mdi_finish(s,0));
     close(fd); md_inode_store_close(s);
     puts("PASS real backup/restore retains logical ownership and user attributes without the physical metadata record");
 }
@@ -372,6 +406,62 @@ static sqlite3_int64 scalar(struct md_inode_store *s,const char *sql) {
     sqlite3_stmt *q=NULL; assert(sqlite3_prepare_v2(s->db,sql,-1,&q,NULL)==SQLITE_OK);
     assert(sqlite3_step(q)==SQLITE_ROW); sqlite3_int64 value=sqlite3_column_int64(q,0);
     assert(sqlite3_finalize(q)==SQLITE_OK); return value;
+}
+static void detached_attributes(const char *path) {
+    struct md_inode_store *s; assert(!md_inode_store_open(path,1,&s));
+    struct md_identity identity=md_identity_new(0,0); s->identity=&identity;
+    assert(!md_inode_mkdir(s,-1,"work",0700));
+    int directory=md_inode_open(s,-1,"work",O_RDONLY|O_DIRECTORY,0); assert(directory>=0);
+    for (int promoted=0;promoted<2;++promoted) {
+        int fd=md_inode_create(s,directory,"temporary",0600); assert(fd>=0);
+        struct mdi_node initial;
+        assert(!mdi_begin(s,0) && !mdi_fd(s,fd,&initial) && initial.native);
+        assert(!mdi_finish(s,0));
+        struct md_fs_request q={.operation=MD_FS_XATTR_OBJECT,.directory={fd,-1},
+            .path={NULL,MDI_NATIVE_METADATA},.mode=MD_FS_XATTR_SET,
+            .value="guest",.value_size=5,.flags=XATTR_CREATE};
+        struct md_fs_result result={0};
+        if (promoted) { md_inode_xattr(s,&q,&result,NULL); assert(!result.error); }
+        assert(!md_inode_unlink(s,directory,"temporary",0));
+        if (!promoted) { md_inode_xattr(s,&q,&result,NULL); assert(!result.error); }
+        md_inode_xattr(s,&q,&result,NULL); assert(result.error==-EEXIST);
+        int copy=dup(fd); assert(copy>=0); close(fd); q.directory[0]=copy;
+        struct md_inode_store *peer; assert(!md_inode_store_open(path,0,&peer));
+        peer->identity=&identity;
+        struct mdi_node node; char names[256];
+        assert(!mdi_begin(peer,0) && !mdi_fd(peer,copy,&node));
+        assert(mdi_xattr_get(peer,&node,MDI_NATIVE_METADATA,names,sizeof(names))==5
+            && !memcmp(names,"guest",5));
+        ssize_t n=mdi_xattr_names(peer,&node,names,sizeof(names),0);
+        assert(n>0 && contains(names,n,MDI_NATIVE_METADATA)
+            && !contains(names,n,"user.shroot.detached-xattrs"));
+        assert(!mdi_finish(peer,0));
+        q.flags=XATTR_REPLACE; q.value="replaced"; q.value_size=8;
+        md_inode_xattr(peer,&q,&result,NULL);
+        if (result.error) fprintf(stderr,"detached xattr replace promoted=%d error=%d\n",promoted,result.error);
+        assert(!result.error);
+        assert(!mdi_begin(s,0) && !mdi_fd(s,copy,&node));
+        assert(mdi_xattr_get(s,&node,MDI_NATIVE_METADATA,names,sizeof(names))==8
+            && !memcmp(names,"replaced",8));
+        assert(!mdi_finish(s,0));
+        q.mode=MD_FS_XATTR_REMOVE; q.flags=0; q.value=NULL; q.value_size=0;
+        md_inode_xattr(peer,&q,&result,NULL); assert(!result.error);
+        md_inode_xattr(s,&q,&result,NULL); assert(result.error==-ENODATA);
+        int fresh=md_inode_create(s,directory,"temporary",0600); assert(fresh>=0);
+        assert(!mdi_begin(s,0) && !mdi_fd(s,fresh,&node));
+        assert(mdi_xattr_get(s,&node,MDI_NATIVE_METADATA,names,sizeof(names))==-ENODATA);
+        assert(!mdi_finish(s,0));
+        close(fresh); assert(!md_inode_unlink(s,directory,"temporary",0));
+        close(copy); md_inode_store_close(peer);
+    }
+    assert(scalar(s,"SELECT count(*) FROM detached_xattrs")==1);
+    close(directory);
+    md_inode_store_close(s);
+    assert(!md_inode_store_open_exclusive(path,&s));
+    assert(!scalar(s,"SELECT count(*) FROM detached_xattrs"));
+    md_inode_store_close(s);
+    md_identity_release(&identity);
+    puts("PASS open-unlinked attributes: promotion, duplicated FDs, peer custody, name reuse and exclusive cleanup");
 }
 static int native_node(struct md_inode_store *s,int fd) {
     assert(!mdi_begin(s,0)); struct mdi_node node; assert(!mdi_fd(s,fd,&node));
@@ -422,9 +512,24 @@ static void creation_events(struct md_inode_store *s,int dir) {
         }
         assert(n==3);
         assert(!md_inode_unlink(s,dir,name,0));
+        s->native_files=variant!=2;
+        assert(!md_inode_mknod(s,dir,name,S_IFREG|(variant==1 ? 0400 : 0644),0));
+        s->native_files=1;
+        count=md_inode_watch_read(s,observer,events.data,sizeof(events.data),NULL,NULL);
+        if (count!=(ssize_t)(sizeof(events.align)+events.align.len)) {
+            fprintf(stderr,"mknod events variant=%u bytes=%zd\n",variant,count);
+            for (size_t at=0;count>0 && at<(size_t)count;) {
+                struct inotify_event *e=(void *)(events.data+at); at+=sizeof(*e)+e->len;
+                fprintf(stderr,"mknod event mask=%x name=%s\n",e->mask,e->len ? e->name : "");
+            }
+        }
+        assert(count==(ssize_t)(sizeof(events.align)+events.align.len));
+        assert(events.align.mask==IN_CREATE && events.align.len && !strcmp(events.align.name,name));
+        assert(md_inode_watch_read(s,observer,events.data,sizeof(events.data),NULL,NULL)==-EAGAIN);
+        assert(!md_inode_unlink(s,dir,name,0));
     }
     close(observer);
-    puts("PASS CREATE precedes OPEN and CLOSE for direct-native, staged-native and catalogue allocation");
+    puts("PASS creation events: open has CREATE/OPEN/CLOSE; mknod has only CREATE, for native and catalogue allocation");
 }
 static void birth_fallback(struct md_inode_store *s,int dir) {
     const struct md_identity *previous=s->identity;
@@ -976,6 +1081,7 @@ int main(int argc,char **argv) {
     puts("PASS SIGKILL and IO failures at all four metadata transition steps retain old-or-new logical permissions");
     reset(); malformed(directory); metadata_reads(directory); watch(directory); close(directory);
     char store[PATH_MAX]; test_format(store,sizeof(store),"%s/store",argv[1]); catalogue(store);
+    test_format(store,sizeof(store),"%s/detached-attributes",argv[1]); detached_attributes(store);
     test_format(store,sizeof(store),"%s/hybrid",argv[1]); hybrid(store);
     test_format(store,sizeof(store),"%s/births",argv[1]); catalogue_births(store);
     test_format(store,sizeof(store),"%s/materialization",argv[1]); materialization_cost(store);

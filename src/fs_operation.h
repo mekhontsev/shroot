@@ -167,7 +167,7 @@ struct md_fs_output {
     int (*control)(void *,const struct md_control_file_ops *,void *,const struct md_identity *,int,struct md_fs_anchor *);
     void *control_context;
     struct md_landlock_policy **landlock;
-    /* Optional owned continuation, only with result.error == -EINPROGRESS. */
+    /* Optional owned continuation, only with result.error == MD_OPERATION_PENDING. */
     struct md_fs_continuation **continuation;
     /* This transport can capture a descriptor in the exact caller context. */
     int task_capture;

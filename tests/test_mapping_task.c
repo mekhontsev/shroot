@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "kernel_clone.h"
 #include <asm/ptrace.h>
 #include <assert.h>
 #include <dirent.h>
@@ -146,7 +147,7 @@ static void wait_thread(int *address) {
 static int dying_caller(void *data) {
     struct mapping *m=data;
     int flags=CLONE_VM|CLONE_THREAD|CLONE_SIGHAND|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID;
-    assert(clone(mapping_child,(char *)m->stack+65536,flags,m,&m->tid,NULL,&m->tid)>0);
+    assert(md_test_clone(mapping_child,(char *)m->stack+65536,flags,m,&m->tid,NULL,&m->tid)>0);
     syscall(SYS_exit,0); __builtin_unreachable();
 }
 static void exercise(int full, int protected, int killed, int thread, int caller_exit, int shared) {
@@ -179,11 +180,11 @@ static void exercise(int full, int protected, int killed, int thread, int caller
     pid_t child;
     if (caller_exit) {
         assert(thread);
-        assert(clone(dying_caller,(char *)caller_stack+65536,flags|CLONE_FILES,
+        assert(md_test_clone(dying_caller,(char *)caller_stack+65536,flags|CLONE_FILES,
             &m,&m.caller_tid,NULL,&m.caller_tid)>0);
         wait_thread(&m.caller_tid);
         child=__atomic_load_n(&m.tid,__ATOMIC_ACQUIRE); assert(child>0);
-    } else child=clone(mapping_child,(char *)stack+65536,flags,&m,&m.tid,NULL,&m.tid);
+    } else child=md_test_clone(mapping_child,(char *)stack+65536,flags,&m,&m.tid,NULL,&m.tid);
     assert(child>0);
     /* Only the fixture runner receives a listener FD. The helper was already
      * cloned with the full table and must release its own inherited copies. */
@@ -244,9 +245,9 @@ static void clone_policy(void) {
         assert(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
         int tid=0, seen=0;
         unsigned flags=CLONE_VM|CLONE_THREAD|CLONE_SIGHAND|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID;
-        assert(clone(policy_child,(char *)stack+65536,flags,&seen,&tid,NULL,&tid)==-1 && errno==EACCES);
+        assert(md_test_clone(policy_child,(char *)stack+65536,flags,&seen,&tid,NULL,&tid)==-1 && errno==EACCES);
         assert(!tid && !seen && descriptors()==before);
-        assert(clone(policy_child,(char *)stack+65536,flags|CLONE_FILES,&seen,&tid,NULL,&tid)>0);
+        assert(md_test_clone(policy_child,(char *)stack+65536,flags|CLONE_FILES,&seen,&tid,NULL,&tid)>0);
         wait_thread(&tid); assert(__atomic_load_n(&seen,__ATOMIC_ACQUIRE)==1);
         void *bytes=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
         assert(bytes!=MAP_FAILED && !munmap(bytes,4096) && !munmap(stack,65536));

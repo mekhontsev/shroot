@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "mount_pin.h"
+#include "host_open.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -7,8 +9,7 @@
 #include <unistd.h>
 
 int md_mount_pin_create(int root) {
-    int fd=openat(root,".",O_TMPFILE|O_RDWR|O_CLOEXEC,0600);
-    return fd<0 ? -errno : fd;
+    return (int)md_host_temporary(root,".",0600);
 }
 static int reopen(int source, int flags) {
     char path[64]; snprintf(path,sizeof(path),"/proc/self/fd/%d",source);
@@ -31,7 +32,7 @@ int md_mount_pin_check(int source, int pin) {
     if (source<0 || pin<0) return -EPROTO;
     int flags=fcntl(pin,F_GETFL);
     if (flags<0) return -errno;
-    if (flags&O_PATH || (flags&O_ACCMODE)!=O_RDONLY) return -EPROTO;
+    if (flags&O_PATH || (flags&MD_O_ACCMODE)!=O_RDONLY) return -EPROTO;
     struct stat a,b;
     if (fstat(source,&a) || fstat(pin,&b)) return -errno;
     return a.st_dev==b.st_dev && a.st_ino==b.st_ino ? 0 : -EPROTO;

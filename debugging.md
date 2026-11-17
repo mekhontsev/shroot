@@ -118,6 +118,12 @@ record; restored signal-delivery stops then pass through ordinary debugger
 admission before recipient-namespace translation. Their restored provenance
 also prevents another interrupted-syscall probe: a host-denied memory read
 can need a task-local helper and must not defer the same signal indefinitely.
+An adapter that consumes the native exit completes metadata replay through the
+same result owner; it cannot leave a second owner waiting for a later syscall.
+Signal delivery follows the completed virtual syscall exit as well. Ignored
+signals remain visible to a guest tracer, which may suppress or replace them.
+A pending interrupt during delivery is acknowledged only after the kernel
+commits the signal frame and the machine-entry owner restores its guest context.
 
 Under inherited host seccomp, a syscall-exit stop can precede the SIGSYS that
 admits its adapter. For an actively syscall-traced guest, the coordinator checks

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "task_mapping.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -10,8 +11,8 @@ int md_task_mapping_safe(int source) {
     int flags=fcntl(source,F_GETFL);
     struct stat st;
     if (flags<0 || (flags&O_PATH) || fstat(source,&st) || !S_ISREG(st.st_mode)) return 0;
-    if ((flags&O_ACCMODE)==O_RDONLY) return 1;
-    if ((flags&O_ACCMODE)!=O_RDWR) return 0;
+    if ((flags&MD_O_ACCMODE)==O_RDONLY) return 1;
+    if ((flags&MD_O_ACCMODE)!=O_RDWR) return 0;
     int seals=fcntl(source,F_GET_SEALS);
     return seals>=0 && (seals&(F_SEAL_GROW|F_SEAL_SHRINK))==(F_SEAL_GROW|F_SEAL_SHRINK)
         && (seals&(F_SEAL_WRITE|F_SEAL_FUTURE_WRITE));

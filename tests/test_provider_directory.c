@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/magic.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +19,7 @@ struct dirent *__wrap_readdir(DIR *dir) {
     ++reads; return __real_readdir(dir);
 }
 static int visible(const char *path) { return !strstr(path,"hidden"); }
-static const struct md_provider_tree_ops ops={.lower_visible=visible};
+static const struct md_provider_tree_ops ops={.lower_visible=visible,.filesystem=TMPFS_MAGIC};
 static void touch(int parent,const char *name) {
     int fd=openat(parent,name,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);
     assert(fd>=0 && !close(fd));
@@ -60,6 +61,12 @@ void md_test_provider_directory(const char *path) {
     int lower=openat(parent,"lower",O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(lower>=0);
     struct md_provider_tree *tree=md_provider_tree_new(parent,lower,NULL,0,&ops,NULL); assert(tree);
     int upper=md_provider_tree_root(tree);
+    unsigned long type;
+    assert(!md_provider_tree_filesystem_at(tree,upper,&type) && type==TMPFS_MAGIC);
+    assert(!md_provider_tree_filesystem_at(tree,lower,&type) && type==TMPFS_MAGIC);
+    int proc=open("/proc/self/status",O_RDONLY|O_CLOEXEC); assert(proc>=0);
+    assert(!md_provider_tree_filesystem_at(tree,proc,&type) && !type);
+    close(proc);
     for (unsigned i=0;i<1024;++i) {
         char name[32]; snprintf(name,sizeof(name),"item-%04u",i); touch(lower,name);
         if (!(i%8)) touch(upper,name);

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "inode_internal.h"
 #include "inode_view.h"
 #include "inode_overlay.h"
@@ -319,10 +320,10 @@ int md_inode_plan_reopen(struct md_inode_store *s, int original, int flags, int 
         struct md_open_completion *completion, int native_plan) {
     *completion = (struct md_open_completion){0};
     if (native_plan && (mutable || !md_open_native_plan(flags,0))) return -EXDEV;
-    if (flags & ~(O_PATH | O_CLOEXEC | O_NONBLOCK | O_DIRECTORY | MD_O_LARGEFILE | O_ACCMODE
+    if (flags & ~(O_PATH | O_CLOEXEC | O_NONBLOCK | O_DIRECTORY | MD_O_LARGEFILE | MD_O_ACCMODE
             | O_APPEND | O_TRUNC | O_NOFOLLOW | O_SYNC | O_DSYNC | O_DIRECT | O_NOCTTY | O_NOATIME)) return -EINVAL;
-    if ((flags & O_ACCMODE) == O_ACCMODE) return -EINVAL;
-    if ((flags & O_TRUNC) && !(flags & O_ACCMODE)) return -EINVAL;
+    if ((flags & MD_O_ACCMODE) == MD_O_ACCMODE) return -EINVAL;
+    if ((flags & O_TRUNC) && !(flags & MD_O_ACCMODE)) return -EINVAL;
     if (flags & O_PATH) flags &= O_PATH | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW;
     int write = mutable || (flags & (O_WRONLY | O_RDWR | O_TRUNC));
     int r = mdi_begin(s, 0);
@@ -357,7 +358,19 @@ int md_inode_plan_reopen(struct md_inode_store *s, int original, int flags, int 
     int fd = -1;
     int directory = r ? -1 : mdi_backing_directory(s, &node);
     if (!r && directory < 0) r = directory;
-    if (!r && (fd=mdi_backing_open(s,&node,deferred || device || native_plan ? O_PATH : flags))<0) r=fd;
+    if (!r) {
+        if (!deferred && !device && !native_plan && node.descriptor==original+1)
+            fd=md_open_pinned(original,flags);
+        else {
+            fd=mdi_backing_open(s,&node,O_PATH);
+            if (fd>=0 && !deferred && !device && !native_plan) {
+                int pin=fd;
+                fd=md_open_pinned(pin,flags);
+                close(pin);
+            }
+        }
+        if (fd<0) r=fd;
+    }
     struct stat st;
     if (!r && native_plan) r=mdi_backing_fstat(&node,fd,&st);
     if (!r && (flags&O_DSYNC) && (!native_plan || s->write_transaction)) s->sync_requested=1;

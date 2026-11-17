@@ -23,9 +23,19 @@ int mdi_native_eligible(uint32_t uid,uint32_t gid,mode_t mode) {
 static int valid_name(const char *name) {
     return name && *name && strcmp(name,".") && strcmp(name,"..") && !strchr(name,'/');
 }
-int mdi_native_pin_create(int directory,const char *name,uint32_t uid,uint32_t gid,mode_t mode) {
-    if (!mdi_native_eligible(uid,gid,mode)) return -EOPNOTSUPP;
+static int native_path(char path[NAME_MAX+34],const char *parent,const char *name) {
     if (!valid_name(name)) return -EINVAL;
+    if (parent && (strlen(parent)!=32 || strspn(parent,"0123456789abcdef")!=32)) return -EINVAL;
+    int n=parent ? snprintf(path,NAME_MAX+34,"%s/%s",parent,name)
+        : snprintf(path,NAME_MAX+34,"%s",name);
+    return n<0 || n>=NAME_MAX+34 ? -ENAMETOOLONG : 0;
+}
+int mdi_native_pin_create_in(int directory,const char *parent,const char *name,uint32_t uid,uint32_t gid,mode_t mode) {
+    if (!mdi_native_eligible(uid,gid,mode)) return -EOPNOTSUPP;
+    char path[NAME_MAX+34];
+    int r=native_path(path,parent,name);
+    if (r) return r;
+    name=path;
     if (mknodat(directory,name,S_IFREG|mode,0)) {
         int error=errno;
         return error==EPERM || error==EACCES || error==ENOSYS || error==EOPNOTSUPP
@@ -37,18 +47,17 @@ int mdi_native_pin_create(int directory,const char *name,uint32_t uid,uint32_t g
     if (unlinkat(directory,name,0)) return -errno;
     return -error;
 }
+int mdi_native_pin_create(int directory,const char *name,uint32_t uid,uint32_t gid,mode_t mode) {
+    return mdi_native_pin_create_in(directory,NULL,name,uid,gid,mode);
+}
 int mdi_native_create_in(int directory,const char *parent,const char *name,int flags,uint32_t uid,uint32_t gid,mode_t mode) {
     if (!mdi_native_eligible(uid,gid,mode)) return -EOPNOTSUPP;
-    if (!valid_name(name)) return -EINVAL;
-    if (flags&~(O_ACCMODE|O_CLOEXEC|O_NONBLOCK|O_APPEND|O_SYNC|O_DSYNC|O_DIRECT|O_NOATIME|MD_O_LARGEFILE)
-            || (flags&O_ACCMODE)==O_ACCMODE) return -EINVAL;
+    if (flags&~(MD_O_ACCMODE|O_CLOEXEC|O_NONBLOCK|O_APPEND|O_SYNC|O_DSYNC|O_DIRECT|O_NOATIME|MD_O_LARGEFILE)
+            || (flags&MD_O_ACCMODE)==MD_O_ACCMODE) return -EINVAL;
     char path[NAME_MAX+34];
-    if (parent) {
-        if (strlen(parent)!=32 || strspn(parent,"0123456789abcdef")!=32) return -EINVAL;
-        int n=snprintf(path,sizeof(path),"%s/%s",parent,name);
-        if (n<0 || (size_t)n>=sizeof(path)) return -ENAMETOOLONG;
-        name=path;
-    }
+    int r=native_path(path,parent,name);
+    if (r) return r;
+    name=path;
     int fd=openat(directory,name,flags|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,mode);
     return fd<0 ? -errno : fd;
 }

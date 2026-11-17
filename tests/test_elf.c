@@ -45,6 +45,11 @@ static void check(int error, int loader) {
         assert(!memcmp(description.segments,segments,header->e_phnum*sizeof(*segments)));
         assert(description.low<description.high && header->e_entry>=description.low
             && header->e_entry<description.high);
+        uintptr_t alignment=md_page_size;
+        for (unsigned i=0;i<header->e_phnum;++i)
+            if (segments[i].p_type==PT_LOAD && segments[i].p_memsz && segments[i].p_align>alignment)
+                alignment=segments[i].p_align;
+        assert(description.alignment==alignment);
     }
     if (error) {
         struct md_image image;

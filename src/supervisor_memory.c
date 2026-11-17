@@ -1222,6 +1222,9 @@ int entry_fence_drained(const struct thread *t) {
                 && !o->evicting && !o->finishing)) return 1;
     }
     if (signal_control_parked(t)) return 1;
+    /* A debugger parked in its admitted poll may await this installer's next
+     * stop. It owns no active entry; its original wait resumes after wake. */
+    if (t->phase==DEBUG_PARK_EXIT) return 1;
     if (t->phase==PROCESS_OBSERVING && (t->execution.request.nr==SYS_wait4 || t->execution.request.nr==SYS_waitid)) return 1;
     /* Native fallback and broker-owned reads have already admitted the original
      * call and released task-affine preparation. A blocking inotify read may

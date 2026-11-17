@@ -73,12 +73,12 @@ int md_fs_control_operation(struct md_filesystem *fs,struct md_mount_namespace *
         break;
     case MD_FS_OPEN: case MD_FS_REOPEN:
         if (fd<0) { r=-ENOENT; break; }
-        if (q->flags&~(O_ACCMODE|O_CLOEXEC|O_APPEND|O_TRUNC|O_NONBLOCK|O_NOCTTY|O_NOFOLLOW|O_DIRECTORY|O_PATH|O_CREAT|O_EXCL|MD_O_LARGEFILE|O_NOATIME)) {
+        if (q->flags&~(MD_O_ACCMODE|O_CLOEXEC|O_APPEND|O_TRUNC|O_NONBLOCK|O_NOCTTY|O_NOFOLLOW|O_DIRECTORY|O_PATH|O_CREAT|O_EXCL|MD_O_LARGEFILE|O_NOATIME)) {
             r=-EOPNOTSUPP; break;
         }
-        if ((q->flags&O_ACCMODE)==O_ACCMODE) { r=-EINVAL; break; }
+        if ((q->flags&MD_O_ACCMODE)==MD_O_ACCMODE) { r=-EINVAL; break; }
         if (!(q->flags&O_PATH) && (q->flags&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) { r=-EEXIST; break; }
-        if (!(q->flags&O_PATH) && (q->flags&(O_ACCMODE|O_TRUNC)) && md_view_readonly(mount)) { r=-EROFS; break; }
+        if (!(q->flags&O_PATH) && (q->flags&(MD_O_ACCMODE|O_TRUNC)) && md_view_readonly(mount)) { r=-EROFS; break; }
         r=control_open(fs,view,mount,fd,(int)q->flags,source->open,source->context,out,output);
         break;
     default: return 0;

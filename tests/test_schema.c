@@ -139,6 +139,8 @@ static void historical(const char *path,int revision,struct stat *file) {
     if (revision>=2) assert(sqlite3_exec(db,format17_revision2,NULL,NULL,NULL)==SQLITE_OK);
     if (revision>=3) assert(sqlite3_exec(db,format17_revision3,NULL,NULL,NULL)==SQLITE_OK);
     if (revision>=4) assert(sqlite3_exec(db,format17_revision4,NULL,NULL,NULL)==SQLITE_OK);
+    if (revision>=5) assert(sqlite3_exec(db,format17_revision5,NULL,NULL,NULL)==SQLITE_OK);
+    if (revision>=6) assert(sqlite3_exec(db,format17_revision6,NULL,NULL,NULL)==SQLITE_OK);
     sqlite3_stmt *q=NULL;
     assert(sqlite3_prepare_v2(db,"INSERT INTO objects(object,kind,device,inode,parent,backing,logical_inode,logical_device,scope,mode) "
         "VALUES(?1,?2,?3,?4,?5,?1,?4,?3,?6,?7)",-1,&q,NULL)==SQLITE_OK);
@@ -404,7 +406,7 @@ int main(int argc,char **argv) {
     char path[PATH_MAX];
     snprintf(path,sizeof(path),"%s/fresh",argv[1]); initialize(path);
     struct md_inode_store *fresh=NULL; assert(!md_inode_store_open(path,0,&fresh));
-    for (int revision=1;revision<=4;++revision) {
+    for (int revision=1;revision<=6;++revision) {
         snprintf(path,sizeof(path),"%s/revision-%d",argv[1],revision); baseline(path,revision,fresh);
     }
     md_inode_store_close(fresh);

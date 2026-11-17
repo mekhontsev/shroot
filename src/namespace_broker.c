@@ -684,7 +684,7 @@ static int prepare_call(struct md_filesystem *fs, struct operation *op, size_t c
     if (!md_broker_filesystem_call(q->data.nr) && !op->channel) return 0;
     /* ADDFD uses fget(), which rejects O_PATH; SCM_RIGHTS preserves it. */
     if (q->data.nr==SYS_openat) {
-        if (q->data.args[2]&__O_TMPFILE) return 0;
+        if (q->data.args[2]&MD_O_TMPFILE_BIT) return 0;
         if ((q->data.args[2]&O_PATH) && !op->native_plan) return 0;
         op->owned_open=op->owner->recover && (op->task->eligible&MD_BROKER_OPEN);
         if (op->native_plan) op->owned_open=0;
@@ -998,7 +998,7 @@ static int reply(struct operation *op, const void *data) {
             : deliver_bytes(op,op->syscall.output,data,op->result.size);
         if (op->undelivered) return 0;
     } else if (!response.error && op->syscall.copy==MD_FS_COPY_STATX) {
-        struct statx st;
+        struct md_statx st;
         md_fs_info_statx(&op->result.info,&st);
         response.error=deliver_bytes(op,op->syscall.output,&st,sizeof(st));
         if (op->undelivered) return 0;

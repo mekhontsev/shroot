@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "kernel_clone.h"
 #include "fd_return.h"
 #include "fd_channel.h"
 #include "fs_mount_internal.h"
@@ -88,7 +89,7 @@ static void export_directory(int channel) {
     assert(stack!=MAP_FAILED);
     struct capture c={.channel=channel,.owner=(pid_t)syscall(SYS_gettid)};
     int flags=CLONE_VM|CLONE_THREAD|CLONE_SIGHAND|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID;
-    assert(clone(capture_directory,(char *)stack+size,flags,&c,&c.tid,NULL,&c.tid)>0);
+    assert(md_test_clone(capture_directory,(char *)stack+size,flags,&c,&c.tid,NULL,&c.tid)>0);
     /* EVENT_WAIT: exact clear-child-tid; fixture alarm fails a missing exit. */
     int tid;
     while ((tid=__atomic_load_n(&c.tid,__ATOMIC_ACQUIRE))) {
@@ -165,7 +166,7 @@ static void run(int shared, int protected, int cloexec, enum output output) {
     size_t stack_size=1024*1024;
     void *stack=mmap(NULL,stack_size,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK,-1,0);
     assert(stack!=MAP_FAILED);
-    pid_t child=clone(receiver,(char *)stack+stack_size,SIGCHLD|(shared ? CLONE_FILES : 0),&context);
+    pid_t child=md_test_clone(receiver,(char *)stack+stack_size,SIGCHLD|(shared ? CLONE_FILES : 0),&context);
     assert(child>0);
     int status=wait_child(child); assert(WIFSTOPPED(status) && WSTOPSIG(status)==SIGSTOP);
     assert(!ptrace(PTRACE_SETOPTIONS,child,0,PTRACE_O_TRACEEXIT|PTRACE_O_EXITKILL));

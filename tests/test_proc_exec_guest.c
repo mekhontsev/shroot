@@ -2,7 +2,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/stat.h>
+#include "../src/statx_abi.h"
 #include <linux/openat2.h>
 #include <sched.h>
 #include <signal.h>
@@ -60,7 +60,7 @@ static void image_metadata(const char *proc) {
             struct stat st,link,opened;
             assert(!stat(path,&st) && S_ISREG(st.st_mode));
             assert(!lstat(path,&link) && link.st_ino==st.st_ino);
-            struct statx sx;
+            struct md_statx sx;
             assert(!syscall(SYS_statx,AT_FDCWD,path,0,STATX_BASIC_STATS,&sx));
             assert(sx.stx_ino==st.st_ino && sx.stx_mode==st.st_mode);
             assert(!faccessat(AT_FDCWD,path,F_OK,0));

@@ -589,8 +589,34 @@ static void admitted_gates(void) {
         uint32_t result,expected=owned ? SECCOMP_RET_ALLOW : arg ? SECCOMP_RET_ERRNO|EACCES : 0;
         assert(!md_seccomp_program_eval(&routed,&call,&result) && result==expected);
     }
-    md_seccomp_policy_release(policy);
-    puts("PASS admitted entry: guest body and implicit exits skipped, native ALLOW remains cacheable");
+    gate.decision=SECCOMP_RET_TRACE|201;
+    route.delegation_pc=gate.first+4;
+    const uint32_t calls[]={SYS_getpid,SYS_getuid};
+    struct sock_filter body[128],reference[256];
+    struct md_seccomp_route delegation={.delegation_pc=route.delegation_pc};
+    int body_size=md_seccomp_policy_route(policy,calls,2,201,body,128,&delegation); assert(body_size>0);
+    struct sock_fprog wrapped={body_size,body};
+    struct md_seccomp_policy *expanded=NULL;
+    assert(!md_seccomp_policy_capture(NULL,&wrapped,&expanded));
+    int reference_size=md_seccomp_policy_route(expanded,NULL,0,201,reference,256,&route);
+    n=md_seccomp_policy_route(policy,calls,2,201,output,128,&route);
+    assert(n>0 && n<reference_size);
+    struct sock_fprog compact={n,output},full={reference_size,reference};
+    const uint64_t addresses[]={gate.first-4,gate.first,gate.first+4,gate.end-4,gate.end};
+    for (unsigned nr=0;nr<512;++nr) for (unsigned arch=0;arch<2;++arch)
+    for (unsigned arg=0;arg<2;++arg) for (unsigned pc=0;pc<sizeof(addresses)/sizeof(*addresses);++pc) {
+        struct seccomp_data call={.nr=nr,.arch=arch ? AUDIT_ARCH_ARM : AUDIT_ARCH_AARCH64,
+            .instruction_pointer=addresses[pc],.args={arg}};
+        uint32_t result,expected;
+        assert(!md_seccomp_program_eval(&compact,&call,&result));
+        assert(!md_seccomp_program_eval(&full,&call,&expected) && result==expected);
+    }
+    uint32_t result;
+    assert(md_seccomp_program_constant(&compact,SYS_getpid,AUDIT_ARCH_AARCH64,&result)==-EAGAIN);
+    assert(!md_seccomp_program_constant(&compact,SYS_read,AUDIT_ARCH_AARCH64,&result)
+        && result==SECCOMP_RET_ALLOW);
+    md_seccomp_policy_release(expanded); md_seccomp_policy_release(policy);
+    puts("PASS admitted entry: implicit exits, shared delegation and cacheable native ALLOW");
 }
 static void gate_ranges(void) {
     const uint64_t bounds[][2]={

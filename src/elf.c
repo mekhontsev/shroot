@@ -98,7 +98,7 @@ int md_elf_layout_read(int fd,int loader,struct md_elf_layout *out) {
     if (error) return error;
     out->header=data.header;
     memcpy(out->segments,data.ph,data.header.e_phnum*sizeof(*data.ph));
-    out->low=range.low; out->high=range.high;
+    out->low=range.low; out->high=range.high; out->alignment=range.alignment;
     return 0;
 }
 int md_elf_load(int fd, int loader, struct md_image *image) {

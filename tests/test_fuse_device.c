@@ -155,8 +155,10 @@ static void continuations(struct md_filesystem *fs) {
     assert(!result.error && result.position==42 && !next && fs->store->identity==before);
     assert(!md_fs_continuation_pending(&r->base,&next,&result));
     assert(destroyed==1);
-    result.error=-EINPROGRESS;
+    result.error=MD_OPERATION_PENDING;
     assert(!md_fs_continuation_pending(NULL,&next,&result) && result.error==-EPROTO);
+    result.error=-EINPROGRESS;
+    assert(!md_fs_continuation_pending(NULL,&next,&result) && result.error==-EINPROGRESS);
     md_fs_context_end(&context);
 }
 static void sessions(void) {

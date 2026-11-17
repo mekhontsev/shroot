@@ -138,7 +138,7 @@ static long receive_reply(int socket, int64_t *delivery_deadline, unsigned timeo
             memcpy(&admission,reply,sizeof(admission));
             unsigned count=rights.count; md_fs_close_rights(&rights);
             if (deferred || count || admission.magic!=MD_FS_MAGIC || admission.version!=MD_FS_VERSION
-                    || admission.error!=-EINPROGRESS) return -EPROTO;
+                    || admission.error!=MD_OPERATION_PENDING) return -EPROTO;
             deferred=1; deadline=INT64_MAX;
             continue;
         }

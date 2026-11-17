@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "fifo_readiness.h"
 #include "control_subscription.h"
 #include <errno.h>
@@ -43,7 +44,7 @@ int md_fifo_readiness_attach(struct md_fifo_readiness *f,int endpoint) {
     if (!S_ISFIFO(st.st_mode)) return -EINVAL;
     int flags=fcntl(endpoint,F_GETFL);
     if (flags<0) return -errno;
-    if ((flags&O_PATH) || (flags&O_ACCMODE)!=O_RDONLY) return -EINVAL;
+    if ((flags&O_PATH) || (flags&MD_O_ACCMODE)!=O_RDONLY) return -EINVAL;
     int query=epoll_create1(EPOLL_CLOEXEC),wake=-1,error=query<0 ? -errno : 0;
     if (!error && (wake=epoll_create1(EPOLL_CLOEXEC))<0) error=-errno;
     struct epoll_event event={.events=EPOLLIN|EPOLLRDNORM};

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "launch_registry.h"
 #include <dirent.h>
 #include <errno.h>
@@ -50,7 +51,7 @@ int md_launch_register(struct md_launch_registration *owner, const char *store,
     const char *label = getenv("SHROOT_GUEST_LABEL");
     if (label && strlen(label) < sizeof(info.label)) strcpy(info.label, label);
     if (!r && write(owner->record, &info, sizeof(info)) != sizeof(info)) r = -EIO;
-    if (!r && syscall(SYS_renameat2, fd, temporary, fd, owner->id, RENAME_NOREPLACE)) r = -errno;
+    if (!r) r=(int)md_host_rename(fd,temporary,fd,owner->id,RENAME_NOREPLACE);
     if (r) {
         if (owner->record >= 0) { unlinkat(fd, temporary, 0); close(owner->record); owner->record = -1; }
         md_launch_unregister(owner);

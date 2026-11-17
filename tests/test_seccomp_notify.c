@@ -97,7 +97,7 @@ static void notification_pid_views(void) {
     struct md_control_actor actor={.resources=&resources};
     struct md_control_pending *pending=NULL; struct seccomp_notif received={0};
     assert(file.ops->ioctl_async(file.context,&actor,SECCOMP_IOCTL_NOTIF_RECV,0,
-        &received,sizeof(received),&pending)==-EINPROGRESS);
+        &received,sizeof(received),&pending)==MD_OPERATION_PENDING);
     resources.pid=other;
     assert(!md_seccomp_notify_begin(q,101,source,&data,&request));
     md_pid_identity_reap(source); md_pid_identity_release(source);

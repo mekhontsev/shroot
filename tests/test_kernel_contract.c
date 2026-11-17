@@ -8,6 +8,7 @@
 #include <linux/audit.h>
 #include <linux/openat2.h>
 #include <linux/filter.h>
+#include <linux/fs.h>
 #include <linux/seccomp.h>
 #include <pthread.h>
 #include <sched.h>

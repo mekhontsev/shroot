@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "image_oci.h"
 #include "image_io.h"
 #include "image_json.h"
@@ -174,7 +175,7 @@ int md_image_unpack(int blobs, int scratch, const struct md_image_descriptor *d,
         struct archive_entry *entry;
         if (!r && archive_read_next_header(ar, &entry) != ARCHIVE_OK) r = -EBADMSG;
         if (!r && (archive_filter_count(ar) != 2 || archive_filter_code(ar, 0) != filter)) r = -EBADMSG;
-        if (!r && (result = openat(scratch, ".", O_TMPFILE | O_RDWR | O_CLOEXEC, 0600)) < 0) r = -errno;
+        if (!r && (result=(int)md_host_temporary(scratch,".",0600))<0) r=result;
         unsigned char buffer[65536];
         while (!r) {
             la_ssize_t n = archive_read_data(ar, buffer, sizeof(buffer));

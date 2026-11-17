@@ -278,6 +278,9 @@ static int image_identity_prepare(struct thread *t,int fd,struct md_exec_identit
 void image_entry_complete(struct thread *t,const struct user_pt_regs *regs) {
     struct user_pt_regs continuation=*regs;
     if (!set_registers(t->pid,&continuation)) return;
+    /* A tracer may select SYSCALL at EXEC even when it did not observe the
+     * execve entry. Its completed call still precedes the new ELF's first SVC. */
+    t->debug.call_active=t->debug.adapter=md_debugger_traced(debugger,t->pid);
     if (!md_debugger_exec(debugger,t->pid,t->debug.exec_old ? t->debug.exec_old : t->pid)) resume(t->pid,0);
 }
 
@@ -1162,6 +1165,9 @@ void task_exit_event(struct thread *t,pid_t pid,unsigned event) {
      * terminal stop. Registers may be inspected here, never fabricated. */
     int resume_lost=t->resume_lost;
     t->resume_lost=0; t->terminal_stop=1;
+    /* EXIT displaces any collected policy stop. Its continuation can only
+     * retire the task, never replay the former syscall or expose its latch. */
+    t->seccomp.trace.stage=GUEST_TRACE_NONE;
     if (machine) machine->clients_dirty=1;
     /* A live mm participant collects retired slots on its next
      * resume. The exiting task is no longer a reliable memory reader. */
@@ -1337,6 +1343,9 @@ void task_stop_event(struct thread *t,pid_t pid,int status,int sig) {
     if (wake) {
         CHECK(sig == SIGTRAP); t->listening = 0; group_wakes++;
         md_debugger_child_changed(debugger,pid);
+        /* LISTEN transfers this wake stop to the guest tracer as well. It is
+         * not an internal interrupt that may resume application code. */
+        if (debugger_at_boundary(t) && md_debugger_stop(debugger,pid,status,NULL,0)) return;
     }
     if (process_wait_interrupt(t)) {
         if (!t->resume_lost) resume(pid,0);

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "socket_abi.h"
 #include "socket_ancillary.h"
 #include "socket_control.h"
 #include "socket_payload.h"
@@ -22,10 +23,10 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 
-static struct cmsghdr *next_header(const struct msghdr *m, const struct cmsghdr *h) {
+static struct md_cmsghdr *next_header(const struct md_msghdr *m, const struct md_cmsghdr *h) {
     size_t offset = (const char *)h - (const char *)m->msg_control;
-    if (offset > m->msg_controllen || h->cmsg_len < CMSG_LEN(0) || h->cmsg_len > m->msg_controllen-offset) return NULL;
-    size_t step = CMSG_ALIGN(h->cmsg_len);
+    if (offset > m->msg_controllen || h->cmsg_len < MD_CMSG_LEN(0) || h->cmsg_len > m->msg_controllen-offset) return NULL;
+    size_t step = MD_CMSG_ALIGN(h->cmsg_len);
     if (step > m->msg_controllen-offset || m->msg_controllen-offset-step < sizeof(*h)) return NULL;
     return (void *)((char *)m->msg_control+offset+step);
 }
@@ -63,7 +64,7 @@ static long io_transfer(struct md_ipc_io_message *io, void *memory, size_t size,
     }
     return 0;
 }
-long md_socket_vectors_open(struct md_socket_vectors *vectors, struct msghdr *m) {
+long md_socket_vectors_open(struct md_socket_vectors *vectors, struct md_msghdr *m) {
     if (m->msg_iovlen>1024) return -EMSGSIZE;
     vectors->bytes=m->msg_iovlen*sizeof(struct iovec);
     vectors->items=buffer(vectors->bytes,vectors->local,sizeof(vectors->local));
@@ -76,7 +77,7 @@ long md_socket_vectors_open(struct md_socket_vectors *vectors, struct msghdr *m)
 void md_socket_vectors_close(struct md_socket_vectors *vectors) {
     release(vectors->items,vectors->local,vectors->bytes);
 }
-long md_socket_payload_prepare(struct md_ipc_io_message *io, const struct msghdr *m, int sending) {
+long md_socket_payload_prepare(struct md_ipc_io_message *io, const struct md_msghdr *m, int sending) {
     long error=md_socket_payload_layout(io,m);
     if (error) return error;
     /* Inline messages need no host allocation or intermediate acknowledgement.
@@ -97,7 +98,7 @@ long md_socket_payload_prepare(struct md_ipc_io_message *io, const struct msghdr
     if (md_read_memory(&io->address,m->msg_name,io->address_size)) return -EFAULT;
     return 0;
 }
-long md_socket_payload_scatter(struct md_ipc_io_message *io, struct msghdr *m, long result, int batch) {
+long md_socket_payload_scatter(struct md_ipc_io_message *io, struct md_msghdr *m, long result, int batch) {
     if (result<0) return result;
     size_t copied=0, remaining=(size_t)result<io->size ? (size_t)result : io->size;
     for (size_t i=0;remaining && i<m->msg_iovlen;++i) {
@@ -115,7 +116,7 @@ long md_socket_payload_scatter(struct md_ipc_io_message *io, struct msghdr *m, l
     m->msg_controllen=io->control_size; m->msg_namelen=io->address_size; m->msg_flags=io->flags;
     return result;
 }
-static long send_captured(const struct msghdr *original, const unsigned long *a,
+static long send_captured(const struct md_msghdr *original, const unsigned long *a,
         void *control, size_t capacity, const struct iovec *sendto) {
     long address=md_adapter_buffer_take();
     if (address<0) return address;
@@ -124,7 +125,7 @@ static long send_captured(const struct msghdr *original, const unsigned long *a,
     frame->options=(struct md_ipc_send_options){.addressed=original->msg_name!=NULL,
         .length=original->msg_name ? original->msg_namelen : 0};
     frame->input=(struct md_task_send){.message=(uintptr_t)&frame->message,
-        .token_slot=(uintptr_t)control+CMSG_LEN(0),
+        .token_slot=(uintptr_t)control+MD_CMSG_LEN(0),
         .socket=(int)a[0],.flags=(int)a[2],.count=1,.keep={(int)a[0]}};
     if (sendto) { frame->input.sendto=1; frame->input.payload=*sendto; }
     long result=frame->options.length>sizeof(frame->options.address) ? -EINVAL :
@@ -132,31 +133,31 @@ static long send_captured(const struct msghdr *original, const unsigned long *a,
     size_t misc=0, credential_offset=0;
     /* Copy and normalize once. All non-right headers retain their bytes and
      * order; the kernel remains responsible for their protocol validation. */
-    for (size_t pos=0;!result && original->msg_controllen-pos>=sizeof(struct cmsghdr);) {
-        struct cmsghdr h;
+    for (size_t pos=0;!result && original->msg_controllen-pos>=sizeof(struct md_cmsghdr);) {
+        struct md_cmsghdr h;
         if (md_read_memory(&h,(char *)original->msg_control+pos,sizeof(h))<0) { result=-EFAULT; break; }
-        if (h.cmsg_len<CMSG_LEN(0) || h.cmsg_len>original->msg_controllen-pos) { result=-EINVAL; break; }
+        if (h.cmsg_len<MD_CMSG_LEN(0) || h.cmsg_len>original->msg_controllen-pos) { result=-EINVAL; break; }
         if (h.cmsg_level==SOL_SOCKET && h.cmsg_type==SCM_RIGHTS) {
-            size_t count=(h.cmsg_len-CMSG_LEN(0))/sizeof(int);
+            size_t count=(h.cmsg_len-MD_CMSG_LEN(0))/sizeof(int);
             if (count>MD_TASK_SEND_INPUTS-frame->input.count) { result=-EINVAL; break; }
             result=md_read_memory(frame->input.keep+frame->input.count,
-                (char *)original->msg_control+pos+CMSG_LEN(0),count*sizeof(int));
+                (char *)original->msg_control+pos+MD_CMSG_LEN(0),count*sizeof(int));
             frame->input.count+=count;
         } else {
-            size_t step=CMSG_ALIGN(h.cmsg_len);
+            size_t step=MD_CMSG_ALIGN(h.cmsg_len);
             if (step>capacity-misc) { result=-EINVAL; break; }
             result=md_read_memory((char *)control+misc,(char *)original->msg_control+pos,h.cmsg_len);
             if (result) break;
             memset((char *)control+misc+h.cmsg_len,0,step-h.cmsg_len);
             if (h.cmsg_level==SOL_SOCKET && h.cmsg_type==SCM_CREDENTIALS) {
-                if (frame->options.credentials || h.cmsg_len!=CMSG_LEN(sizeof(struct ucred))) { result=-EINVAL; break; }
-                frame->options.credentials=1; credential_offset=misc+CMSG_LEN(0);
+                if (frame->options.credentials || h.cmsg_len!=MD_CMSG_LEN(sizeof(struct ucred))) { result=-EINVAL; break; }
+                frame->options.credentials=1; credential_offset=misc+MD_CMSG_LEN(0);
                 memcpy(&frame->options.claimed,(char *)control+credential_offset,sizeof(struct ucred));
             }
             misc+=step;
         }
-        if (CMSG_ALIGN(h.cmsg_len)>original->msg_controllen-pos) break;
-        pos+=CMSG_ALIGN(h.cmsg_len);
+        if (MD_CMSG_ALIGN(h.cmsg_len)>original->msg_controllen-pos) break;
+        pos+=MD_CMSG_ALIGN(h.cmsg_len);
     }
     if (!result) result=md_socket_capture_inputs(md_guest_buffer_control(MD_FS_BUFFER_SEND_PREPARE,0,0),
         &frame->scratch.capture.capture,frame->input.keep,frame->input.count);
@@ -164,7 +165,7 @@ static long send_captured(const struct msghdr *original, const unsigned long *a,
         unsigned data=frame->input.count-1;
         unsigned expected=(frame->transport==MD_IPC_TRANSPORT_ORIGINS_V1 && data ? 1 : data)
             +frame->destination.credentials;
-        size_t rights=frame->rights ? CMSG_SPACE(frame->rights*sizeof(int)) : 0;
+        size_t rights=frame->rights ? MD_CMSG_SPACE(frame->rights*sizeof(int)) : 0;
         if (frame->rights>253 || frame->rights!=expected || rights>capacity-misc) result=-EPROTO;
         else {
             if (frame->options.credentials) {
@@ -179,9 +180,9 @@ static long send_captured(const struct msghdr *original, const unsigned long *a,
             frame->message.msg_control=rights+misc ? control : NULL;
             frame->message.msg_controllen=rights+misc;
             if (frame->brokered && rights) {
-                struct cmsghdr *h=control;
+                struct md_cmsghdr *h=control;
                 memset(control,0,rights);
-                *h=(struct cmsghdr){.cmsg_len=CMSG_LEN(frame->rights*sizeof(int)),
+                *h=(struct md_cmsghdr){.cmsg_len=MD_CMSG_LEN(frame->rights*sizeof(int)),
                     .cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
             }
             if (frame->options.addressed) {
@@ -190,7 +191,7 @@ static long send_captured(const struct msghdr *original, const unsigned long *a,
             }
             if (frame->brokered) {
                 struct md_socket_vectors vectors;
-                struct msghdr view=frame->message;
+                struct md_msghdr view=frame->message;
                 frame->scratch.capture.io.batch_count=0;
                 result=md_socket_vectors_open(&vectors,&view);
                 if (!result) {
@@ -205,7 +206,7 @@ static long send_captured(const struct msghdr *original, const unsigned long *a,
     return result<0 ? result : released ? released : result;
 }
 long md_socket_ancillary_send(const struct md_fs *fs, const char *exe, const unsigned long *a) {
-    struct msghdr m;
+    struct md_msghdr m;
     long r = md_read_memory(&m, (void *)a[1], sizeof(m));
     if (r < 0 || !fs->endpoint[0] || ((!m.msg_control || !m.msg_controllen) && !m.msg_name))
         return md_socket_address_call(fs, exe, SYS_sendmsg, a);
@@ -215,8 +216,8 @@ long md_socket_ancillary_send(const struct md_fs *fs, const char *exe, const uns
                 || md_read_memory(&family,m.msg_name,sizeof(family)) || family!=AF_UNIX)
             return md_socket_address_call(fs,exe,SYS_sendmsg,a);
     }
-    size_t size=CMSG_ALIGN(m.msg_controllen)+CMSG_SPACE(253*sizeof(int));
-    _Alignas(struct cmsghdr) char local[4096];
+    size_t size=MD_CMSG_ALIGN(m.msg_controllen)+MD_CMSG_SPACE(253*sizeof(int));
+    _Alignas(struct md_cmsghdr) char local[4096];
     void *storage = size < m.msg_controllen ? NULL : buffer(size,local,sizeof(local));
     if (!storage) return -ENOMEM;
     r=send_captured(&m,a,storage,size,NULL);
@@ -228,46 +229,46 @@ long md_socket_ancillary_sendto(const struct md_fs *fs, const char *exe, const u
             || md_read_memory(&family,(void *)a[4],sizeof(family)) || family!=AF_UNIX)
         return md_socket_address_call(fs,exe,SYS_sendto,a);
     struct iovec payload={(void *)a[1],a[2]};
-    struct msghdr message={.msg_name=(void *)a[4],.msg_namelen=(unsigned)a[5],.msg_iov=&payload,.msg_iovlen=1};
+    struct md_msghdr message={.msg_name=(void *)a[4],.msg_namelen=(unsigned)a[5],.msg_iov=&payload,.msg_iovlen=1};
     unsigned long args[6]={a[0],(uintptr_t)&message,a[3]};
     /* A brokered datagram to an adapted endpoint carries the original
      * sender's identity. The application still supplies no ancillary data. */
-    _Alignas(struct cmsghdr) char control[CMSG_SPACE(sizeof(int))];
+    _Alignas(struct md_cmsghdr) char control[MD_CMSG_SPACE(sizeof(int))];
     return send_captured(&message,args,control,sizeof(control),&payload);
 }
 static size_t append(void *out, size_t used, size_t capacity, int type, int level,
         const void *data, size_t size, int *flags) {
     size_t room = used < capacity ? capacity-used : 0;
-    if (room < CMSG_LEN(size)) *flags |= MSG_CTRUNC;
-    if (room < sizeof(struct cmsghdr)) return used;
-    size_t copied = room-CMSG_LEN(0) < size ? room-CMSG_LEN(0) : size;
-    struct cmsghdr h = {.cmsg_len=CMSG_LEN(copied),.cmsg_level=level,.cmsg_type=type};
+    if (room < MD_CMSG_LEN(size)) *flags |= MSG_CTRUNC;
+    if (room < sizeof(struct md_cmsghdr)) return used;
+    size_t copied = room-MD_CMSG_LEN(0) < size ? room-MD_CMSG_LEN(0) : size;
+    struct md_cmsghdr h = {.cmsg_len=MD_CMSG_LEN(copied),.cmsg_level=level,.cmsg_type=type};
     /* Ancillary copy faults leave the payload delivered, with no advance of
      * the control cursor. SCM_RIGHTS has its own per-descriptor commit below. */
     if (md_write_memory((char *)out+used,&h,sizeof(h)) < 0
-            || md_write_memory((char *)out+used+CMSG_LEN(0),data,copied) < 0) return used;
-    size_t step = CMSG_SPACE(copied);
+            || md_write_memory((char *)out+used+MD_CMSG_LEN(0),data,copied) < 0) return used;
+    size_t step = MD_CMSG_SPACE(copied);
     return used + (step < room ? step : room);
 }
 static long publish_rights(enum md_received_source source, void *out, size_t used, size_t capacity,
         int *fds, const unsigned char *selectors, size_t count, int *flags, unsigned receive_flags) {
     size_t room=used<capacity?capacity-used:0;
-    if (room<CMSG_LEN(sizeof(int))) { *flags|=MSG_CTRUNC; return used; }
+    if (room<MD_CMSG_LEN(sizeof(int))) { *flags|=MSG_CTRUNC; return used; }
     size_t delivered=0;
     long error=md_fs_buffer_publish(source,fds,selectors,(unsigned)count,(char *)out+used,room,receive_flags,flags,&delivered);
     return error ? error : (long)(used+delivered);
 }
-static long publish(const struct md_fs *fs, int socket, const struct msghdr *original,
-        struct msghdr m, void *destination, unsigned receive_flags) {
+static long publish(const struct md_fs *fs, int socket, const struct md_msghdr *original,
+        struct md_msghdr m, void *destination, unsigned receive_flags) {
     size_t capacity=original->msg_control?original->msg_controllen:0;
     struct ucred claimed={0}; int have_claim=0, sender=-1;
     int indices[253]; struct md_received_message plan; unsigned entries=0;
     plan.count=0;
-    for (struct cmsghdr *h=CMSG_FIRSTHDR(&m);h;h=next_header(&m,h)) {
+    for (struct md_cmsghdr *h=MD_CMSG_FIRSTHDR(&m);h;h=next_header(&m,h)) {
         if (h->cmsg_level!=SOL_SOCKET || h->cmsg_type!=SCM_RIGHTS) continue;
-        size_t count=(h->cmsg_len-CMSG_LEN(0))/sizeof(int);
+        size_t count=(h->cmsg_len-MD_CMSG_LEN(0))/sizeof(int);
         if (count>253-entries) return -EPROTO;
-        memcpy(indices+entries,CMSG_DATA(h),count*sizeof(int)); entries+=count;
+        memcpy(indices+entries,MD_CMSG_DATA(h),count*sizeof(int)); entries+=count;
     }
     if (entries) {
         long error=md_fs_buffer_inspect(indices,entries,&plan);
@@ -283,8 +284,8 @@ static long publish(const struct md_fs *fs, int socket, const struct msghdr *ori
     }
     unsigned entry=0;
     void *out=original->msg_control; size_t used=0;
-    for (struct cmsghdr *h=CMSG_FIRSTHDR(&m); h; h=next_header(&m,h)) {
-        const void *data=CMSG_DATA(h); size_t n=h->cmsg_len-CMSG_LEN(0);
+    for (struct md_cmsghdr *h=MD_CMSG_FIRSTHDR(&m); h; h=next_header(&m,h)) {
+        const void *data=MD_CMSG_DATA(h); size_t n=h->cmsg_len-MD_CMSG_LEN(0);
         if (h->cmsg_level==SOL_SOCKET && h->cmsg_type==SCM_CREDENTIALS && n==sizeof(claimed)) {
             if (!have_claim) {
                 memcpy(&claimed,data,sizeof(claimed));
@@ -311,7 +312,7 @@ static long publish(const struct md_fs *fs, int socket, const struct msghdr *ori
             if (published<0) return published;
             if ((size_t)published>used) {
                 int type=SCM_PIDFD;
-                long error=md_write_memory((char *)out+used+offsetof(struct cmsghdr,cmsg_type),&type,sizeof(type));
+                long error=md_write_memory((char *)out+used+offsetof(struct md_cmsghdr,cmsg_type),&type,sizeof(type));
                 if (error) return error;
             }
             used=(size_t)published;
@@ -336,7 +337,7 @@ static long publish(const struct md_fs *fs, int socket, const struct msghdr *ori
         }
         used=append(out,used,capacity,h->cmsg_type,h->cmsg_level,data,n,&m.msg_flags);
     }
-    struct msghdr *target=destination;
+    struct md_msghdr *target=destination;
     long copied=0;
     if (original->msg_name) {
         unsigned length=m.msg_namelen;
@@ -359,8 +360,8 @@ static long receive_capture(struct md_task_receive_frame *frame) {
 enum { INLINE_RECEIVE_BATCH=128 };
 static long receive_batch_owned(struct md_task_receive_frame *frame, int *accepted) {
     struct md_task_receive *input=&frame->input;
-    struct mmsghdr *messages=(void *)input->messages;
-    struct entry { struct md_socket_vectors vectors; struct msghdr view; int opened; };
+    struct md_mmsghdr *messages=(void *)input->messages;
+    struct entry { struct md_socket_vectors vectors; struct md_msghdr view; int opened; };
     struct entry local[INLINE_RECEIVE_BATCH];
     size_t size=input->count*sizeof(struct entry);
     struct entry *entries=buffer(size,local,sizeof(local));
@@ -424,7 +425,7 @@ static long receive_owned(struct md_task_receive input, int *accepted, int *reta
     long address=prepared ? (long)prepared : md_adapter_buffer_take();
     if (address<0) return address;
     struct md_task_receive_frame *frame=(void *)address;
-    struct msghdr inline_view={0};
+    struct md_msghdr inline_view={0};
     struct iovec inline_vectors[8];
     long result;
     if (!input.batch && prepared && frame->prepared) {
@@ -436,7 +437,7 @@ static long receive_owned(struct md_task_receive input, int *accepted, int *reta
     frame->io_completed=0;
     frame->io.batch_count=0;
     if (!input.batch) {
-        inline_view=*(struct msghdr *)input.messages;
+        inline_view=*(struct md_msghdr *)input.messages;
         /* Prepare small receives before capture so its completion can also
          * perform IO. Invalid/large vectors keep the existing admission path. */
         if (inline_view.msg_iovlen<=sizeof(inline_vectors)/sizeof(*inline_vectors)
@@ -452,12 +453,12 @@ static long receive_owned(struct md_task_receive input, int *accepted, int *reta
         if (frame->io_completed) {
             *accepted=1;
             result=md_socket_payload_scatter(&frame->io,&inline_view,frame->result,0);
-            struct msghdr *m=(void *)input.messages;
+            struct md_msghdr *m=(void *)input.messages;
             m->msg_namelen=inline_view.msg_namelen; m->msg_controllen=inline_view.msg_controllen;
             m->msg_flags=inline_view.msg_flags;
         } else {
-            struct msghdr *m=(void *)input.messages;
-            struct msghdr view=*m;
+            struct md_msghdr *m=(void *)input.messages;
+            struct md_msghdr view=*m;
             struct md_socket_vectors vectors;
             frame->io.batch_count=0;
             result=md_socket_vectors_open(&vectors,&view);
@@ -476,9 +477,9 @@ static long receive_owned(struct md_task_receive input, int *accepted, int *reta
     /* Batch timeout errors may follow committed messages. Retain only when no
      * ancillary/name publication can need another buffer during outer cleanup. */
 completed:;
-    int terminal=input.batch ? result<0 && ((struct mmsghdr *)input.messages)->msg_len==UINT_MAX
-        : result<0 || (!((struct msghdr *)input.messages)->msg_controllen
-            && !((struct msghdr *)input.messages)->msg_name);
+    int terminal=input.batch ? result<0 && ((struct md_mmsghdr *)input.messages)->msg_len==UINT_MAX
+        : result<0 || (!((struct md_msghdr *)input.messages)->msg_controllen
+            && !((struct md_msghdr *)input.messages)->msg_name);
     if (retained && terminal) {
         *retained=1; return result;
     }
@@ -486,7 +487,7 @@ completed:;
     return result<0 ? result : released ? released : result;
 }
 long md_socket_ancillary_receive(const struct md_fs *fs, const char *exe, const unsigned long *a,unsigned long prepared) {
-    struct msghdr original;
+    struct md_msghdr original;
     struct md_task_receive_frame *frame=(void *)prepared;
     int captured=frame && frame->prepared;
     long r=0;
@@ -498,10 +499,10 @@ long md_socket_ancillary_receive(const struct md_fs *fs, const char *exe, const 
     size_t capacity=original.msg_control?original.msg_controllen:0;
     size_t size=md_task_receive_capacity(capacity);
     if (!size) return -ENOBUFS;
-    _Alignas(struct cmsghdr) char local[2048]; void *storage=buffer(size,local,sizeof(local));
+    _Alignas(struct md_cmsghdr) char local[2048]; void *storage=buffer(size,local,sizeof(local));
     if (!storage) return -ENOMEM;
     memset(storage,0,size);
-    struct msghdr m=original; m.msg_control=storage; m.msg_controllen=size;
+    struct md_msghdr m=original; m.msg_control=storage; m.msg_controllen=size;
     if (captured) m.msg_iov=frame->vectors;
     struct sockaddr_storage address={0};
     if (original.msg_name) { m.msg_name=&address; m.msg_namelen=sizeof(address); }
@@ -520,16 +521,16 @@ long md_socket_ancillary_batch(const struct md_fs *fs, const unsigned long *a,un
     if (!count || !fs->endpoint[0]) return md_raw(SYS_recvmmsg,a[0],a[1],a[2],a[3],a[4],0);
     if (count > MD_IPC_IO_BATCH) count=MD_IPC_IO_BATCH;
     struct item {
-        struct msghdr original; void *buffer; size_t size;
+        struct md_msghdr original; void *buffer; size_t size;
         struct sockaddr_storage address;
-        _Alignas(struct cmsghdr) char local[256];
+        _Alignas(struct md_cmsghdr) char local[256];
     };
-    size_t size=count*(sizeof(struct item)+sizeof(struct mmsghdr));
-    _Alignas(struct mmsghdr) char local[INLINE_RECEIVE_BATCH*(sizeof(struct item)+sizeof(struct mmsghdr))];
+    size_t size=count*(sizeof(struct item)+sizeof(struct md_mmsghdr));
+    _Alignas(struct md_mmsghdr) char local[INLINE_RECEIVE_BATCH*(sizeof(struct item)+sizeof(struct md_mmsghdr))];
     void *memory=buffer(size,local,sizeof(local));
     if (!memory) return -ENOMEM;
     memset(memory,0,size);
-    struct mmsghdr *messages=memory;
+    struct md_mmsghdr *messages=memory;
     struct item *items=(void *)(messages+count);
     long error=0; unsigned prepared=0;
     int finish_error=memory==local;
@@ -537,11 +538,11 @@ long md_socket_ancillary_batch(const struct md_fs *fs, const unsigned long *a,un
         struct item *item=&items[prepared];
         messages[prepared].msg_len=UINT_MAX;
         error=md_read_memory(&messages[prepared].msg_hdr,
-            (void *)(a[1]+prepared*sizeof(*messages)),sizeof(struct msghdr));
+            (void *)(a[1]+prepared*sizeof(*messages)),sizeof(struct md_msghdr));
         if (error < 0) {
             /* Keep failed input validation inside the native batch, after its
              * successful prefix and before consuming the faulting message. */
-            messages[prepared++].msg_hdr=(struct msghdr){.msg_iov=NULL,.msg_iovlen=1};
+            messages[prepared++].msg_hdr=(struct md_msghdr){.msg_iov=NULL,.msg_iovlen=1};
             break;
         }
         item->original=messages[prepared].msg_hdr;
@@ -574,7 +575,7 @@ long md_socket_ancillary_batch(const struct md_fs *fs, const unsigned long *a,un
         void *destination=(void *)(a[1]+(unsigned long)i*sizeof(*messages));
         struct item *item=&items[i];
         error=publish(fs,(int)a[0],&item->original,messages[i].msg_hdr,destination,(unsigned)a[3]);
-        if (!error) error=md_write_memory((char *)destination+offsetof(struct mmsghdr,msg_len),&messages[i].msg_len,sizeof(unsigned));
+        if (!error) error=md_write_memory((char *)destination+offsetof(struct md_mmsghdr,msg_len),&messages[i].msg_len,sizeof(unsigned));
         if (error < 0) {
             result=i?(long)i:error; break;
         }

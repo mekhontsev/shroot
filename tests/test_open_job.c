@@ -37,7 +37,8 @@ pid_t __wrap_fork(void) {
 }
 static int fds(void) {
     DIR *d=opendir("/proc/self/fd"); assert(d);
-    int n=0; while (readdir(d)) ++n;
+    int n=0;
+    while (readdir(d)) ++n;
     assert(!closedir(d)); return n;
 }
 static long deny_append(void *context,const char *path,int flags) {
@@ -55,6 +56,9 @@ static void terminal_append(void) {
     char path[64]; md_descriptor_path(path,0,(unsigned)pin);
     unsigned attempts=0;
     int fd=md_open_pinned_path(path,O_WRONLY|O_APPEND|O_NOCTTY|O_CLOEXEC,deny_append,&attempts);
+    if (fd<0 || attempts!=2 || !(fcntl(fd,F_GETFL)&O_APPEND) || !(fcntl(fd,F_GETFD)&FD_CLOEXEC))
+        fprintf(stderr,"terminal append fd=%d attempts=%u flags=%#x descriptor=%#x\n",
+            fd,attempts,fd<0 ? 0 : fcntl(fd,F_GETFL),fd<0 ? 0 : fcntl(fd,F_GETFD));
     assert(fd>=0 && attempts==2 && (fcntl(fd,F_GETFL)&O_APPEND) && (fcntl(fd,F_GETFD)&FD_CLOEXEC));
     char byte;
     assert(write(fd,"a",1)==1);
@@ -201,6 +205,9 @@ static void interrupted_open(void) {
 }
 int main(void) {
     setbuf(stdout,NULL); alarm(60);
+    /* A hosting runtime may lazily retain a process-scoped descriptor channel.
+     * Establish it before measuring per-operation descriptor conservation. */
+    initial_readiness();
     int before=fds();
     terminal_append(); assert(fds()==before);
     initial_readiness(); assert(fds()==before);

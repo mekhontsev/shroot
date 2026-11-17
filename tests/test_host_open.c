@@ -15,8 +15,25 @@
 static int unavailable;
 static int native_oracle;
 static int race_directory=-1,race_fd=-1,raced;
+static int temporary_error,entropy_error,entropy_calls,collision;
+static char temporary_name[45];
 long __real_md_raw(long,long,long,long,long,long,long);
 long __wrap_md_raw(long nr,long a,long b,long c,long d,long e,long f) {
+    if (temporary_error && nr==SYS_openat && (c&O_TMPFILE)==O_TMPFILE) return -temporary_error;
+    if (temporary_error && nr==SYS_getrandom) {
+        ++entropy_calls;
+        if (entropy_error) return -entropy_error;
+        if (entropy_calls==1) return -EINTR;
+        if (b>3) b=3;
+    }
+    if (temporary_error && nr==SYS_openat && (c&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) {
+        const char *name=(const char *)b;
+        assert(strlen(name)==44 && !memcmp(name,".shroot-tmp-",12));
+        assert(strspn(name+12,"0123456789abcdef")==32);
+        assert(!temporary_name[0] || strcmp(name,temporary_name));
+        memcpy(temporary_name,name,sizeof(temporary_name));
+        if (collision) { collision=0; return -EEXIST; }
+    }
     long result=unavailable && nr==SYS_openat2 ? -ENOSYS : __real_md_raw(nr,a,b,c,d,e,f);
     if (race_directory>=0 && nr==SYS_openat && a==race_directory && !strcmp((const char *)b,"race"))
         race_fd=result;
@@ -26,6 +43,26 @@ long __wrap_md_raw(long nr,long a,long b,long c,long d,long e,long f) {
         raced=1;
     }
     return result;
+}
+static void temporary(int directory) {
+    const int errors[]={0,EOPNOTSUPP,EINVAL,EISDIR};
+    for (unsigned i=0;i<sizeof(errors)/sizeof(*errors);++i) {
+        temporary_error=errors[i]; entropy_calls=0; collision=!!i;
+        long fd=md_host_temporary(directory,".",0600); assert(fd>=0);
+        struct stat st; assert(!fstat(fd,&st) && S_ISREG(st.st_mode) && !st.st_nlink);
+        assert(fcntl(fd,F_GETFD)&FD_CLOEXEC);
+        assert(write(fd,"data",4)==4);
+        char path[64],data[4]; snprintf(path,sizeof(path),"/proc/self/fd/%ld",fd);
+        int reader=open(path,O_RDONLY|O_CLOEXEC);
+        assert(reader>=0 && read(reader,data,sizeof(data))==4 && !memcmp(data,"data",4));
+        close(reader); close(fd);
+        if (i) assert(entropy_calls>2 && !collision);
+    }
+    temporary_error=EACCES; entropy_calls=0;
+    assert(md_host_temporary(directory,".",0600)==-EACCES && !entropy_calls);
+    temporary_error=EOPNOTSUPP; entropy_error=EIO;
+    assert(md_host_temporary(directory,".",0600)==-EIO);
+    entropy_error=temporary_error=0;
 }
 static void compare(int directory,const char *path,unsigned flags) {
     struct open_how how={.flags=flags|O_CLOEXEC,.resolve=RESOLVE_NO_SYMLINKS};
@@ -67,6 +104,7 @@ int main(void) {
     native_oracle=WIFEXITED(status) && WEXITSTATUS(status)==0;
     char root[]="host-open-XXXXXX"; assert(mkdtemp(root));
     int directory=open(root,O_PATH|O_DIRECTORY|O_CLOEXEC); assert(directory>=0);
+    temporary(directory);
     assert(!mkdirat(directory,"dir",0700));
     int file=openat(directory,"dir/file",O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(file>=0); close(file);
     assert(!symlinkat("dir",directory,"linkdir") && !symlinkat("dir/file",directory,"linkfile"));

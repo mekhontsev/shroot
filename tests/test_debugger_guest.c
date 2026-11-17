@@ -37,8 +37,12 @@
 volatile int magic_value = 42;
 static int stop(pid_t child) {
     int status;
-    struct rusage usage;
-    assert(wait4(child, &status, __WALL, &usage) == child);
+    struct { uint64_t data[18], guard[16]; } usage;
+    memset(&usage,0x5a,sizeof(usage));
+    long waited=syscall(SYS_wait4, child, &status, __WALL, &usage);
+    if (waited!=child) fprintf(stderr,"wait stop child=%d result=%ld errno=%d\n",child,waited,errno);
+    assert(waited==child);
+    for (unsigned i=0;i<16;++i) assert(usage.guard[i]==UINT64_C(0x5a5a5a5a5a5a5a5a));
     assert(WIFSTOPPED(status));
     return status;
 }
@@ -414,12 +418,55 @@ static void pending_peek_test(void) {
         exited(child,0);
     }
 }
+static void syscall_info_test(void) {
+    uid_t uid=getuid();
+    pid_t child=fork(); assert(child>=0);
+    if (!child) {
+        assert(!ptrace(PTRACE_TRACEME,0,0,0));
+        assert(!syscall(SYS_tgkill,getpid(),gettid(),SIGSTOP));
+        uint64_t visible;
+        assert(seccomp_trace_call(SYS_getpid,&visible)==617 && visible==SYS_getppid);
+        _exit(0);
+    }
+    assert(WSTOPSIG(stop(child))==SIGSTOP);
+    assert(!ptrace(PTRACE_SETOPTIONS,child,0,PTRACE_O_TRACESYSGOOD));
+    assert(!ptrace(PTRACE_SYSCALL,child,0,0));
+    assert(WSTOPSIG(stop(child))==(SIGTRAP|0x80));
+    struct ptrace_syscall_info info;
+    assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
+    assert(info.op==PTRACE_SYSCALL_INFO_ENTRY && info.entry.nr==SYS_getpid);
+    struct user_pt_regs regs; struct iovec io={&regs,sizeof(regs)};
+    assert(!ptrace(PTRACE_GETREGSET,child,NT_PRSTATUS,&io));
+    uint64_t original=info.entry.args[0];
+    regs.pc+=4; regs.regs[0]=999; regs.regs[1]=123; regs.regs[8]=SYS_getppid;
+    assert(!ptrace(PTRACE_SETREGSET,child,NT_PRSTATUS,&io));
+    assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
+    fprintf(stderr,"syscall info pc=%#llx/%#llx nr=%llu args=%llu,%llu\n",
+        (unsigned long long)info.instruction_pointer,(unsigned long long)regs.pc,
+        (unsigned long long)info.entry.nr,(unsigned long long)info.entry.args[0],
+        (unsigned long long)info.entry.args[1]);
+    assert(info.instruction_pointer==regs.pc && info.stack_pointer==regs.sp
+        && info.entry.nr==SYS_getpid && info.entry.args[0]==original && info.entry.args[1]==123);
+    int number=SYS_getuid; struct iovec nr={&number,sizeof(number)};
+    assert(!ptrace(PTRACE_SETREGSET,child,NT_ARM_SYSTEM_CALL,&nr));
+    assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0 && info.entry.nr==SYS_getuid);
+    assert(!ptrace(PTRACE_SYSCALL,child,0,0));
+    assert(WSTOPSIG(stop(child))==(SIGTRAP|0x80));
+    assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
+    assert(info.op==PTRACE_SYSCALL_INFO_EXIT && info.exit.rval==uid && !info.exit.is_error);
+    assert(!ptrace(PTRACE_GETREGSET,child,NT_PRSTATUS,&io));
+    regs.regs[0]=617;
+    assert(!ptrace(PTRACE_SETREGSET,child,NT_PRSTATUS,&io));
+    assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0 && info.exit.rval==617);
+    assert(!ptrace(PTRACE_CONT,child,0,0)); exited(child,0);
+}
 static void syscall_emulation_test(void) {
     for (unsigned mode=0;mode<2;++mode) {
         pid_t child=fork(); assert(child>=0);
         if (!child) {
             assert(!ptrace(PTRACE_TRACEME,0,0,0));
-            assert(!raise(SIGSTOP));
+            /* The next entry must be clone, not libc's raise mask restore. */
+            assert(!syscall(SYS_tgkill,getpid(),gettid(),SIGSTOP));
             pid_t next=(pid_t)syscall(SYS_clone,SIGCHLD,0,0,0,0);
             assert(next>=0);
             if (!next) _exit(0);
@@ -795,7 +842,7 @@ static void mixed_test(void) {
     assert(write(release[1], "x", 1) == 1); close(release[1]); exited(traced, 3);
 }
 static void exec_test(void) {
-    for (unsigned events=0;events<2;++events) {
+    for (unsigned events=0;events<2;++events) for (unsigned stepping=0;stepping<2;++stepping) {
         pid_t child=fork(); assert(child>=0);
         if (!child) {
             assert(!ptrace(PTRACE_TRACEME,0,0,0));
@@ -814,6 +861,16 @@ static void exec_test(void) {
         struct iovec io={&regs,sizeof(regs)};
         assert(!ptrace(PTRACE_GETREGSET,child,NT_PRSTATUS,&io));
         assert(regs.pc && regs.sp);
+        if (stepping) {
+            assert(!ptrace(PTRACE_SETOPTIONS,child,0,PTRACE_O_TRACESYSGOOD));
+            assert(!ptrace(PTRACE_SYSCALL,child,0,0));
+            status=stop(child);
+            assert(WSTOPSIG(status)==(SIGTRAP|0x80));
+            struct ptrace_syscall_info info={0};
+            assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
+            assert(info.op==PTRACE_SYSCALL_INFO_EXIT && !info.exit.rval && !info.exit.is_error);
+            assert(info.instruction_pointer==regs.pc && info.stack_pointer==regs.sp);
+        }
         assert(!ptrace(PTRACE_CONT,child,0,0));
         exited(child,0);
     }
@@ -864,11 +921,17 @@ static void syscall_signal_test(void) {
          * This fixture explicitly tests delivery, not the inherited mask. */
         sigset_t set; sigemptyset(&set); sigaddset(&set,SIGUSR1);
         assert(!sigprocmask(SIG_UNBLOCK,&set,NULL));
+        int queue=epoll_create1(EPOLL_CLOEXEC); assert(queue>=0);
         assert(!ptrace(PTRACE_TRACEME,0,0,0)); raise(SIGSTOP);
         for (unsigned i=0;i<32;++i) {
             struct stat st;
             assert(!syscall(SYS_newfstatat,AT_FDCWD,"/dev/null",&st,0));
+            struct timespec bound={.tv_sec=30};
+            assert(syscall(SYS_ppoll,NULL,0,&bound,NULL,8)==-1 && errno==EINTR);
+            struct epoll_event event;
+            assert(syscall(SYS_epoll_pwait,queue,&event,1,-1,NULL,8)==-1 && errno==EINTR);
         }
+        assert(!close(queue));
         _exit(0);
     }
     stop(child);
@@ -882,7 +945,10 @@ static void syscall_signal_test(void) {
         assert(waitpid(child,&status,__WALL)==child);
         if (WIFEXITED(status)) { assert(!WEXITSTATUS(status)); break; }
         assert(WIFSTOPPED(status));
-        if (WSTOPSIG(status)==SIGUSR1) { deliver=SIGUSR1; ++signals; continue; }
+        if (WSTOPSIG(status)==SIGUSR1) {
+            if (active) fprintf(stderr,"signal before syscall exit nr=%llu\n",(unsigned long long)nr);
+            assert(!active); deliver=SIGUSR1; ++signals; continue;
+        }
         assert(WSTOPSIG(status)==(SIGTRAP|0x80));
         struct ptrace_syscall_info info={0};
         assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
@@ -890,17 +956,17 @@ static void syscall_signal_test(void) {
             if (active) fprintf(stderr,"duplicate syscall entry old=%llu new=%llu\n",
                                 (unsigned long long)nr,(unsigned long long)info.entry.nr);
             assert(!active); active=1; nr=info.entry.nr;
-            if (nr==SYS_newfstatat) assert(!kill(child,SIGUSR1));
+            if (nr==SYS_newfstatat || nr==SYS_ppoll || nr==SYS_epoll_pwait) assert(!kill(child,SIGUSR1));
         } else {
             if (!active) fprintf(stderr,"unmatched syscall exit old=%llu value=%lld\n",
                                  (unsigned long long)nr,(long long)info.exit.rval);
             assert(info.op==PTRACE_SYSCALL_INFO_EXIT && active); active=0;
         }
     }
-    if (signals!=32 || !active || nr!=SYS_exit_group)
+    if (signals!=96 || !active || nr!=SYS_exit_group)
         fprintf(stderr,"syscall-signal completion signals=%d active=%d nr=%llu\n",
                 signals,active,(unsigned long long)nr);
-    assert(signals==32 && active && nr==SYS_exit_group);
+    assert(signals==96 && active && nr==SYS_exit_group);
 }
 static volatile sig_atomic_t wait_signal_seen,wait_signal_output=-1;
 static void wait_signal_handler(int signal) {
@@ -977,10 +1043,16 @@ static void owner_test(int exitkill) {
         pid_t child=fork(); assert(child>=0);
         if (!child) {
             assert(!ptrace(PTRACE_TRACEME,0,0,0)); raise(SIGSTOP);
-            assert(write(done[1],"r",1)==1); _exit(0);
+            if (exitkill!=2) assert(write(done[1],"r",1)==1);
+            _exit(0);
         }
         stop(child);
-        if (exitkill) assert(!ptrace(PTRACE_SETOPTIONS,child,0,PTRACE_O_EXITKILL));
+        if (exitkill) assert(!ptrace(PTRACE_SETOPTIONS,child,0,
+            PTRACE_O_EXITKILL|(exitkill==2 ? PTRACE_O_TRACEEXIT : 0)));
+        if (exitkill==2) {
+            assert(!ptrace(PTRACE_CONT,child,0,0));
+            assert((unsigned)stop(child)>>16==PTRACE_EVENT_EXIT);
+        }
         _exit(0);
     }
     close(done[1]); exited(owner,0);
@@ -1359,6 +1431,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "service-gates")) service_gate_test();
     else if (!strcmp(argv[1], "pending-peek")) pending_peek_test();
     else if (!strcmp(argv[1], "syscall-emulation")) syscall_emulation_test();
+    else if (!strcmp(argv[1], "syscall-info")) syscall_info_test();
     else if (!strcmp(argv[1], "seize")) attach_test(1, 0);
     else if (!strcmp(argv[1], "trace-exit")) attach_test(1, 1);
     else if (!strcmp(argv[1], "syscall")) syscall_test();
@@ -1372,6 +1445,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "kill-stopped")) kill_stopped_test();
     else if (!strcmp(argv[1], "owner-exit")) owner_test(0);
     else if (!strcmp(argv[1], "exitkill")) owner_test(1);
+    else if (!strcmp(argv[1], "exitkill-terminal")) owner_test(2);
     else if (!strcmp(argv[1], "thread-exec")) exec_thread_test(0);
     else if (!strcmp(argv[1], "syscall-thread-exec")) exec_thread_test(1);
     else if (!strcmp(argv[1], "clone-untraced")) untraced_clone_test();

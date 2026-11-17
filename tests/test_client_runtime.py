@@ -93,6 +93,11 @@ def main():
         attachment = root / 'attachment'
         attachment.mkdir()
         (attachment / 'token').write_text('read-only')
+        native_tmpfile = json.loads(subprocess.check_output(
+            [str(build / 'client-guest'), 'native-tmpfile', str(attachment)],
+            text=True, timeout=30))
+        assert len(native_tmpfile) == 2 and all(isinstance(value, int) for value in native_tmpfile)
+        print(f'Native attachment O_TMPFILE errno (ordinary/exclusive): {native_tmpfile}', flush=True)
         for entry in ('0', '1'):
             launches = [cli + ['exec', str(instance)],
                         [str(runtime / 'libshroot_guest_run.so'), '--store', str(instance)]]
@@ -105,7 +110,8 @@ def main():
                                    check=True, timeout=30)
                 subprocess.run(launch + ['--bind-create', str(attachment), '/native',
                                         '--env', 'SHROOT_MACHINE_ENTRY=' + entry,
-                                        '--', '/bin/client-guest', 'native-tmpfile', '/native'],
+                                        '--', '/bin/client-guest', 'native-tmpfile', '/native',
+                                        *map(str, native_tmpfile)],
                                check=True, timeout=30)
         parent_lifetime(cli, instance)
         for command in ([*cli, 'exec', str(instance)], [str(runtime / 'libshroot_guest_run.so'), '--store', str(instance)]):

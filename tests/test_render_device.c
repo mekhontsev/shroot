@@ -2,7 +2,7 @@
 #include "render_device.h"
 #include "control_ioctl.h"
 #include <assert.h>
-#include <drm/drm.h>
+#include "../src/drm_abi.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/dma-buf.h>

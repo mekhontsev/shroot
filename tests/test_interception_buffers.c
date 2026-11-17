@@ -25,18 +25,13 @@
 
 static int fail_allocation;
 static unsigned allocations;
-void *__real_calloc(size_t,size_t);
-void *__real_malloc(size_t);
-void *__real_realloc(void *,size_t);
-void *__wrap_calloc(size_t n, size_t size) {
-    ++allocations; return fail_allocation ? NULL : __real_calloc(n,size);
+static int md_test_allocation_requested(void) {
+    ++allocations;
+    if (fail_allocation) errno=ENOMEM;
+    return fail_allocation;
 }
-void *__wrap_malloc(size_t size) {
-    ++allocations; return fail_allocation ? NULL : __real_malloc(size);
-}
-void *__wrap_realloc(void *p, size_t size) {
-    ++allocations; return fail_allocation ? NULL : __real_realloc(p,size);
-}
+#define MD_TEST_WRAP_REALLOC
+#include "test_allocation.h"
 static unsigned descriptors(void) {
     DIR *d=opendir("/proc/self/fd"); assert(d);
     unsigned n=0; struct dirent *e;

@@ -1,7 +1,7 @@
 #define _GNU_SOURCE
 #include "render_device.h"
 #include "control_ioctl.h"
-#include <drm/drm.h>
+#include "drm_abi.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/dma-buf.h>

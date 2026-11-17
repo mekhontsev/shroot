@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "file_open.h"
 #include "interruptible_call.h"
 #include <errno.h>
@@ -141,9 +142,9 @@ static int open_pinned(int fd,int flags,unsigned mode) {
 int md_open_pinned(int fd,int flags) { return open_pinned(fd,flags,0); }
 int md_reopen_file(int fd, int flags, struct md_open_completion *completion) {
     *completion=(struct md_open_completion){0};
-    if (flags & ~(O_PATH|O_CLOEXEC|O_NONBLOCK|O_DIRECTORY|MD_O_LARGEFILE|O_ACCMODE
+    if (flags & ~(O_PATH|O_CLOEXEC|O_NONBLOCK|O_DIRECTORY|MD_O_LARGEFILE|MD_O_ACCMODE
             |O_APPEND|O_TRUNC|O_NOFOLLOW|O_SYNC|O_DSYNC|O_DIRECT|O_NOCTTY|O_NOATIME)) return -EINVAL;
-    if ((flags&O_ACCMODE)==O_ACCMODE || ((flags&O_TRUNC) && !(flags&O_ACCMODE))) return -EINVAL;
+    if ((flags&MD_O_ACCMODE)==MD_O_ACCMODE || ((flags&O_TRUNC) && !(flags&MD_O_ACCMODE))) return -EINVAL;
     if (flags&O_PATH) flags&=O_PATH|O_CLOEXEC|O_DIRECTORY|O_NOFOLLOW;
     struct stat st;
     long error=C(fstat,fd,&st,0,0,0,0);
@@ -205,7 +206,7 @@ int md_complete_open_interruptible(int pin, int flags, struct md_open_completion
     long r = mapping < 0 && mapping >= -4095 ? mapping : 0;
     if (!r) generations = (void *)mapping;
     if (!r) { r = WAIT(flock, control, LOCK_EX, 0, 0, 0); locked = !r; }
-    unsigned mode = flags & O_ACCMODE;
+    unsigned mode = flags & MD_O_ACCMODE;
     unsigned peer = mode == O_RDONLY ? 1 : 0;
     uint32_t before = r ? 0 : __atomic_load_n(&generations[peer], __ATOMIC_ACQUIRE);
     if (!r) {

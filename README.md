@@ -143,6 +143,10 @@ before relying on a particular isolation or device feature.
 Build hosts are Linux and Android/Termux; Windows users can use WSL2 with Linux
 tools. A native runtime build targets ARM64.
 
+Install a C compiler, CMake, Ninja, Git, Linux UAPI headers and DRM headers
+(`linux-libc-dev` and `libdrm-dev` on Debian; `linux-headers` and `libdrm-dev`
+on Alpine). DRM headers describe the wire ABI; the runtime does not link libdrm.
+
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j 4

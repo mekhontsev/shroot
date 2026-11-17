@@ -4,6 +4,7 @@
 #include "inode_native.h"
 #include "inode_publication.h"
 #include "inode_xattr.h"
+#include "host_open.h"
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -17,7 +18,7 @@
 void mdi_leaf_admit(struct md_inode_store *s) {
     s->native_files=0;
     if (s->readonly) return;
-    int fd=openat(s->objects,".",O_TMPFILE|O_RDWR|O_CLOEXEC,0600);
+    int fd=md_inode_temporary(s);
     if (fd<0) return;
     struct stat st;
     int r=mdi_native_metadata(fd,1,1,0,false);
@@ -66,6 +67,12 @@ int mdi_leaf_create(struct md_inode_store *s,const struct mdi_node *parent,const
     int r=birth_attributes(s,parent,name,&uid,&gid,&mode);
     if (r) return r;
     flags&=~(O_CREAT|O_EXCL|O_TRUNC|O_NOFOLLOW|O_NOCTTY);
+    if (flags&O_PATH) {
+        /* mknod publishes a name, not a data open. Exceptional metadata uses
+         * catalogue creation, whose unpublished backing is not watch-visible. */
+        return parent->acl_mask&MD_ACL_DEFAULT ? -EOPNOTSUPP
+            : mdi_native_pin_create_in(s->objects,parent->backing,name,uid,gid,mode);
+    }
     if (!(parent->acl_mask&MD_ACL_DEFAULT) && mdi_native_eligible(uid,gid,mode))
         return mdi_native_create_in(s->objects,parent->backing,name,flags,uid,gid,mode);
     char stage[33],target[NAME_MAX+34];
@@ -77,7 +84,7 @@ int mdi_leaf_create(struct md_inode_store *s,const struct mdi_node *parent,const
     if (fd<0) return fd;
     /* Only unpublished native births move out of the backing root. The watch
      * owner uses this exact kernel move cookie to publish CREATE then OPEN. */
-    if (renameat2(s->objects,stage,s->objects,target,RENAME_NOREPLACE)) r=-errno;
+    r=(int)md_host_rename(s->objects,stage,s->objects,target,RENAME_NOREPLACE);
     if (r) { close(fd); unlinkat(s->objects,stage,0); }
     return r ? r : fd;
 }
@@ -144,7 +151,7 @@ static int catalogue_birth(struct md_inode_birth **owner) {
     if (!r) r=mdi_write(s);
     /* Staging events never acquire a catalogue identity. Only the final move
      * publishes CREATE/OPEN; failure before commit leaves an owned orphan. */
-    if (!r && renameat2(s->objects,birth->stage,s->objects,id,RENAME_NOREPLACE)) r=-errno;
+    if (!r) r=(int)md_host_rename(s->objects,birth->stage,s->objects,id,RENAME_NOREPLACE);
     if (!r) strcpy(birth->stage,id);
     struct mdi_node node;
     if (!r) r=mdi_register_object(s,id,S_IFREG,st.st_mode&07777,st.st_uid,st.st_gid,&st,NULL,&node);
@@ -185,8 +192,8 @@ int md_inode_birth_commit(struct md_inode_birth **owner) {
     int committed=0;
     if (!r) r=leaf_path(target,birth->backing,birth->name);
     if (!r) {
-        if (renameat2(s->objects,birth->stage,s->objects,target,RENAME_NOREPLACE)) r=-errno;
-        else committed=1;
+        r=(int)md_host_rename(s->objects,birth->stage,s->objects,target,RENAME_NOREPLACE);
+        if (!r) committed=1;
     }
     /* Consuming the owner records the accepted rename even if retirement fails.
      * The caller must not replay or discard a committed creation. */

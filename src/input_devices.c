@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/joystick.h>
+#include <asm/ioctl.h>
 #include <linux/magic.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -487,7 +488,7 @@ static void effect_settle(struct effect_request *request,int success) {
 static long effect_resume(struct md_control_pending *base,void *data,size_t size) {
     struct effect_request *request=(void *)base;
     long result=request->backend->resume(request->backend,NULL,0);
-    if (result==-EINPROGRESS) return result;
+    if (result==MD_OPERATION_PENDING) return result;
     struct input_reader *r=request->reader;
     pthread_mutex_lock(&r->bus->lock);
     if (!r->device->connected || r->revoked) result=-ENODEV;
@@ -531,11 +532,11 @@ static long ioctl_async(void *context,const struct md_control_actor *actor,unsig
         else request->next=request->previous;
         d->pending[request->id]=request;
         result=d->backend.effect(d->backend.context,&request->next,&request->previous,request->erase,&request->backend);
-        if (result==-EINPROGRESS && request->backend) {
+        if (result==MD_OPERATION_PENDING && request->backend) {
             request->pending=(struct md_control_pending){.resume=effect_resume,.dispose=effect_dispose,.deadline=request->backend->deadline};
             *out=&request->pending;
         } else {
-            if (result==-EINPROGRESS) result=-EPROTO;
+            if (result==MD_OPERATION_PENDING) result=-EPROTO;
             effect_settle(request,result>=0);
         }
     }

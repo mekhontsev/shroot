@@ -240,7 +240,7 @@ static long receive_resume(struct md_control_pending *pending,void *data,size_t 
     struct md_seccomp_notify *q=r->owner;
     if (!data || size!=sizeof(struct seccomp_notif)) return -EINVAL;
     pthread_mutex_lock(&q->lock);
-    long result=r->message ? -EALREADY : q->closed ? -ENOENT : -EINPROGRESS;
+    long result=r->message ? -EALREADY : q->closed ? -ENOENT : MD_OPERATION_PENDING;
     while (!r->message && !q->closed && q->ready_first) {
         struct md_seccomp_notification *n=q->ready_first;
         int live=valid(n);
@@ -291,7 +291,7 @@ static long addfd_resume(struct md_control_pending *pending,void *data,size_t si
         int error=n->state!=SENT ? -ENOENT : valid(n);
         pthread_mutex_unlock(&q->lock);
         long result=error ? error : md_fd_install_progress(&a->install);
-        if (result==MD_FD_INSTALL_WAIT) return -EINPROGRESS;
+        if (result==MD_FD_INSTALL_WAIT) return MD_OPERATION_PENDING;
         if (result==MD_FD_INSTALL_CANCELLED) result=-ENOENT;
         if (error) md_fd_install_cancel(&a->install);
         a->completed=1; a->result=result;
@@ -308,7 +308,7 @@ static long addfd_resume(struct md_control_pending *pending,void *data,size_t si
     while (a->closing || a->install.closed.first) {
         long result=a->closing ? a->closing->resume(a->closing,NULL,0)
             : md_fd_closed_next(&a->install.closed,&actor,&a->closing);
-        if (result==-EINPROGRESS && a->closing) return result;
+        if (result==MD_OPERATION_PENDING && a->closing) return result;
         if (a->closing) { a->closing->dispose(a->closing); a->closing=NULL; }
     }
     return a->result;

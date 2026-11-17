@@ -64,6 +64,8 @@ int md_provider_tree_control(struct md_provider_tree *,int fd,struct md_control_
 int md_provider_tree_private(struct md_provider_tree *,int fd);
 int md_provider_tree_readonly(struct md_provider_tree *,int fd);
 unsigned long md_provider_tree_filesystem(struct md_provider_tree *);
+/* Zero preserves the selected host submount's own filesystem type. */
+int md_provider_tree_filesystem_at(struct md_provider_tree *,int fd,unsigned long *);
 /* Borrowed owner state, only for the matching typed provider. */
 void *md_provider_tree_context(struct md_provider_tree *,const struct md_provider_tree_ops *);
 #endif

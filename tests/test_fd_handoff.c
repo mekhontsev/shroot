@@ -500,7 +500,7 @@ static void origin_vector_handoff(const char *directory, unsigned count, int tru
         } else {
             assert(!md_fd_receipt_reset(receipt,count));
             if (truncated && !peek) receipt->message.msg_controllen=CMSG_LEN(sizeof(int));
-            assert(recvmsg(sockets[1],&receipt->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT|(peek ? MSG_PEEK : 0))
+            assert(syscall(SYS_recvmsg,sockets[1],&receipt->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT|(peek ? MSG_PEEK : 0))
                 ==(pass==3 ? 0 : 1));
         }
         assert(md_fd_order_state(&next)==MD_RESOURCE_ORDER_QUEUED);
@@ -613,7 +613,7 @@ static void origin_message_publish(const struct md_fd_message *record, int carri
     assert(!md_fd_order_begin(target,&next,NULL));
     assert(!md_fd_receipt_reset(delivery.receipt,count));
     delivery.receipt->message.msg_controllen=CMSG_LEN(delivered*sizeof(int));
-    assert(recvmsg(carrier,&delivery.receipt->message,MSG_DONTWAIT|MSG_PEEK|MSG_CMSG_CLOEXEC)==1);
+    assert(syscall(SYS_recvmsg,carrier,&delivery.receipt->message,MSG_DONTWAIT|MSG_PEEK|MSG_CMSG_CLOEXEC)==1);
     assert(delivery.receipt->byte=='o');
     assert(!!(delivery.receipt->message.msg_flags&MSG_CTRUNC)==(delivered<count));
     assert(md_fd_delivery_publish(&delivery)==(int)delivered);
@@ -977,7 +977,7 @@ static void kernel_parcel(const char *directory, int type, enum parcel_action ac
         for (unsigned pass=0;pass<2;++pass) {
             int fds[MD_FD_RECEIPT_MAX];
             assert(!md_fd_receipt_reset(receipt,capacity));
-            assert(recvmsg(parcel,&receipt->message,MSG_PEEK|MSG_CMSG_CLOEXEC|MSG_DONTWAIT)==1);
+            assert(syscall(SYS_recvmsg,parcel,&receipt->message,MSG_PEEK|MSG_CMSG_CLOEXEC|MSG_DONTWAIT)==1);
             assert(md_fd_receipt_read(receipt,capacity,fds)==(int)capacity);
             assert(!!(receipt->message.msg_flags&MSG_CTRUNC)==(capacity<MD_FD_RECEIPT_MAX));
             for (unsigned i=0;i<capacity;++i) {
@@ -1037,7 +1037,7 @@ static void parcel_fd_pressure(int wrapped, unsigned count, unsigned available) 
         }
         if (!wrapped || transport>=0) {
             assert(!md_fd_receipt_reset(receipt,capacity));
-            assert(recvmsg(wrapped ? transport : route[1],&receipt->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT|MSG_PEEK)==1);
+            assert(syscall(SYS_recvmsg,wrapped ? transport : route[1],&receipt->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT|MSG_PEEK)==1);
             delivered=md_fd_receipt_read(receipt,capacity,received);
             int expected=(int)available-(wrapped ? 1 : 0);
             if (expected>(int)count) expected=(int)count;
@@ -1174,7 +1174,7 @@ static int parcel_relay(const char *directory, unsigned count, unsigned availabl
                     assert(!munmap(stack,stack_size) && md_fd_order_cancel(&turn)==1);
                 } else {
                     assert(!md_fd_receipt_reset(delivery.receipt,count));
-                    assert(recvmsg(relay[0],&delivery.receipt->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT)==1);
+                    assert(syscall(SYS_recvmsg,relay[0],&delivery.receipt->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT)==1);
                 }
                 expected=(int)(available<count ? available : count);
                 assert(md_fd_order_state(&next)==MD_RESOURCE_ORDER_QUEUED);
@@ -1405,7 +1405,7 @@ static int local_parcel_receive(void *opaque) {
     if (f->protected_receiver) assert(!prctl(PR_SET_DUMPABLE,0));
     assert(!md_fd_receipt_reset(r->envelope,1) && !md_fd_receipt_reset(r->payload,f->capacity));
     limit_free_descriptors(f->available);
-    assert(recvmsg(f->socket,&r->envelope->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT|(f->peek ? MSG_PEEK : 0))==1);
+    assert(syscall(SYS_recvmsg,f->socket,&r->envelope->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT|(f->peek ? MSG_PEEK : 0))==1);
     int parcel=-1;
     int count=md_fd_receipt_read(r->envelope,1,&parcel);
     assert(count==(f->available ? 1 : 0));
@@ -1420,7 +1420,7 @@ static int local_parcel_receive(void *opaque) {
     if (f->terminal_stage==1) _exit(0);
     assert(!close(parcel));
     if (f->terminal_stage==2) _exit(0);
-    assert(recvmsg(f->slot,&r->payload->message,MSG_PEEK|MSG_CMSG_CLOEXEC|MSG_DONTWAIT)==1);
+    assert(syscall(SYS_recvmsg,f->slot,&r->payload->message,MSG_PEEK|MSG_CMSG_CLOEXEC|MSG_DONTWAIT)==1);
     /* The owner has both kernel receipts even if no userspace result is sent.
      * It must distinguish the old envelope number from a reused payload slot. */
     _exit(0);
@@ -1593,7 +1593,7 @@ static int mapped_receive(void *opaque) {
         assert(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
     }
     limit_free_descriptors(c->slots);
-    long result=recvmsg(c->endpoint,&c->receipt->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT);
+    long result=syscall(SYS_recvmsg,c->endpoint,&c->receipt->message,MSG_CMSG_CLOEXEC|MSG_DONTWAIT);
     c->result=result<0 ? -errno : result;
     _exit(0);
 }

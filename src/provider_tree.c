@@ -133,6 +133,18 @@ int md_provider_tree_private(struct md_provider_tree *tree,int fd) {
     return error ? error : below(path,root);
 }
 unsigned long md_provider_tree_filesystem(struct md_provider_tree *tree) { return tree->ops ? tree->ops->filesystem : 0; }
+int md_provider_tree_filesystem_at(struct md_provider_tree *tree,int fd,unsigned long *type) {
+    *type=md_provider_tree_filesystem(tree);
+    if (!*type || tree->lower<0) return 0;
+    struct stat selected,root;
+    if (fstat(fd,&selected) || fstat(tree->upper,&root)) return -errno;
+    if (selected.st_dev==root.st_dev) return 0;
+    if (fstat(tree->lower,&root)) return -errno;
+    /* A read-through projection does not own host submounts such as devpts
+     * below /dev. Its private carriers and lower root retain the view type. */
+    if (selected.st_dev!=root.st_dev) *type=0;
+    return 0;
+}
 int md_provider_tree_readonly(struct md_provider_tree *tree,int fd) {
     if (tree->ops && tree->ops->readonly_node) return tree->ops->readonly_node(tree->context,fd);
     return tree->ops && tree->ops->readonly ? 1 : md_provider_tree_private(tree,fd);
@@ -229,7 +241,7 @@ static int directory_open(int root,const char *path,int retained) {
     if (lseek(fd,0,SEEK_SET)<0) { error=errno; close(fd); return -error; }
     return fd;
 }
-static ssize_t getdents(struct md_provider_tree *tree,int fd,void *out,size_t capacity,int host) {
+static ssize_t read_entries(struct md_provider_tree *tree,int fd,void *out,size_t capacity,int host) {
     char path[PATH_MAX]; int error=md_provider_tree_path(tree,fd,path,sizeof(path));
     if (error) return error;
     off_t position=lseek(fd,0,SEEK_CUR); if (position<0) return -errno;
@@ -324,10 +336,10 @@ static ssize_t getdents(struct md_provider_tree *tree,int fd,void *out,size_t ca
     return error ? error : (ssize_t)used;
 }
 ssize_t md_provider_tree_getdents(struct md_provider_tree *tree,int fd,void *out,size_t capacity) {
-    return getdents(tree,fd,out,capacity,0);
+    return read_entries(tree,fd,out,capacity,0);
 }
 ssize_t md_provider_tree_host_getdents(struct md_provider_tree *tree,int fd,void *out,size_t capacity) {
-    return getdents(tree,fd,out,capacity,1);
+    return read_entries(tree,fd,out,capacity,1);
 }
 int md_provider_tree_control(struct md_provider_tree *tree,int fd,struct md_control_file *out) {
     return tree->ops && tree->ops->control && fd>=0 ? tree->ops->control(tree->context,fd,out) : 0;

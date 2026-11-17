@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <linux/fuse.h>
+#include "operation_result.h"
 struct md_resource_wakeup;
 struct md_fuse_connection;
 struct md_fuse_request;

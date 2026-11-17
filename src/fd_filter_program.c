@@ -36,7 +36,37 @@ static void exemptions(const struct md_fd_filter_gates *gates,struct md_fd_filte
         }
     }
 }
-static int finish(const struct md_fd_filter_gates *gates,struct md_fd_filter_program *out) {
+static void compact_all_descriptors(struct md_fd_filter_program *out) {
+    unsigned positions[MD_FD_FILTER_INSTRUCTIONS+1],used=0;
+    unsigned char removed[MD_FD_FILTER_INSTRUCTIONS]={0};
+    /* All-FD selectors need no masked FD comparison. Preserve the generated
+     * branch graph, including WATCH's two argument-loading entry points. */
+    for (unsigned i=0;i+1<out->count;++i) {
+        const struct sock_filter *a=&out->code[i],*b=a+1;
+        if (a->code==(BPF_ALU|BPF_AND|BPF_K) && !a->k
+                && b->code==(BPF_JMP|BPF_JEQ|BPF_K) && !b->k && !b->jt && b->jf==1) {
+            removed[i]=removed[i+1]=1;
+            if (i && out->code[i-1].code==(BPF_LD|BPF_W|BPF_ABS)
+                    && out->code[i-1].k>=offsetof(struct seccomp_data,args)) removed[i-1]=1;
+        }
+    }
+    for (unsigned i=0;i<out->count;++i) { positions[i]=used; used+=!removed[i]; }
+    positions[out->count]=used;
+    for (unsigned i=0;i<out->count;++i) if (!removed[i]) {
+        struct sock_filter code=out->code[i];
+        if (BPF_CLASS(code.code)==BPF_JMP) {
+            if (BPF_OP(code.code)==BPF_JA) code.k=positions[i+1+code.k]-positions[i]-1;
+            else {
+                code.jt=positions[i+1+code.jt]-positions[i]-1;
+                code.jf=positions[i+1+code.jf]-positions[i]-1;
+            }
+        }
+        out->code[positions[i]]=code;
+    }
+    out->count=used;
+}
+static int finish(const struct md_fd_filter_gates *gates,struct md_fd_filter_program *out,int all) {
+    if (all) compact_all_descriptors(out);
     unsigned count=out->count,actions[3],targets[3],used=0;
     /* Resolve policy first. Unrelated syscall numbers return ALLOW without an
      * IP/argument load, preserving the kernel's seccomp allow cache. Only the
@@ -85,7 +115,7 @@ int md_fd_filter_build(enum md_fd_selector_kind kind,int fd,
     struct sock_filter code[]={__VA_ARGS__}; \
     _Static_assert(1+3*MD_FD_FILTER_EXEMPTIONS+sizeof(code)/sizeof(*code)<=MD_FD_FILTER_INSTRUCTIONS,"FD filter capacity"); \
     for (unsigned i=0;i<sizeof(code)/sizeof(*code);++i) out->code[out->count++]=code[i]; \
-    return finish(gates,out); \
+    return finish(gates,out,fd==-1); \
 } while (0)
     if (kind==MD_FD_SELECTOR_WATCH) COPY_PROGRAM(
         /* Other ioctls have no watch semantics; provider filters own theirs. */

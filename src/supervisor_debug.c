@@ -427,20 +427,37 @@ int debugger_at_boundary(const struct thread *t) {
         && t->seccomp.trace.stage!=GUEST_TRACE_ADMISSION;
 }
 
-int debugger_boundary(struct thread *t) {
-    /* A skipped TRACE call still owns its kernel exit. Publish a pending
-     * interrupt only after that exit, not halfway through the continuation. */
-    if (t->seccomp.trace.stage==GUEST_TRACE_DRAIN) return 0;
+int debugger_context_ready(struct thread *t) {
     struct md_svc_registry *machine=md_memory_svc(t->memory);
     if (machine && md_debugger_traced(debugger,t->pid)) {
         /* An interrupt can land inside a resident entry, outside the syscall
          * adapter. Retire that frame before exposing registers to the debugger;
          * a running payload finishes through its existing return checkpoint. */
-        if (!svc_entry_observe(t)) return 1;
+        if (!svc_entry_observe(t)) return 0;
         int deferred=md_svc_machine_flush(native_trace,machine,&t->machine,t->pid);
-        if (deferred==-ESRCH) { t->resume_lost=1; return 1; }
+        if (deferred==-ESRCH) { t->resume_lost=1; return 0; }
         CHECK(deferred>=0);
         if (deferred) { t->machine.draining=1; return 0; }
+    }
+    return 1;
+}
+
+int debugger_boundary(struct thread *t) {
+    /* A skipped TRACE call still owns its kernel exit. Publish a pending
+     * interrupt only after that exit, not halfway through the continuation. */
+    if (t->seccomp.trace.stage==GUEST_TRACE_DRAIN || !debugger_context_ready(t)) return 0;
+    if (md_debugger_stop_pending(debugger,t->pid)) {
+        struct ptrace_syscall_info info={0};
+        if (!tracee_request(t,PTRACE_GET_SYSCALL_INFO,(void *)sizeof(info),&info,
+                "debugger-interrupt-boundary")) return 0;
+        if (info.op!=PTRACE_SYSCALL_INFO_NONE) {
+            /* ARM64 hides application x7 while reporting a syscall stop.
+             * An interrupt must leave that kernel boundary before publishing
+             * ordinary registers, including after a skipped SYSEMU entry. */
+            if (!t->interrupt_pending)
+                tracee_request(t,PTRACE_INTERRUPT,NULL,NULL,"debugger-interrupt-commit");
+            return 0;
+        }
     }
     return md_debugger_boundary(debugger,t->pid);
 }

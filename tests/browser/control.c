@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "../kernel_clone.h"
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>
@@ -90,7 +91,7 @@ static void broker_files(void) {
     int tid = 1;
     /* Same thread group, but private FD table and cwd. A leader pidfd cannot
      * stand in for the notification's exact task identity. */
-    assert(clone(broker_private_files, (char *)stack + stack_size,
+    assert(md_test_clone(broker_private_files, (char *)stack + stack_size,
         CLONE_VM | CLONE_SIGHAND | CLONE_THREAD | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID,
         &context, NULL, NULL, &tid) > 0);
     /* EVENT_WAIT: kernel clears/wakes child TID after thread exit; runner bounds failure. */

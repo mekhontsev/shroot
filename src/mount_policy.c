@@ -24,7 +24,7 @@ int md_mount_native_policy(int fd, unsigned *flags) {
         | ((info.f_flag&ST_NOSUID) ? MD_MOUNT_NOSUID : 0)
         | ((info.f_flag&ST_NODEV) ? MD_MOUNT_NODEV : 0)
         | ((info.f_flag&ST_NOEXEC) ? MD_MOUNT_NOEXEC : 0)
-        | ((info.f_flag&ST_NOSYMFOLLOW) ? MD_MOUNT_NOSYMFOLLOW : 0);
+        | ((info.f_flag&MD_ST_NOSYMFOLLOW) ? MD_MOUNT_NOSYMFOLLOW : 0);
     return 0;
 }
 

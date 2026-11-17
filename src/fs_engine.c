@@ -238,7 +238,7 @@ uint64_t md_fs_statfs_policy(unsigned policy) {
     return ((policy&MD_MOUNT_READONLY) ? MS_RDONLY : 0)
         | ((policy&MD_MOUNT_NOSUID) ? MS_NOSUID : 0) | ((policy&MD_MOUNT_NODEV) ? MS_NODEV : 0)
         | ((policy&MD_MOUNT_NOEXEC) ? MS_NOEXEC : 0)
-        | ((policy&MD_MOUNT_NOSYMFOLLOW) ? ST_NOSYMFOLLOW : 0);
+        | ((policy&MD_MOUNT_NOSYMFOLLOW) ? MD_ST_NOSYMFOLLOW : 0);
 }
 void md_fs_statfs_result(int fd, unsigned policy, const struct md_inode_lifetime *storage,
         struct md_fs_result *out, const struct md_fs_output *output) {
@@ -636,7 +636,7 @@ static void inode_execute(struct md_filesystem *fs,
             if (r>0) r=md_procfs_open_access(fs,path,&st,q->flags);
             if (r<0) break;
             r=md_reopen_file(first,(int)q->flags,&out->open_completion);
-            if ((r==-EACCES || r==-EPERM) && !(q->flags&(O_ACCMODE|O_PATH|O_TRUNC|O_DIRECTORY
+            if ((r==-EACCES || r==-EPERM) && !(q->flags&(MD_O_ACCMODE|O_PATH|O_TRUNC|O_DIRECTORY
                     |O_DIRECT|O_ASYNC|O_NOFOLLOW|O_CREAT|O_EXCL))) {
                 struct md_control_file file=md_readonly_file_new(first);
                 if (file.ops) {

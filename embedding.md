@@ -227,7 +227,9 @@ does not authorize changes to storage.
 
 Use the borrowed `shroot_job_fd()` with `poll`/`epoll`, then call
 `shroot_job_wait(job, 1, &result)`. A blocking wait is available with zero as the
-second argument. Drain output pipes while waiting: an output pipe's capacity
+second argument. A ptracer can delay parent reaping after pidfd readiness;
+the nonblocking wait still returns `-EAGAIN` until the status is available.
+Drain output pipes while waiting: an output pipe's capacity
 is not an output-storage service.
 
 `shroot_result` separates an operation's negative errno from a process exit code

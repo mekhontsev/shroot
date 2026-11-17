@@ -933,7 +933,7 @@ void close_progress(struct thread *t) {
     while (t->close.pending || t->close.closed.first) {
         long result=t->close.pending ? t->close.pending->resume(t->close.pending,NULL,0)
             : md_fd_closed_next(&t->close.closed,&actor,&t->close.pending);
-        if (result==-EINPROGRESS) { retry_wait(t,RETRY_CLOSE); return; }
+        if (result==MD_OPERATION_PENDING) { retry_wait(t,RETRY_CLOSE); return; }
         if (t->close.pending) { t->close.pending->dispose(t->close.pending); t->close.pending=NULL; }
         if (result<0 && t->close.errors && !t->close.result) t->close.result=result;
     }
@@ -1149,11 +1149,11 @@ void descriptors_buffer_control(struct thread *t,const struct supervisor_control
         result=file.ops->mapping(file.context,&actor,(unsigned)t->execution.request.args[2],
             (unsigned)t->execution.request.args[3],&t->control.pending);
         if (t->control.pending) {
-            if (result==-EINPROGRESS) {
+            if (result==MD_OPERATION_PENDING) {
                 t->control.size=0; retry_wait(t,RETRY_CONTROL); control_park(t); return;
             }
             t->control.pending->dispose(t->control.pending); t->control.pending=NULL;
-        } else if (result==-EINPROGRESS) result=-EPROTO;
+        } else if (result==MD_OPERATION_PENDING) result=-EPROTO;
         control_reply(t,result); return;
     }
     case MD_BUFFER_CONTROL_CAPTURE:
@@ -1198,17 +1198,17 @@ void descriptors_buffer_control(struct thread *t,const struct supervisor_control
             ? file.ops->ioctl_async(file.context,&actor,command,t->execution.request.args[2],span.data,(size_t)size,&t->control.pending)
             : file.ops->ioctl(file.context,&actor,command,t->execution.request.args[2],span.data,(size_t)size);
         SUPERVISOR_TRACE("PROBE control-ioctl pid=%d command=%x result=%ld pending=%d\n",t->pid,command,result,t->control.pending!=NULL);
-        if ((result>=0 || result==-EINPROGRESS)
+        if ((result>=0 || (result==MD_OPERATION_PENDING && t->control.pending))
                 && !!(spec.direction&MD_CONTROL_ACK)!=!!(t->control.pending && t->control.pending->copied))
             result=-EPROTO;
         if (t->control.pending) {
-            if (result==-EINPROGRESS) {
+            if (result==MD_OPERATION_PENDING) {
                 /* EVENT_WAIT: device-provider completion or request deadline;
                  * no file-table/OFD turn is held across a userspace reply. */
                 t->control.size=(size_t)size; retry_wait(t,RETRY_CONTROL); control_park(t); return;
             }
             control_pending_complete(t,result);
-        } else if (result==-EINPROGRESS) result=-EPROTO;
+        } else if (result==MD_OPERATION_PENDING) result=-EPROTO;
         break;
     }
     }
@@ -1323,6 +1323,16 @@ static void pidfd_begin(struct thread *t) {
         pidfd_result(t,identity,md_pid_identity_native(identity),0); md_fd_object_release(object); return;
     }
     md_fd_object_release(object);
+    int number=(int)t->execution.request.args[0];
+    struct md_received_fds *captured=NULL;
+    int ready=md_fd_capture_native(t->pid,&t->descriptor_process,&number,1,&captured);
+    if (ready) {
+        pid_t native=0;
+        int error=ready<0 ? ready : md_pid_descriptor_read(captured->fds[0],&native);
+        pidfd_result(t,NULL,native,error);
+        md_received_fds_release(captured);
+        return;
+    }
     pidfd_capture_step(t,MD_BUFFER_PIDFD_READY,0);
 }
 

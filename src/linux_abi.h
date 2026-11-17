@@ -2,6 +2,10 @@
 #define MD_LINUX_ABI_H
 #include <stdint.h>
 #include <sys/syscall.h>
+/* Linux 5.14 call missing from older libc syscall-name tables. */
+#ifndef SYS_quotactl_fd
+#define SYS_quotactl_fd 443
+#endif
 /* Linux 6.8 mount queries need a guest namespace provider, not host passthrough. */
 #ifndef SYS_statmount
 #define SYS_statmount 457
@@ -29,8 +33,14 @@ struct md_xattr_args { uint64_t value; uint32_t size, flags; };
 // libc headers and faccessat wrappers differ in AT_EACCESS support. The guest
 // and our raw faccessat2 calls use the Linux ABI, independent of the build libc.
 #define MD_AT_EACCESS 0x200
+/* musl's POSIX O_ACCMODE also includes O_SEARCH/O_PATH, unlike Linux flags. */
+#define MD_O_ACCMODE 03
 /* AArch64 kernel bit: 64-bit glibc exposes O_LARGEFILE as zero instead. */
 #define MD_O_LARGEFILE 0400000
+/* O_TMPFILE includes O_DIRECTORY; libc's private __O_TMPFILE is not portable. */
+#define MD_O_TMPFILE_BIT 020000000
+/* Linux statfs/statvfs flag, absent from some libc headers. */
+#define MD_ST_NOSYMFOLLOW 0x2000
 // pidfd_open's thread flag is absent from older NDK kernel headers.
 #define MD_PIDFD_THREAD 0x80
 /* Linux 6.11 pidfs namespace queries; implemented against guest namespaces. */

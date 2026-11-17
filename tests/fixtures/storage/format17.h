@@ -129,6 +129,15 @@ static const char format17_revision4[] =
         "FROM names n JOIN objects o ON n.object=o.object WHERE o.kind!=16384;"
     "UPDATE properties SET value=4 WHERE key='schema-revision';";
 
+static const char format17_revision5[] =
+    "UPDATE properties SET value=5 WHERE key='schema-revision';";
+
+static const char format17_revision6[] =
+    "CREATE TABLE detached_xattrs(identity TEXT NOT NULL CHECK(length(identity)=32),"
+        "name TEXT NOT NULL CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 255),"
+        "value BLOB CHECK(length(value)<=65536),PRIMARY KEY(identity,name)) STRICT;"
+    "UPDATE properties SET value=6 WHERE key='schema-revision';";
+
 /* SLF2, uid=42, gid=43, mode=06750, empty ACL/capability payloads. */
 static const unsigned char format17_native_metadata[] = {
     0x53,0x4c,0x46,0x32, 42,0,0,0, 43,0,0,0, 0xe8,0x0d,0,0, 0,0,0,0, 0,0,0,0

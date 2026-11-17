@@ -10,13 +10,13 @@
 int md_fs_continuation_pending(struct md_fs_continuation *previous,
         struct md_fs_continuation **next,struct md_fs_result *result) {
     if (previous && previous!=*next) previous->destroy(previous);
-    if (*next && result->error==-EINPROGRESS && result->fd<0
+    if (*next && result->error==MD_OPERATION_PENDING && result->fd<0
             && !result->open_completion.kind && !result->size && !result->host_path)
         return 1;
     if (*next) {
         (*next)->destroy(*next); *next=NULL;
         result->error=-EPROTO;
-    } else if (result->error==-EINPROGRESS) result->error=-EPROTO;
+    } else if (result->error==MD_OPERATION_PENDING) result->error=-EPROTO;
     return 0;
 }
 

@@ -5,6 +5,7 @@
 #include "network_flow.h"
 #include "network_forward.h"
 #include "network_stack.h"
+#include "socket_abi.h"
 #include <errno.h>
 #include <linux/if_ether.h>
 #include <linux/if.h>
@@ -175,22 +176,22 @@ static int send_options(const struct md_network_send *to,struct send_options *ou
     *out=(struct send_options){.hops=-1,.traffic_class=-1};
     if (!to) return 0;
     if (to->control_size>sizeof(to->control)) return -EMSGSIZE;
-    for (size_t at=0;to->control_size-at>=sizeof(struct cmsghdr);) {
-        const struct cmsghdr *c=(const void *)(to->control+at);
-        if (c->cmsg_len<CMSG_LEN(0) || c->cmsg_len>to->control_size-at) return -EINVAL;
+    for (size_t at=0;to->control_size-at>=sizeof(struct md_cmsghdr);) {
+        const struct md_cmsghdr *c=(const void *)(to->control+at);
+        if (c->cmsg_len<MD_CMSG_LEN(0) || c->cmsg_len>to->control_size-at) return -EINVAL;
         if (c->cmsg_level!=IPPROTO_IPV6) return -EOPNOTSUPP;
         if (c->cmsg_type==IPV6_PKTINFO) {
-            if (c->cmsg_len!=CMSG_LEN(sizeof(out->info))) return -EINVAL;
-            memcpy(&out->info,CMSG_DATA(c),sizeof(out->info));
+            if (c->cmsg_len!=MD_CMSG_LEN(sizeof(out->info))) return -EINVAL;
+            memcpy(&out->info,MD_CMSG_DATA(c),sizeof(out->info));
         } else if (c->cmsg_type==IPV6_HOPLIMIT || c->cmsg_type==IPV6_TCLASS) {
             int value;
-            if (c->cmsg_len!=CMSG_LEN(sizeof(value))) return -EINVAL;
-            memcpy(&value,CMSG_DATA(c),sizeof(value));
+            if (c->cmsg_len!=MD_CMSG_LEN(sizeof(value))) return -EINVAL;
+            memcpy(&value,MD_CMSG_DATA(c),sizeof(value));
             if (value< -1 || value>255) return -EINVAL;
             if (c->cmsg_type==IPV6_HOPLIMIT) out->hops=value;
             else out->traffic_class=value;
         } else return -EOPNOTSUPP;
-        size_t step=CMSG_ALIGN(c->cmsg_len);
+        size_t step=MD_CMSG_ALIGN(c->cmsg_len);
         if (step>to->control_size-at) break;
         at+=step;
     }

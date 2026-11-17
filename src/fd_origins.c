@@ -2,6 +2,7 @@
 #include "fd_channel.h"
 #include "fd_selector.h"
 #include "descriptor_inode.h"
+#include "operation_result.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -110,6 +111,7 @@ long md_fd_closed_next(struct md_fd_closed *closed,const struct md_control_actor
     if (!entry) return 0;
     closed->first=entry->next; entry->next=NULL;
     long result=entry->object->type->close(entry->object,actor,pending);
+    if (result==MD_OPERATION_PENDING && !*pending) result=-EPROTO;
     dispose(entry); return result;
 }
 struct md_fd_origins *md_fd_origins_new(void) {

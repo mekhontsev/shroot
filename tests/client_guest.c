@@ -42,10 +42,21 @@ int main(int argc, char **argv) {
         puts("PASS guest: created readonly attachment, contents and write denial");
         return 0;
     }
-    if (argc == 3 && !strcmp(argv[1], "native-tmpfile")) {
+    if ((argc == 3 || argc == 5) && !strcmp(argv[1], "native-tmpfile")) {
         mode_t mask = umask(0077);
+        int errors[2] = {0};
         for (unsigned exclusive = 0; exclusive < 2; ++exclusive) {
             int fd = open(argv[2], O_TMPFILE | O_RDWR | O_CLOEXEC | (exclusive ? O_EXCL : 0), 0666);
+            errors[exclusive] = fd < 0 ? errno : 0;
+            if (argc == 5 && errors[exclusive] != atoi(argv[3 + exclusive])) {
+                fprintf(stderr, "temporary file exclusive=%u expected errno=%s actual=%d\n",
+                        exclusive, argv[3 + exclusive], errors[exclusive]);
+                if (fd >= 0) close(fd);
+                return 34;
+            }
+            /* Bind attachments retain their source filesystem capabilities.
+             * Record unsupported O_TMPFILE, not unrelated IO/permission errors. */
+            if (fd < 0 && (errno == EOPNOTSUPP || errno == EINVAL || errno == EISDIR)) continue;
             struct stat st;
             if (fd < 0 || fstat(fd, &st)) { perror("guest native tmpfile"); return 34; }
             if (!S_ISREG(st.st_mode) || (st.st_mode & 0777) != 0600 || st.st_nlink
@@ -55,7 +66,7 @@ int main(int argc, char **argv) {
                     || close(fd)) return 36;
         }
         umask(mask);
-        puts("PASS guest: native temporary files, creation mode, umask and anonymous lifetime");
+        printf("[%d,%d]\n", errors[0], errors[1]);
         return 0;
     }
     if (argc == 2 && !strcmp(argv[1], "limits")) {
@@ -66,7 +77,10 @@ int main(int argc, char **argv) {
         int descriptors[256];
         for (unsigned i = 0; i < sizeof(descriptors)/sizeof(*descriptors); ++i) {
             descriptors[i] = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
-            if (descriptors[i] < 0) { perror("guest netlink budget"); return 22; }
+            if (descriptors[i] < 0) {
+                fprintf(stderr,"guest netlink budget index=%u errno=%d\n",i,errno);
+                perror("guest netlink budget"); return 22;
+            }
         }
         for (unsigned i = 0; i < sizeof(descriptors)/sizeof(*descriptors); ++i)
             if (close(descriptors[i])) return 23;

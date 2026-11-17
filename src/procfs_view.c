@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "file_permissions.h"
 #include "procfs_view.h"
 #include "fs_mount_internal.h"
@@ -378,7 +379,7 @@ int md_procfs_noatime(struct md_filesystem *fs,int fd,const char *path) {
 }
 int md_procfs_open_access(struct md_filesystem *fs,const char *path,const struct stat *st,unsigned flags) {
     if (flags&O_PATH) return 0;
-    unsigned mode=(flags&O_ACCMODE)==O_RDWR ? R_OK|W_OK : (flags&O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
+    unsigned mode=(flags&MD_O_ACCMODE)==O_RDWR ? R_OK|W_OK : (flags&MD_O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
     if (flags&O_TRUNC) mode|=W_OK;
     int error=md_procfs_task_access(fs,path,st,mode,1);
     return error ? error : md_procfs_content_access(fs,path);
@@ -698,7 +699,7 @@ int md_procfs_step(struct md_filesystem *fs,struct md_mount_namespace *view,stru
         lookup->base=(struct md_provider_lookup){.task_input=&lookup->input,
             .metadata=&lookup->input.metadata,
             .ready=proc_lookup_ready,.complete=proc_lookup_complete,.destroy=proc_lookup_destroy};
-        *pending=&lookup->base; return -EINPROGRESS;
+        *pending=&lookup->base; return MD_OPERATION_PENDING;
     }
     return next;
 }

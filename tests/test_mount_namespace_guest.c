@@ -4,7 +4,8 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
-#include <linux/stat.h>
+#include <linux/fs.h>
+#include "../src/statx_abi.h"
 #include <sched.h>
 #include <signal.h>
 #include <stdint.h>
@@ -18,13 +19,13 @@
 #include <unistd.h>
 
 static uint64_t id(int fd, const char *path) {
-    struct statx st={0};
+    struct md_statx st={0};
     assert(!syscall(SYS_statx,fd,path,*path ? 0 : AT_EMPTY_PATH,STATX_MNT_ID,&st));
     assert(st.stx_mask&STATX_MNT_ID); assert(st.stx_mnt_id);
     return st.stx_mnt_id;
 }
 static void fdinfo_matches(int fd) {
-    struct statx st={0};
+    struct md_statx st={0};
     assert(!syscall(SYS_statx,fd,"",AT_EMPTY_PATH,STATX_MNT_ID|STATX_INO,&st));
     char name[64],line[256];
     snprintf(name,sizeof(name),"/proc/self/fdinfo/%d",fd);

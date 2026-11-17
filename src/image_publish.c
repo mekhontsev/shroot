@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "image_publish.h"
 #include "image_maintenance.h"
 #include "storage_paths.h"
@@ -127,7 +128,8 @@ int md_image_publish_commit(struct md_image_publish *p) {
         if (r) return r;
     } else if (directory && errno!=ENOENT) return -errno;
     if (fsync(p->stage)) return -errno;
-    if (syscall(SYS_renameat2, p->stage, "store", p->parent, p->name, RENAME_NOREPLACE)) return -errno;
+    int r=(int)md_host_rename(p->stage,"store",p->parent,p->name,RENAME_NOREPLACE);
+    if (r) return r;
     /* A post-rename sync error is an uncertain durable outcome, not permission
      * to remove or repeat publication. The destination stays for inspection. */
     return fsync(p->parent) ? -errno : 0;

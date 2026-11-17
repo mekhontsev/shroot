@@ -9,7 +9,7 @@ enum { MD_ELF_PHDR_LIMIT=128 };
 struct md_elf_layout {
     Elf64_Ehdr header;
     Elf64_Phdr segments[MD_ELF_PHDR_LIMIT];
-    uintptr_t low,high;
+    uintptr_t low,high,alignment;
 };
 int md_elf_layout_read(int fd,int loader,struct md_elf_layout *);
 int md_elf_interpreter(int fd, char interpreter[MD_INTERPRETER_MAX]);

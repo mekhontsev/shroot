@@ -14,7 +14,7 @@
 #include "filesystem_ioctl.h"
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/stat.h>
+#include "statx_abi.h"
 #include <sys/stat.h>
 #include <sys/inotify.h>
 #include <sys/sysmacros.h>
@@ -451,7 +451,7 @@ __attribute__((noinline)) static long path_metadata(const struct md_fs *fs, long
             md_fs_info_stat(&out.result.info, &st);
             return md_write_memory((void *)a[2], &st, sizeof(st));
         }
-        struct statx st;
+        struct md_statx st;
         md_fs_info_statx(&out.result.info,&st);
         return md_write_memory((void *)a[4], &st, sizeof(st));
     }

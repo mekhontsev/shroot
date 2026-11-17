@@ -44,7 +44,7 @@ static long readable(int input) {
     long flags=RAW2(fcntl,input,F_GETFL);
     if (flags<0) return flags;
     /* Do not reopen readable sealed memfds through proc: Android may deny it. */
-    if (!(flags&O_PATH) && (flags&O_ACCMODE)!=O_WRONLY)
+    if (!(flags&O_PATH) && (flags&MD_O_ACCMODE)!=O_WRONLY)
         return RAW3(fcntl,input,F_DUPFD_CLOEXEC,0);
     char path[64]="/proc/thread-self/fd/";
     md_decimal(path+md_length(path),(unsigned)input);

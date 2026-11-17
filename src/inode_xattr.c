@@ -27,10 +27,30 @@ static void native_control(int key,char name[32]) {
     snprintf(name,32,"user.shroot.overlay.%d",key);
 }
 int mdi_xattr_virtual(const char *name) {
-    return mdi_overlay_attribute(name) || !strncmp(name,"trusted.",8);
+    return mdi_overlay_attribute(name) || !strncmp(name,"trusted.",8)
+        || mdi_native_private_attribute(name);
+}
+static int detached_key(struct md_inode_store *s,const struct mdi_node *node,char key[33],int create) {
+    if (!node->native || node->attached || !node->descriptor) return -ENODATA;
+    char path[NAME_MAX+96];
+    int error=mdi_backing_path(s,node,path,sizeof(path));
+    if (error) return error;
+    const char *attribute="user.shroot.detached-xattrs";
+    ssize_t size=getxattr(path,attribute,key,32);
+    if (size<0 && errno==ENODATA && create) {
+        error=mdi_random_id(key);
+        if (error) return error;
+        if (!setxattr(path,attribute,key,32,XATTR_CREATE)) return 0;
+        if (errno!=EEXIST) return -errno;
+        size=getxattr(path,attribute,key,32);
+    }
+    if (size<0) return -errno;
+    key[32]=0;
+    return size==32 && strspn(key,"0123456789abcdef")==32 ? 0 : -EIO;
 }
 static ssize_t virtual_get(struct md_inode_store *s,const struct mdi_node *node,const char *attribute,void *out,size_t capacity) {
-    if (node->native) {
+    char identity[33];
+    if (node->native && mdi_overlay_attribute(attribute)) {
         int key=mdi_overlay_attribute(attribute);
         if (!key) return -ENODATA;
         char name[32],path[NAME_MAX+96]; native_control(key,name);
@@ -39,9 +59,12 @@ static ssize_t virtual_get(struct md_inode_store *s,const struct mdi_node *node,
         ssize_t n=node->descriptor ? getxattr(path,name,out,capacity) : lgetxattr(path,name,out,capacity);
         return n<0 ? -errno : n;
     }
+    int r=node->native ? detached_key(s,node,identity,0) : 0;
     sqlite3_stmt *q=NULL;
-    int r=mdi_prepare(s,"SELECT value FROM inode_xattrs WHERE object=?1 AND name=?2",&q);
-    if (!r) r=mdi_bind_id(q,1,node->id);
+    if (!r) r=mdi_prepare(s,node->native
+        ? "SELECT value FROM detached_xattrs WHERE identity=?1 AND name=?2"
+        : "SELECT value FROM inode_xattrs WHERE object=?1 AND name=?2",&q);
+    if (!r) r=mdi_bind_id(q,1,node->native ? identity : node->id);
     if (!r) r=mdi_sql_error(sqlite3_bind_text(q,2,attribute,-1,SQLITE_STATIC));
     ssize_t size=0;
     if (!r) {
@@ -61,8 +84,7 @@ int mdi_xattr_virtual_set(struct md_inode_store *s,const struct mdi_node *node,
         const char *name,const void *value,size_t size) {
     int key=mdi_overlay_attribute(name);
     if (!mdi_xattr_virtual(name) || strlen(name)>255 || size>MD_FS_VALUE_MAX || (!value && size)) return -EINVAL;
-    if (node->native) {
-        if (!key) return -EINVAL;
+    if (node->native && key) {
         char attribute[32],path[NAME_MAX+96]; native_control(key,attribute);
         int r=mdi_backing_path(s,node,path,sizeof(path));
         if (r) return r;
@@ -70,10 +92,15 @@ int mdi_xattr_virtual_set(struct md_inode_store *s,const struct mdi_node *node,
             : (value ? lsetxattr(path,attribute,value,size,0) : lremovexattr(path,attribute));
         return r ? -errno : 0;
     }
+    char identity[33];
+    int r=node->native ? detached_key(s,node,identity,1) : 0;
     sqlite3_stmt *q=NULL;
-    int r=mdi_prepare(s,"INSERT INTO inode_xattrs(object,name,value) VALUES(?1,?2,?3) "
-        "ON CONFLICT(object,name) DO UPDATE SET value=excluded.value",&q);
-    if (!r) r=mdi_bind_id(q,1,node->id);
+    if (!r) r=mdi_prepare(s,node->native
+        ? "INSERT INTO detached_xattrs(identity,name,value) VALUES(?1,?2,?3) "
+            "ON CONFLICT(identity,name) DO UPDATE SET value=excluded.value"
+        : "INSERT INTO inode_xattrs(object,name,value) VALUES(?1,?2,?3) "
+            "ON CONFLICT(object,name) DO UPDATE SET value=excluded.value",&q);
+    if (!r) r=mdi_bind_id(q,1,node->native ? identity : node->id);
     if (!r) r=mdi_sql_error(sqlite3_bind_text(q,2,name,-1,SQLITE_STATIC));
     if (!r && value) r=mdi_sql_error(sqlite3_bind_blob(q,3,value,(int)size,SQLITE_STATIC));
     if (!r) r=mdi_sql_error(mdi_step(s,q));
@@ -106,13 +133,14 @@ ssize_t mdi_xattr_native_names(const char *path,int follow,char **out) {
 }
 ssize_t mdi_xattr_get(struct md_inode_store *s,const struct mdi_node *node,
         const char *name,void *out,size_t capacity) {
-    /* Android labels protect the physical backing, not the guest inode. */
-    if (mdi_xattr_host_private(name)) return -ENODATA;
+    /* Physical labels/markers never become guest values. A same-named guest
+     * attribute has independent catalogue custody, including across nesting. */
     if (mdi_xattr_virtual(name)) {
         ssize_t r=virtual_get(s,node,name,out,capacity);
         if (r!=-ENOENT) return r;
         if (!mdi_overlay_attribute(name)) return -ENODATA;
     }
+    if (mdi_xattr_host_private(name)) return -ENODATA;
     char target[NAME_MAX+96]; int r=mdi_backing_path(s,node,target,sizeof(target));
     if (r) return r;
     ssize_t size=node->descriptor ? getxattr(target,name,out,capacity) : lgetxattr(target,name,out,capacity);
@@ -154,7 +182,7 @@ int mdi_xattr_virtual_copy(struct md_inode_store *target,const struct mdi_node *
     sqlite3_finalize(q); return r;
 }
 static int visible(struct md_inode_store *s,const char *name,int internal) {
-    if (mdi_xattr_host_private(name) || !strcmp(name,MD_FILE_CAPABILITY_NAME) || !strcmp(name,MD_ACL_ACCESS_NAME)
+    if (!strcmp(name,"security.selinux") || !strcmp(name,MD_FILE_CAPABILITY_NAME) || !strcmp(name,MD_ACL_ACCESS_NAME)
             || !strcmp(name,MD_ACL_DEFAULT_NAME)) return 0;
     if (internal) return 1;
     if (s->lifetime->filesystem_kind==MD_FILESYSTEM_OVERLAY && mdi_overlay_private_attribute(name)) return 0;
@@ -172,8 +200,13 @@ static int append(void *out,size_t capacity,size_t *length,const char *name) {
 ssize_t mdi_xattr_names(struct md_inode_store *s,const struct mdi_node *node,
         void *out,size_t capacity,int internal) {
     sqlite3_stmt *q=NULL;
-    int r=node->native ? 0 : mdi_prepare(s,"SELECT name,value IS NOT NULL FROM inode_xattrs WHERE object=?1",&q);
-    if (!r && q) r=mdi_bind_id(q,1,node->id);
+    char identity[33];
+    int detached=node->native ? detached_key(s,node,identity,0) : -ENODATA;
+    int r=detached && detached!=-ENODATA ? detached : 0;
+    if (!r && (!node->native || !detached)) r=mdi_prepare(s,node->native
+        ? "SELECT name,value IS NOT NULL FROM detached_xattrs WHERE identity=?1"
+        : "SELECT name,value IS NOT NULL FROM inode_xattrs WHERE object=?1",&q);
+    if (!r && q) r=mdi_bind_id(q,1,node->native ? identity : node->id);
     unsigned replaced=0,present=0;
     size_t length=0;
     while (!r && q) {
@@ -223,7 +256,6 @@ void md_inode_xattr_origin(struct md_inode_store *s,const struct md_fs_request *
          * still read in this operation. Mutations need their dentry identity. */
         r=mdi_fstat_origin(s,q->directory[0],&node,&st,1);
     } else r=mdi_fd(s,q->directory[0],&node);
-    if (!r && !list && mdi_native_private_attribute(name)) r=write ? -EPERM : -ENODATA;
     if (!r && !list && s->lifetime->filesystem_kind==MD_FILESYSTEM_OVERLAY && mdi_overlay_private_attribute(name))
         r=write ? -EPERM : -ENODATA;
     if (!r) r=mdi_xattr_permission(s,&node,name,list ? F_OK : write ? W_OK : R_OK);
@@ -255,7 +287,7 @@ void md_inode_xattr_origin(struct md_inode_store *s,const struct md_fs_request *
             if (size<0 && size!=-ENODATA) r=(int)size;
             else if (size>=0 && set && (q->flags&XATTR_CREATE)) r=-EEXIST;
             else if (size==-ENODATA && (remove || (q->flags&XATTR_REPLACE))) r=-ENODATA;
-            if (!r && !mdi_overlay_attribute(name)) r=mdi_leaf_promote(s,&node);
+            if (!r && !mdi_overlay_attribute(name) && (!node.native || node.attached)) r=mdi_leaf_promote(s,&node);
             if (!r) r=mdi_xattr_virtual_set(s,&node,name,remove ? NULL : q->value_size ? q->value : "",q->value_size);
         } else if (!r) {
             r=mdi_copy_up(s,&node);

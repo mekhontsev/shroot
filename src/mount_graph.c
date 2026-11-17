@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "mount_graph.h"
 #include "fs_mount_internal.h"
 #include "mount_topology.h"
@@ -168,7 +169,7 @@ static int source_object(int fd,struct md_fd_identity expected,struct stat *st,u
     if (!(flags&HOST_PROVIDERS)) return path_object(fd,expected,st,0);
     int mode=fcntl(fd,F_GETFL);
     if (mode<0) return -errno;
-    if ((mode&O_PATH) || (mode&O_ACCMODE)!=O_RDONLY) return -EPROTO;
+    if ((mode&O_PATH) || (mode&MD_O_ACCMODE)!=O_RDONLY) return -EPROTO;
     if (fstat(fd,st)) return -errno;
     if (!md_fd_identity_same(md_fd_identity(st),expected)) return -EPROTO;
     return md_temporary_directory_check(fd);

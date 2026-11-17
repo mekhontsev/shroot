@@ -211,7 +211,9 @@ static int namespace_init(const struct thread *t) {
 }
 
 int signal_ignored(struct thread *t,int signal,struct md_task_signal_stop *stop) {
-    if (signal==SIGKILL || signal==SIGSTOP || !signal_observe(t,stop,0)
+    /* A debugger observes delivery before disposition, and may replace an
+     * ignored signal with one that runs a handler. */
+    if (signal==SIGKILL || signal==SIGSTOP || md_debugger_traced(debugger,t->pid) || !signal_observe(t,stop,0)
             || md_signal_synchronous(&stop->info)) return 0;
     struct md_kernel_action action;
     uint64_t bit=UINT64_C(1)<<(signal-1),caught=0,ignored=0;
@@ -228,8 +230,13 @@ int signal_ignored(struct thread *t,int signal,struct md_task_signal_stop *stop)
 
 static int signal_debugger_admit(struct thread *t,int sig,struct md_task_signal_stop *stop) {
     if (!sig || !md_debugger_traced(debugger,t->pid)) return 0;
-    if (debugger_at_boundary(t)) {
+    if (debugger_at_boundary(t) && (sig!=SIGSTOP || debugger_context_ready(t))) {
+        if (sig==SIGSTOP) stop->has_regs=0;
         if (!signal_observe(t,stop,0)) return 1;
+        if (t->debug.call_active && t->debug.adapter && debug_syscall_exit(t,NULL)) {
+            CHECK(md_debugger_defer_stop(debugger,t->pid,&stop->info));
+            return 1;
+        }
         return md_debugger_stop(debugger,t->pid,(sig<<8)|0x7f,&stop->info,0);
     }
     if (sig!=SIGSTOP) return 0;
@@ -257,7 +264,7 @@ static void signal_deliver(pid_t pid,int sig,int restored,struct md_task_signal_
             resume(pid,retained); return;
         }
     }
-    if (sig && (t->resources.pid || sig==SIGCHLD)) {
+    if (sig) {
         if (!signal_observe(t,stop,0)) return;
         siginfo_t info=stop->info;
         int fault=md_signal_synchronous(&info);
@@ -295,10 +302,12 @@ void deliver_signal(pid_t pid,int sig,int restored,struct md_task_signal_stop *s
     if (!signal_debugger_admit(thread(pid),sig,stop)) signal_deliver(pid,sig,restored,stop);
 }
 
-void resume_signal(pid_t pid,int sig,const struct md_signal_origin *origin) {
+void resume_signal(pid_t pid,int sig,const struct md_signal_origin *origin,int delivery_stop) {
     /* Debugger release has already passed ordinary signal admission. */
     struct thread *t=thread(pid);
+    if (t->terminal_stop) { resume(pid,0); return; }
     if (guest_trace_resume(t,sig)) return;
+    if (!delivery_stop) { resume(pid,sig); return; }
     if (origin && origin->valid) t->signals.origin=*origin;
     signal_deliver(pid,sig,1,NULL);
     t->signals.origin.valid=0;
@@ -877,6 +886,13 @@ void signal_control_progress(struct thread *t) {
              * ordinary execution channel available; the first shared request
              * retires this packet without requiring an unrelated kernel stop. */
             execution_publish(t,1);
+            if (md_debugger_traced(debugger,t->pid)) {
+                /* The entry owner restores the logical handler and frame
+                 * before returning to the debugger's execution mode. Running
+                 * the handler under CONT could lose syscall/step stops. */
+                if (!tracee_request(t,PTRACE_INTERRUPT,NULL,NULL,"debugger-handler-commit")) return;
+                t->interrupt_pending=1;
+            }
             t->kernel_resume=PTRACE_CONT;
             if (native_trace(PTRACE_CONT,t->pid,NULL,(void *)(uintptr_t)owner->signal)<0) {
                 CHECK(errno==ESRCH); t->resume_lost=1;
@@ -1156,6 +1172,9 @@ int signal_control_event(struct thread *t,int status) {
                         signal_entry_complete(t,1); return 0;
                     }
                 }
+                SUPERVISOR_TRACE("PROBE signal-entry-unexpected pid=%d status=%#x pc=%#llx entry=%#lx committed=%#lx handler=%#lx\n",
+                    t->pid,status,regs.pc,(unsigned long)abi.signal_entry,
+                    (unsigned long)abi.signal_entry_committed,(unsigned long)owner->entry_packet->handler);
                 CHECK(0);
             }
         }

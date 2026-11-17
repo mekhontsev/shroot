@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
-#include <linux/stat.h>
+#include "statx_abi.h"
 
 /* Transport-neutral metadata; no guest pointers or libc-dependent padding. */
 struct md_fs_info {
@@ -28,8 +28,8 @@ static inline void md_fs_info_stat(const struct md_fs_info *i, struct stat *s) {
         .st_atim={i->access_seconds,i->access_nanos},.st_mtim={i->modify_seconds,i->modify_nanos},
         .st_ctim={i->change_seconds,i->change_nanos}};
 }
-static inline void md_fs_info_statx(const struct md_fs_info *i, struct statx *s) {
-    *s=(struct statx){.stx_mask=STATX_BASIC_STATS|(i->mount_id ? STATX_MNT_ID : 0),
+static inline void md_fs_info_statx(const struct md_fs_info *i, struct md_statx *s) {
+    *s=(struct md_statx){.stx_mask=STATX_BASIC_STATS|(i->mount_id ? STATX_MNT_ID : 0),
         .stx_mnt_id=i->mount_id,.stx_blksize=i->block_size,.stx_nlink=(uint32_t)i->links,
         .stx_attributes=i->attributes,.stx_attributes_mask=i->attributes_mask,
         .stx_uid=i->uid,.stx_gid=i->gid,.stx_mode=(uint16_t)i->mode,.stx_ino=i->inode,
@@ -45,7 +45,7 @@ static inline void md_fs_info_mount(struct md_fs_info *info,uint64_t id,int root
     info->attributes_mask|=STATX_ATTR_MOUNT_ROOT;
     info->attributes=(info->attributes&~STATX_ATTR_MOUNT_ROOT)|(root ? STATX_ATTR_MOUNT_ROOT : 0);
 }
-static inline void md_stat_statx(const struct stat *s, struct statx *out) {
+static inline void md_stat_statx(const struct stat *s, struct md_statx *out) {
     struct md_fs_info info;
     md_fs_stat_info(s,&info);
     md_fs_info_statx(&info,out);

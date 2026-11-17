@@ -23,7 +23,7 @@ static inline int md_open_native_plan(unsigned flags,int birth) {
      * reopen directories through fd/ without changing their status flags. */
     if (flags&O_PATH) return 1;
     return (flags&(O_CREAT|O_EXCL))!=(O_CREAT|O_EXCL)
-        && (flags&O_ACCMODE)!=O_ACCMODE && !(flags & ~(O_ACCMODE | O_CLOEXEC
+        && (flags&MD_O_ACCMODE)!=MD_O_ACCMODE && !(flags & ~(MD_O_ACCMODE | O_CLOEXEC
         | O_NOFOLLOW | MD_O_LARGEFILE | O_APPEND | O_TRUNC | O_NONBLOCK | O_NOCTTY
         | O_NOATIME | O_SYNC | O_DSYNC | O_DIRECT | O_CREAT | O_DIRECTORY));
 }

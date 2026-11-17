@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include "resource_order.h"
+#include "operation_result.h"
 struct md_identity;
 struct md_task_resources;
 struct md_namespace_reference;
@@ -41,7 +42,7 @@ struct md_control_actor {
     struct md_received_fds *descriptor;
     int descriptor_number;
     /* Optional filesystem admission. Submission captures the actor once and
-     * transfers operation ownership only on EINPROGRESS. */
+     * transfers operation ownership only on MD_OPERATION_PENDING. */
     void *filesystem;
     long (*submit)(void *,const struct md_control_actor *,struct md_control_fs_operation,
         struct md_control_pending **);
@@ -70,7 +71,8 @@ struct md_control_ioctl {
     unsigned fields;
     struct md_control_ioctl_field field[MD_CONTROL_IOCTL_FIELDS];
 };
-/* Provider-owned asynchronous request. resume never blocks: EINPROGRESS means
+/* Providers return MD_OPERATION_PENDING only with an owned request. resume
+ * never blocks: MD_OPERATION_PENDING means
  * an external completion will signal the descriptor wakeup. dispose cancels
  * an unfinished request and releases it exactly once. deadline is monotonic. */
 struct md_control_pending {
@@ -109,7 +111,7 @@ struct md_control_file_ops {
     int (*stat)(void *,struct stat *);
     long (*read)(void *,const struct md_control_actor *,void *,size_t,int64_t);
     long (*write)(void *,const struct md_control_actor *,const void *,size_t,int64_t);
-    /* Packet-independent IO. Inputs are captured before returning EINPROGRESS;
+    /* Packet-independent IO. Inputs are captured before returning MD_OPERATION_PENDING;
      * only the exact OFD turn spans the wait, never a descriptor-table turn. */
     long (*io)(void *,const struct md_control_actor *,unsigned operation,void *,size_t,int64_t,
         struct md_control_pending **);
@@ -141,7 +143,7 @@ struct md_control_file_ops {
      * may borrow a writable backing descriptor. Private COW is unaffected. */
     int mapping_readonly;
     /* Optional private mapping backing, distinct from the inert carrier.
-     * Returns an owned FD, or EINPROGRESS with an owned request whose resume
+     * Returns an owned FD, or MD_OPERATION_PENDING with an owned request whose resume
      * returns that FD. Neither the file table nor address space is locked
      * while a userspace provider prepares it. */
     long (*mapping)(void *,const struct md_control_actor *,unsigned protection,unsigned flags,

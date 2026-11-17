@@ -13,7 +13,7 @@
 #include "raw.h"
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/stat.h>
+#include "statx_abi.h"
 #include <sys/sysmacros.h>
 
 long md_descriptor_kind(int fd) {
@@ -102,7 +102,7 @@ long md_descriptor_metadata(const struct md_fs *fs,int fd, long nr, const unsign
     if (!result && (nr==SYS_fstat || nr==SYS_newfstatat))
         result=md_write_memory((void *)a[nr==SYS_fstat ? 1 : 2],st,sizeof(*st));
     else if (!result && nr==SYS_statx) {
-        struct statx value;
+        struct md_statx value;
         md_stat_statx(st,&value);
         result=md_write_memory((void *)a[4],&value,sizeof(value));
     }

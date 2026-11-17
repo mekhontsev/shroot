@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/magic.h>
+#include <linux/fs.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -207,7 +208,7 @@ int md_fuse_node_write_begin(struct fuse_view *v,struct fuse_node *node,
         if (error<0) return error;
     }
     enum md_resource_order_state state=md_resource_order_state(turn);
-    return state==MD_RESOURCE_ORDER_QUEUED ? -EINPROGRESS
+    return state==MD_RESOURCE_ORDER_QUEUED ? MD_OPERATION_PENDING
         : state==MD_RESOURCE_ORDER_RUNNING ? 0 : md_resource_order_start(turn);
 }
 void md_fuse_node_write_end(struct md_resource_order *turn) {
@@ -452,7 +453,7 @@ static int lookup_complete(struct md_provider_lookup *base) {
     }
     if (!p->stage || p->stage==5) {
         int ready=md_fuse_session_ready(v->session);
-        if (ready<=0) return ready ? ready : -EINPROGRESS;
+        if (ready<=0) return ready ? ready : MD_OPERATION_PENDING;
         if (!p->stage && md_fuse_session_options(v->session)->default_permissions) {
             struct stat st;
             if (attributes_cached(v,p->parent,&st)) {
@@ -464,7 +465,7 @@ static int lookup_complete(struct md_provider_lookup *base) {
                 p->error=md_fuse_session_request(v->session,&p->identity,p->pid,FUSE_GETATTR,p->parent->id,
                     &in,sizeof(in),sizeof(struct fuse_attr_out),0,p->wakeup,&p->request);
                 if (p->error) return p->error;
-                p->stage=4; return -EINPROGRESS;
+                p->stage=4; return MD_OPERATION_PENDING;
             }
         }
         if (p->selected) {
@@ -476,7 +477,7 @@ static int lookup_complete(struct md_provider_lookup *base) {
         p->error=md_fuse_session_request(v->session,&p->identity,p->pid,FUSE_LOOKUP,p->parent->id,
             p->name,strlen(p->name)+1,sizeof(p->entry),0,p->wakeup,&p->request);
         if (p->error) return p->error;
-        p->stage=1; return -EINPROGRESS;
+        p->stage=1; return MD_OPERATION_PENDING;
     }
     char link[PATH_MAX];
     if (p->stage==1) {
@@ -493,7 +494,7 @@ static int lookup_complete(struct md_provider_lookup *base) {
             int error=md_fuse_session_request(v->session,&p->identity,p->pid,FUSE_READLINK,p->entry.nodeid,
                 NULL,0,sizeof(link)-1,0,p->wakeup,&p->request);
             if (error) return error;
-            p->stage=2; return -EINPROGRESS;
+            p->stage=2; return MD_OPERATION_PENDING;
         }
         p->stage=3;
     }
@@ -539,7 +540,7 @@ static int view_lookup(void *context,int directory,const char *name,const struct
     p->view=md_fuse_view_retain(v); p->parent=parent; p->selected=selected; p->identity=md_identity_copy(actor->identity);
     p->wakeup=md_resource_wakeup_retain(actor->wakeup); p->pid=md_fuse_view_pid(v,actor->pid); strcpy(p->name,name);
     int result=lookup_complete(&p->base);
-    if (result==-EINPROGRESS) *out=&p->base; else lookup_destroy(&p->base);
+    if (result==MD_OPERATION_PENDING) *out=&p->base; else lookup_destroy(&p->base);
     return result;
 }
 static const struct md_provider_tree_ops view_ops={.retain=md_fuse_view_retain,.release=md_fuse_view_release,
@@ -855,7 +856,7 @@ static void mutation_resume(struct view_operation *p,struct md_filesystem *fs,
     if (p->request && p->checking) {
         struct fuse_attr_out result;
         long n=md_fuse_request_result(p->request,&result,sizeof(result));
-        if (n==-EINPROGRESS) goto pending;
+        if (n==MD_OPERATION_PENDING) goto pending;
         if (n<0) { out->error=n; return; }
         struct fuse_node *node=check_node(p,p->checking-1); struct stat st;
         out->error=n!=sizeof(result) ? -EPROTO : md_fuse_view_attributes(v,&result.attr,&st);
@@ -885,7 +886,7 @@ static void mutation_resume(struct view_operation *p,struct md_filesystem *fs,
     }
     struct { struct fuse_entry_out entry; struct fuse_open_out opened; } result;
     long n=md_fuse_request_result(p->request,&result,sizeof(result));
-    if (n==-EINPROGRESS) goto pending;
+    if (n==MD_OPERATION_PENDING) goto pending;
     if (n<0) { out->error=n; return; }
     p->completed=1;
     unsigned opcode=p->opcode;
@@ -967,7 +968,7 @@ static void mutation_resume(struct view_operation *p,struct md_filesystem *fs,
     }
     return;
 pending:
-    out->error=-EINPROGRESS; *output->continuation=&p->base;
+    out->error=MD_OPERATION_PENDING; *output->continuation=&p->base;
 }
 static void operation_resume(struct md_fs_continuation *,struct md_filesystem *,
         struct md_fs_result *,const struct md_fs_output *);
@@ -986,10 +987,10 @@ static void operation_attributes(struct view_operation *p,struct md_filesystem *
         }
         if ((p->open_flags&O_DIRECTORY) && !S_ISDIR(st->st_mode)) out->error=-ENOTDIR;
         else if (!(p->open_flags&O_PATH) && S_ISLNK(st->st_mode)) out->error=-ELOOP;
-        else if (!(p->open_flags&O_PATH) && (p->open_flags&(O_ACCMODE|O_TRUNC)) && S_ISDIR(st->st_mode)) out->error=-EISDIR;
+        else if (!(p->open_flags&O_PATH) && (p->open_flags&(MD_O_ACCMODE|O_TRUNC)) && S_ISDIR(st->st_mode)) out->error=-EISDIR;
         if (!out->error && !(p->open_flags&O_PATH) && md_fuse_session_options(p->view->session)->default_permissions) {
-            unsigned mode=(p->open_flags&O_ACCMODE)==O_RDWR ? R_OK|W_OK
-                : (p->open_flags&O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
+            unsigned mode=(p->open_flags&MD_O_ACCMODE)==O_RDWR ? R_OK|W_OK
+                : (p->open_flags&MD_O_ACCMODE)==O_WRONLY ? W_OK : R_OK;
             if (p->open_flags&O_TRUNC) mode|=W_OK;
             out->error=md_file_permissions(st,mode,&p->identity);
         }
@@ -1033,7 +1034,7 @@ static void operation_resume(struct md_fs_continuation *base,struct md_filesyste
         int fd=md_fuse_image_advance(p->image,fs->wakeup);
         if (fd<0) {
             out->error=fd;
-            if (fd==-EINPROGRESS) *output->continuation=base;
+            if (fd==MD_OPERATION_PENDING) *output->continuation=base;
             return;
         }
         if (!(p->image_flags&FOPEN_DIRECT_IO))
@@ -1052,7 +1053,7 @@ static void operation_resume(struct md_fs_continuation *base,struct md_filesyste
                     p->node->id,&st,q,fs->wakeup,&p->request);
                 if (!out->error) {
                     p->xattr_sent=q->mode==MD_FS_XATTR_SET || q->mode==MD_FS_XATTR_REMOVE;
-                    out->error=-EINPROGRESS; *output->continuation=base;
+                    out->error=MD_OPERATION_PENDING; *output->continuation=base;
                 }
                 return;
             }
@@ -1088,7 +1089,7 @@ static void operation_resume(struct md_fs_continuation *base,struct md_filesyste
             if (p->opcode==FUSE_SETATTR || ((p->opcode==FUSE_OPEN) && (open.flags&O_TRUNC))) {
                 out->error=md_fuse_node_write_begin(p->view,p->node,&p->write_turn,fs->wakeup);
                 if (out->error) {
-                    if (out->error==-EINPROGRESS) *output->continuation=base;
+                    if (out->error==MD_OPERATION_PENDING) *output->continuation=base;
                     return;
                 }
             }
@@ -1098,12 +1099,12 @@ static void operation_resume(struct md_fs_continuation *base,struct md_filesyste
                 p->opcode,p->node->id,input,size,capacity,0,fs->wakeup,&p->request);
             if (out->error) return;
         }
-        out->error=-EINPROGRESS; *output->continuation=base; return;
+        out->error=MD_OPERATION_PENDING; *output->continuation=base; return;
     }
     if (q->operation==MD_FS_XATTR_OBJECT && p->metadata_checked) {
         md_fuse_xattr_result(p->request,q,out,output);
-        if (out->error!=-EINPROGRESS) p->completed=1;
-        if (out->error==-EINPROGRESS) *output->continuation=base;
+        if (out->error!=MD_OPERATION_PENDING) p->completed=1;
+        if (out->error==MD_OPERATION_PENDING) *output->continuation=base;
         else if (!out->error && (q->mode==MD_FS_XATTR_SET || q->mode==MD_FS_XATTR_REMOVE)) {
             pthread_mutex_lock(&p->view->lock);
             node_event(p->view,p->node,IN_ATTRIB,0,NULL,0);
@@ -1114,7 +1115,7 @@ static void operation_resume(struct md_fs_continuation *base,struct md_filesyste
     }
     union { struct fuse_attr_out attr; struct fuse_statfs_out statfs; struct fuse_open_out open; char link[PATH_MAX]; } response;
     long n=md_fuse_request_result(p->request,&response,sizeof(response));
-    if (n==-EINPROGRESS) { out->error=n; *output->continuation=base; return; }
+    if (n==MD_OPERATION_PENDING) { out->error=n; *output->continuation=base; return; }
     if (p->executable && p->opcode==FUSE_ACCESS && (n==0 || n==-ENOSYS)) {
         p->access_checked=1; md_fuse_request_release(p->request); p->request=NULL;
         operation_resume(base,fs,out,output); return;
@@ -1205,10 +1206,10 @@ int md_fs_fuse_operation(struct md_filesystem *fs,const struct md_fs_request *q,
             out->error=-EOPNOTSUPP; return 1;
         }
         if (!executable && !(q->flags&O_PATH) && !output->control) { out->requires_control=1; out->error=-EOPNOTSUPP; return 1; }
-        unsigned known=O_ACCMODE|O_CLOEXEC|O_PATH|O_NOFOLLOW|O_DIRECTORY|O_CREAT|O_EXCL|O_TRUNC
+        unsigned known=MD_O_ACCMODE|O_CLOEXEC|O_PATH|O_NOFOLLOW|O_DIRECTORY|O_CREAT|O_EXCL|O_TRUNC
             |O_NONBLOCK|O_NOCTTY|MD_O_LARGEFILE|O_NOATIME|O_SYNC|O_DSYNC|O_APPEND;
         if (q->flags&~known) { out->error=-EOPNOTSUPP; return 1; }
-        if ((q->flags&O_ACCMODE)==O_ACCMODE) { out->error=-EINVAL; return 1; }
+        if ((q->flags&MD_O_ACCMODE)==MD_O_ACCMODE) { out->error=-EINVAL; return 1; }
     }
     pthread_mutex_lock(&v->lock);
     struct fuse_node *n=a->fd<0 ? NULL : node_fd(v,a->fd);
@@ -1250,6 +1251,6 @@ int md_fs_fuse_operation(struct md_filesystem *fs,const struct md_fs_request *q,
         if (!out->error && !(p->image_path=strdup(path))) out->error=-ENOMEM;
     }
     if (!out->error) operation_resume(&p->base,fs,out,output);
-    if (out->error!=-EINPROGRESS) operation_destroy(&p->base);
+    if (out->error!=MD_OPERATION_PENDING) operation_destroy(&p->base);
     return 1;
 }

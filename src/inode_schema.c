@@ -25,6 +25,10 @@ int md_inode_store_format(void) { return 17; }
     "CREATE TABLE inode_xattrs(object TEXT NOT NULL REFERENCES objects ON DELETE CASCADE," \
     "name TEXT NOT NULL CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 255)," \
     "value BLOB CHECK(length(value)<=65536),PRIMARY KEY(object,name)) STRICT;"
+#define DETACHED_XATTR_SCHEMA \
+    "CREATE TABLE detached_xattrs(identity TEXT NOT NULL CHECK(length(identity)=32)," \
+    "name TEXT NOT NULL CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 255)," \
+    "value BLOB CHECK(length(value)<=65536),PRIMARY KEY(identity,name)) STRICT;"
 #define XATTR_UPGRADE XATTR_SCHEMA \
     "INSERT INTO inode_xattrs SELECT object,CASE name " \
     "WHEN 1 THEN 'user.overlay.whiteout' WHEN 2 THEN 'user.overlay.opaque' " \
@@ -46,7 +50,7 @@ int md_inode_store_format(void) { return 17; }
     "FROM names n JOIN objects o ON n.object=o.object WHERE o.kind!=16384;"
 /* Revision 5 admits store-relative source paths; existing absolute paths remain
  * readable. The marker prevents older readers from misinterpreting new rows. */
-static const char *const revisions[]={PUBLICATION_SCHEMA,XATTR_UPGRADE,DENTRY_UPGRADE,"SELECT 1"};
+static const char *const revisions[]={PUBLICATION_SCHEMA,XATTR_UPGRADE,DENTRY_UPGRADE,"SELECT 1",DETACHED_XATTR_SCHEMA};
 const struct mdi_schema_plan mdi_schema_current = {revisions,sizeof(revisions)/sizeof(*revisions)};
 int md_inode_store_revision(void) { return 1 + (int)mdi_schema_current.count; }
 
@@ -220,6 +224,7 @@ int mdi_schema_begin_create(struct md_inode_store *s) {
             "CREATE TABLE overlay_lower_names(parent TEXT NOT NULL REFERENCES objects ON DELETE CASCADE,"
                 "name BLOB NOT NULL,PRIMARY KEY(parent,name)) WITHOUT ROWID;"
             XATTR_SCHEMA
+            DETACHED_XATTR_SCHEMA
             "CREATE TABLE properties(key TEXT PRIMARY KEY,value INTEGER NOT NULL) STRICT;"
             "INSERT INTO properties VALUES('sealed',0);"
             "CREATE TABLE names(cookie INTEGER PRIMARY KEY AUTOINCREMENT,"

@@ -48,6 +48,7 @@
 #include "signal_pending.h"
 #include "signal_view.h"
 #include "supervisor_actors.h"
+#include "supervisor_signals.h"
 #include "supervisor_debug.h"
 #include "supervisor_execution.h"
 #include "supervisor_fs.h"
@@ -586,7 +587,7 @@ static void proc_file_request(struct thread *t, const struct md_proc_open_reques
             }
             if (!error && namespace && !source && target!=t && !proc_allowed(t->pid,target->pid)) error=-EACCES;
             if (!error && source && !control && (node.device!=previous.device || node.inode!=previous.inode)) error=-ESRCH;
-            unsigned mode=(flags&O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC) ? W_OK : R_OK;
+            unsigned mode=(flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC) ? W_OK : R_OK;
             if (!error && namespace && (flags&O_NOFOLLOW) && !(flags&O_PATH)) error=-ELOOP;
             if (!error && !(flags&O_PATH)) error=control ? md_proc_file_control_access(source,&t->identity,mode)
                 : namespace || md_proc_file_cgroup_kind(file_kind) ? mode==W_OK ? -EACCES : 0
@@ -651,6 +652,7 @@ void proc_io_progress(struct thread *t) {
     }
     struct md_buffer_span span;
     long result=md_buffer_span(&t->fs.buffer,&span);
+    if (!result) result=md_proc_file_io_prepare(&t->proc.io);
     if (!result) {
         struct md_proc_file_node node=md_proc_file_get_node(t->proc.io.file);
         struct proc_owner owner=proc_owner(node.process);
@@ -661,6 +663,23 @@ void proc_io_progress(struct thread *t) {
         if (owner.identity) md_proc_file_process_state(t->proc.io.file,owner.identity,owner.pid_namespace,
             md_debugger_owner(debugger,owner.pid),!md_proc_file_inspection(md_proc_file_kind(t->proc.io.file))
                 || proc_allowed(t->pid,owner.pid),owner.process ? &limits : NULL);
+        if (md_proc_file_kind(t->proc.io.file)==MD_PROC_FILE_SYSCALL) {
+            struct thread *target=find_thread(node.process);
+            struct md_proc_syscall_view view;
+            /* A task-affine wait can execute a different syscall on behalf of
+             * the retained application call. No ptrace or new stop is needed
+             * to publish that already-owned boundary. */
+            int known=target && !entry_pending(target) && (task_parked(target)
+                || target->phase==DEBUG_PARK_EXIT || target->phase==NATIVE_WAIT
+                || signal_control_parked(target));
+            if (known) {
+                view=(struct md_proc_syscall_view){.number=target->execution.request.nr,
+                    .stack=target->execution.registers.sp,
+                    .instruction=target->execution.request.instruction_pointer};
+                memcpy(view.args,target->execution.request.args,sizeof(view.args));
+            }
+            md_proc_file_syscall_state(t->proc.io.file,known ? &view : NULL);
+        }
         if (md_proc_file_kind(t->proc.io.file)==MD_PROC_FILE_STATUS) {
             struct thread *target=find_thread(node.process);
             struct md_signal_status view={0};
@@ -702,7 +721,7 @@ void proc_io_progress(struct thread *t) {
         }
     }
     struct md_control_file file=md_proc_file_control(t->proc.file);
-    if (result==-EINPROGRESS && t->proc.io.pending) {
+    if (result==MD_OPERATION_PENDING && t->proc.io.pending) {
         /* EVENT_WAIT: the admitted IO's provider reply or caller cancellation.
          * This OFD's cursor stays serialized; other files and tables progress. */
         retry_wait(t,RETRY_PROC_IO); control_park(t); return;

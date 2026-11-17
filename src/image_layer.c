@@ -121,7 +121,6 @@ static int entry_file(struct md_inode_store *s, struct archive *ar, struct archi
     int mode_seen = 0;
     archive_entry_xattr_reset(entry);
     while (!archive_entry_xattr_next(entry,&name,&value,&length)) {
-        if (mdi_native_private_attribute(name)) return -EPERM;
         if (backup && md_backup_mode(name)) {
             if (length != 2) return -EINVAL;
             const unsigned char *b = value;

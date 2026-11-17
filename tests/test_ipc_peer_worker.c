@@ -898,7 +898,7 @@ static int vector_receive(void *context) {
         limit.rlim_cur=last;
         if (setrlimit(RLIMIT_NOFILE,&limit)) _exit(96);
     }
-    if (!r->skip && recvmsg(r->endpoint,&r->receipt->message,MSG_DONTWAIT|r->flags)!=8) _exit(92);
+    if (!r->skip && syscall(SYS_recvmsg,r->endpoint,&r->receipt->message,MSG_DONTWAIT|r->flags)!=8) _exit(92);
     _exit(0);
 }
 static void transfer_publication(const char *path, unsigned mode) {

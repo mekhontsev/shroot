@@ -156,7 +156,8 @@ static void debug_usage(pid_t pid, struct rusage *usage) { (void)pid; *usage = (
 static long debug_result;
 static void debug_complete(pid_t pid,long result) { (void)pid; debug_result=result; }
 static unsigned debug_resumed;
-static void debug_resume(pid_t pid,int signal,const struct md_signal_origin *origin) {
+static void debug_resume(pid_t pid,int signal,const struct md_signal_origin *origin,int delivery_stop) {
+    (void)delivery_stop;
     (void)pid; assert(!signal && (!origin || !origin->valid)); ++debug_resumed;
 }
 static long debug_call(struct md_debugger *d, unsigned op, pid_t target, uintptr_t address, uintptr_t data) {

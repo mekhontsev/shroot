@@ -20,17 +20,18 @@
 struct image_segment { uintptr_t offset; size_t size; int entry; };
 static struct {
     uintptr_t entry,base;
-    size_t size,count;
+    size_t size,count,alignment;
     struct image_segment *segments;
 } bootstrap_layout;
 
 struct bootstrap_move {
     struct user_pt_regs initial;
-    uintptr_t source;
+    uintptr_t source,allocation;
+    size_t prefix,suffix;
     uint64_t mask;
     size_t step;
     long expected;
-    int entered,code_moved,number;
+    int entered,code_moved,number,initial_placement;
 };
 
 static int segment_order(const void *left,const void *right) {
@@ -70,6 +71,7 @@ int image_layout_prepare(const char *path) {
     if (error) { free(segments); return error; }
     qsort(segments,count,sizeof(*segments),segment_order);
     bootstrap_layout.entry=image.header.e_entry; bootstrap_layout.size=image.high;
+    bootstrap_layout.alignment=image.alignment;
     bootstrap_layout.count=count; bootstrap_layout.segments=segments;
     return 0;
 }
@@ -104,11 +106,11 @@ int image_layout_begin(struct thread *t) {
     struct user_pt_regs regs;
     if (!registers(t->pid,&regs)) return 1;
     uintptr_t source=regs.pc-bootstrap_layout.entry;
-    if (!bootstrap_layout.base) { bootstrap_layout.base=source; return 0; }
     if (source==bootstrap_layout.base) return 0;
-    CHECK(abi.magic && !t->bootstrap_move);
+    CHECK(!t->bootstrap_move);
     struct bootstrap_move *move=calloc(1,sizeof(*move)); CHECK(move);
     move->initial=regs; move->source=source;
+    move->initial_placement=!bootstrap_layout.base;
     t->bootstrap_move=move;
     if (!save_signal_mask(t,&move->mask,"bootstrap-placement-mask")) return 1;
     uint64_t mask=md_signal_blockable_mask();
@@ -124,10 +126,16 @@ static int image_layout_call(struct thread *t,struct user_pt_regs *regs) {
     memset(regs->regs,0,6*sizeof(*regs->regs));
     if (!move->step) {
         number=SYS_mmap;
-        regs->regs[0]=bootstrap_layout.base;
-        regs->regs[1]=bootstrap_layout.size;
+        /* Keep the retained service addresses away from the top-down mmap
+         * region used by loaders after exec. This is a hint, not a claim on
+         * an address: the kernel chooses a free range on initial admission. */
+        regs->regs[0]=move->initial_placement
+            ? (move->source/2)&~(bootstrap_layout.alignment-1) : bootstrap_layout.base;
+        regs->regs[1]=bootstrap_layout.size
+            +(move->initial_placement ? bootstrap_layout.alignment-md_page_size : 0);
         regs->regs[2]=PROT_NONE;
-        regs->regs[3]=MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE;
+        regs->regs[3]=MAP_PRIVATE|MAP_ANONYMOUS
+            |(move->initial_placement ? 0 : MAP_FIXED_NOREPLACE);
         regs->regs[4]=(uint64_t)-1;
         move->expected=bootstrap_layout.base;
     } else if (move->step<=bootstrap_layout.count) {
@@ -138,15 +146,22 @@ static int image_layout_call(struct thread *t,struct user_pt_regs *regs) {
         regs->regs[3]=MREMAP_MAYMOVE|MREMAP_FIXED;
         regs->regs[4]=bootstrap_layout.base+segment->offset;
         move->expected=regs->regs[4];
-    } else {
+    } else if (move->step==bootstrap_layout.count+1) {
         number=SYS_munmap;
         regs->regs[0]=move->source;
         regs->regs[1]=bootstrap_layout.size;
         move->expected=0;
+    } else {
+        number=SYS_munmap;
+        int prefix=move->step==bootstrap_layout.count+2;
+        regs->regs[0]=prefix ? move->allocation : bootstrap_layout.base+bootstrap_layout.size;
+        regs->regs[1]=prefix ? move->prefix : move->suffix;
+        move->expected=0;
     }
     /* Kernel policy survives exec. The new image's temporary SVC enters with
      * the established service identity; no guest instruction has run yet. */
-    regs->pc=abi.task_return; regs->regs[8]=number;
+    if (!move->initial_placement) regs->pc=abi.task_return;
+    regs->regs[8]=number;
     move->number=(int)number;
     int nr=(int)number;
     struct iovec io={&nr,sizeof(nr)};
@@ -194,14 +209,24 @@ int image_layout_event(struct thread *t,int status) {
     if (info.op!=PTRACE_SYSCALL_INFO_EXIT || !move->entered) {
         image_layout_failed(t,"unexpected syscall completion"); return 1;
     }
+    if (!move->step && move->initial_placement && (long)regs.regs[0]>0) {
+        move->allocation=regs.regs[0];
+        move->prefix=(-move->allocation)&(bootstrap_layout.alignment-1);
+        move->suffix=bootstrap_layout.alignment-md_page_size-move->prefix;
+        bootstrap_layout.base=move->allocation+move->prefix;
+        move->expected=regs.regs[0];
+    }
     if ((long)regs.regs[0]!=move->expected) {
-        fprintf(stderr,"Shroot: bootstrap placement step=%zu result=%ld expected=%ld\n",
-            move->step,(long)regs.regs[0],move->expected);
+        fprintf(stderr,"Shroot: bootstrap placement step=%zu result=%ld expected=%ld source=%#lx size=%zu\n",
+            move->step,(long)regs.regs[0],move->expected,(unsigned long)move->source,bootstrap_layout.size);
         image_layout_failed(t,"mapping operation rejected"); return 1;
     }
     if (move->step && move->step<=bootstrap_layout.count
             && bootstrap_layout.segments[move->step-1].entry) move->code_moved=1;
-    if (++move->step<=bootstrap_layout.count+1) {
+    ++move->step;
+    if (move->step==bootstrap_layout.count+2 && !move->prefix) ++move->step;
+    if (move->step==bootstrap_layout.count+3 && !move->suffix) ++move->step;
+    if (move->step<=bootstrap_layout.count+3) {
         regs=move->initial;
         regs.pc=(move->code_moved ? bootstrap_layout.base : move->source)+bootstrap_layout.entry;
         move->entered=0;

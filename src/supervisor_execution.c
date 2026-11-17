@@ -540,8 +540,13 @@ void return_task_value(struct thread *t,struct user_pt_regs *regs,long value,
         enum md_task_call_boundary boundary) {
     /* A borrowed call can consume the application's kernel exit. Publish that
      * exit exactly once; an intact entry still gets its ordinary native stop. */
-    if ((boundary==MD_TASK_CALL_EXIT || boundary==MD_TASK_CALL_USER) && t->debug.call_active)
-        t->debug.adapter=1;
+    if (boundary==MD_TASK_CALL_EXIT || boundary==MD_TASK_CALL_USER) {
+        if (t->debug.call_active) t->debug.adapter=1;
+        if (t->metadata_restart) {
+            metadata_restart_return(t,value);
+            return;
+        }
+    }
     return_value(t,regs,value);
 }
 
@@ -682,7 +687,9 @@ static void wait_cancel(struct thread *t,enum phase next,int admitted) {
     else if (next==SOCKET_WAITING && (t->readiness || t->io.outgoing || t->io.receive)) socket_unwatch(t);
     else if (next==IPC_WAITING) ipc_unwatch(t);
     if (admitted && !shield(t)) return;
-    if (t->signals.host && !admitted) {
+    /* Before admission even -1 can select a seccomp action. Use the already
+     * admitted inert service site, independently of the host's identity. */
+    if (!admitted) {
         int error=md_task_call_cancel_entry(native_trace,t->pid,abi.task_return);
         if (error) { CHECK(error==-ESRCH); t->resume_lost=1; return; }
     } else if (!skip(t->pid)) return;
@@ -1549,7 +1556,12 @@ void resume(pid_t pid, int sig) {
             if (!registers(pid,&regs)) return;
             if (debug_syscall_exit(t,&regs)) return;
         }
-        if (debugger_boundary(t)) return;
+        if (sig && md_debugger_stop_pending(debugger,pid)) {
+            /* A tracer interrupt queued at a signal-delivery stop observes
+             * the committed signal frame, not the pre-delivery registers. */
+            if (!tracee_request(t,PTRACE_INTERRUPT,NULL,NULL,"debugger-signal-commit")) return;
+            t->interrupt_pending=1;
+        } else if (debugger_boundary(t)) return;
     }
     if (debugger_at_boundary(t) && t->debug.step_call) {
         t->debug.step_call=0;

@@ -1,5 +1,6 @@
 #ifndef MD_TASK_RECEIVE_H
 #define MD_TASK_RECEIVE_H
+#include "socket_abi.h"
 #include <stdint.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -23,18 +24,18 @@ struct md_task_receive_frame {
     int descriptors[253];
     uint64_t token;
     struct iovec vector;
-    struct msghdr message;
-    struct { _Alignas(struct cmsghdr) char bytes[CMSG_SPACE(253*sizeof(int))]; } control;
+    struct md_msghdr message;
+    struct { _Alignas(struct md_cmsghdr) char bytes[MD_CMSG_SPACE(253*sizeof(int))]; } control;
     struct md_fd_capture_frame capture;
     /* Optional entry snapshot; only a completed, owned receive sets prepared. */
     unsigned prepared;
-    struct msghdr original;
+    struct md_msghdr original;
     struct iovec vectors[8];
     struct md_ipc_io_message io;
 };
 static inline size_t md_task_receive_capacity(size_t capacity) {
-    size_t extra=CMSG_SPACE(sizeof(int))+CMSG_SPACE(sizeof(struct ucred));
-    return capacity > 16*1024*1024-extra ? 0 : CMSG_ALIGN(capacity+extra);
+    size_t extra=MD_CMSG_SPACE(sizeof(int))+MD_CMSG_SPACE(sizeof(struct ucred));
+    return capacity > 16*1024*1024-extra ? 0 : MD_CMSG_ALIGN(capacity+extra);
 }
 /* Allocation-free private-header traversal. 1 exposes the next export vector,
  * 0 means complete; only confirmed native messages are visited. */

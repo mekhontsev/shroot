@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "network_io.h"
 #include "network_transport.h"
+#include "socket_abi.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -14,34 +15,34 @@ static int packet_info(void *control,size_t control_size,int flags,int sending,s
         struct md_network_packet_info *info) {
     *count=0;
     size_t offset=0;
-    while (control_size-offset>=sizeof(struct cmsghdr)) {
-        struct cmsghdr *c=(void *)((char *)control+offset);
-        if (c->cmsg_len<CMSG_LEN(0) || c->cmsg_len>control_size-offset) return -EINVAL;
+    while (control_size-offset>=sizeof(struct md_cmsghdr)) {
+        struct md_cmsghdr *c=(void *)((char *)control+offset);
+        if (c->cmsg_len<MD_CMSG_LEN(0) || c->cmsg_len>control_size-offset) return -EINVAL;
         unsigned family=c->cmsg_level==IPPROTO_IP && c->cmsg_type==IP_PKTINFO ? AF_INET
             : c->cmsg_level==IPPROTO_IPV6 && c->cmsg_type==IPV6_PKTINFO ? AF_INET6 : 0;
         if (family) {
             size_t expected=family==AF_INET ? sizeof(struct in_pktinfo) : sizeof(struct in6_pktinfo);
-            size_t size=c->cmsg_len-CMSG_LEN(0);
+            size_t size=c->cmsg_len-MD_CMSG_LEN(0);
             if (size!=expected && (sending || !(flags&MSG_CTRUNC) || size>expected)) return -EINVAL;
             if (*count==2 || (sending && *count)) return -EINVAL;
             for (unsigned i=0;i<*count;++i) if (out[i].family==family) return -EINVAL;
-            out[(*count)++]=(struct packet_info_ref){CMSG_DATA(c),size,family};
+            out[(*count)++]=(struct packet_info_ref){MD_CMSG_DATA(c),size,family};
         } else if ((c->cmsg_level==IPPROTO_IP && c->cmsg_type==IP_TTL)
                 || (c->cmsg_level==IPPROTO_IPV6 && c->cmsg_type==IPV6_HOPLIMIT)) {
-            size_t size=c->cmsg_len-CMSG_LEN(0);
+            size_t size=c->cmsg_len-MD_CMSG_LEN(0);
             if (sending) {
                 int value;
                 if (size!=sizeof(value)) return -EINVAL;
-                memcpy(&value,CMSG_DATA(c),sizeof(value));
+                memcpy(&value,MD_CMSG_DATA(c),sizeof(value));
                 if (value<-1 || value>255 || (c->cmsg_level==IPPROTO_IP && value<=0)) return -EINVAL;
                 if (info) { info->hops=value; info->hops_set=value>=0; }
             } else if (info && info->hops_set) {
                 if (size>sizeof(info->hops)) return -EINVAL;
-                memcpy(CMSG_DATA(c),&info->hops,size);
+                memcpy(MD_CMSG_DATA(c),&info->hops,size);
             }
         } else if (sending && !(c->cmsg_level==IPPROTO_IP && (c->cmsg_type==IP_TTL || c->cmsg_type==IP_TOS))
                 && !(c->cmsg_level==IPPROTO_IPV6 && (c->cmsg_type==IPV6_HOPLIMIT || c->cmsg_type==IPV6_TCLASS))) return -EOPNOTSUPP;
-        size_t step=CMSG_ALIGN(c->cmsg_len);
+        size_t step=MD_CMSG_ALIGN(c->cmsg_len);
         if (step>control_size-offset) break;
         offset+=step;
     }

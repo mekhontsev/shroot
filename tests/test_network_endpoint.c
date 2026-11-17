@@ -57,6 +57,10 @@ static void connection_observers(struct md_network_namespace *n,unsigned family,
     }
     for (unsigned round=0;round<32;++round) {
         assert(write(peer,"x",1)==1);
+        struct pollfd received={.fd=fd,.events=POLLIN};
+        /* EVENT_WAIT: TCP delivery, not write completion, makes the socket
+         * readable. Both independent observers must then report that edge. */
+        assert(poll(&received,1,2000)==1 && received.revents==POLLIN);
         for (unsigned i=0;i<2;++i) {
             assert(md_control_epoll_collect(queues[i],&observed,1)==1);
             assert(observed.events==EPOLLIN && observed.data.u64==42);

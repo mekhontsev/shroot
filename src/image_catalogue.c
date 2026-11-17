@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "image_catalogue.h"
 #include "elf_admission.h"
 #include "raw.h"
@@ -45,7 +46,7 @@ static int original_fd(struct md_image_catalogue *c, struct md_inode_store *s, i
 }
 static int open_snapshot(struct md_image_catalogue *c, int flags) {
     if (flags & O_DIRECTORY) return -ENOTDIR;
-    if (!(flags & O_PATH) && (flags & (O_ACCMODE | O_TRUNC | O_APPEND))) return -EACCES;
+    if (!(flags & O_PATH) && (flags & (MD_O_ACCMODE | O_TRUNC | O_APPEND))) return -EACCES;
     if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) return -EEXIST;
     if (flags & O_PATH) {
         char path[64];

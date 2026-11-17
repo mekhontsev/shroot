@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "image_io.h"
 #include <mbedtls/sha256.h>
 #include <errno.h>
@@ -77,7 +78,7 @@ int md_image_snapshot(int fd, int scratch, uint64_t limit, int *out) {
     if (!r && (!S_ISREG(st.st_mode) || st.st_size < 0 || (uint64_t)st.st_size > limit)) r = -EFBIG;
     uint64_t size = r ? 0 : (uint64_t)st.st_size;
     int snapshot = -1;
-    if (!r && (snapshot = openat(scratch, ".", O_TMPFILE | O_RDWR | O_CLOEXEC, 0600)) < 0) r = -errno;
+    if (!r && (snapshot=(int)md_host_temporary(scratch,".",0600))<0) r=snapshot;
     unsigned char buffer[65536];
     for (uint64_t offset = 0; !r && offset < size;) {
         size_t take = size - offset > sizeof(buffer) ? sizeof(buffer) : (size_t)(size - offset);

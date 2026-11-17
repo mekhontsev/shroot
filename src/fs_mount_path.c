@@ -262,9 +262,9 @@ static int walk_path(struct md_filesystem *fs, int base, const struct md_fs_anch
     if (resume) {
         if (!resume->lookup) return -EINVAL;
         int ready=md_view_walk_ready(resume);
-        if (!ready) return -EINPROGRESS;
+        if (!ready) return MD_OPERATION_PENDING;
         int completed=resume->lookup->complete(resume->lookup);
-        if (completed==-EINPROGRESS) return completed;
+        if (completed==MD_OPERATION_PENDING) return completed;
         current=resume->current; resume->current.fd=-1;
         view=resume->view; mount=resume->mount; next_mount=resume->next_mount;
         boundary_view=resume->boundary_view; boundary_mount=resume->boundary_mount;
@@ -403,7 +403,7 @@ static int walk_path(struct md_filesystem *fs, int base, const struct md_fs_anch
                 if (!r) r=component(&walk,view,mount,&current,name,todo,0,&next);
             }
         }
-        if (r==-EINPROGRESS && lookup && pending) {
+        if (r==MD_OPERATION_PENDING && lookup && pending) {
             r=walk_leave(&walk,0);
             struct md_fs_anchor *pins[3]={0};
             if (!r) r=md_view_anchor_pin(fs,view,mount,current.fd,&current.identity,&pins[0]);
@@ -420,7 +420,7 @@ static int walk_path(struct md_filesystem *fs, int base, const struct md_fs_anch
                 p->boundary_view=boundary_view; p->boundary_mount=boundary_mount; p->boundary=boundary;
                 p->follow=follow; p->missing=missing; p->resolve=resolve; p->links=links;
                 p->trailing=trailing; p->last=last; strcpy(p->todo,todo); strcpy(p->name,name);
-                *pending=p; return -EINPROGRESS;
+                *pending=p; return MD_OPERATION_PENDING;
             }
             for (unsigned i=0;i<3;++i) md_fs_anchor_release(pins[i]);
             lookup->destroy(lookup); lookup=NULL;

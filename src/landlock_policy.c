@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "landlock_policy.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -128,8 +129,8 @@ int md_landlock_collect(const struct md_landlock_policy *p,
 uint64_t md_landlock_open_access(int flags,mode_t kind) {
     if (flags&O_PATH) return 0;
     if (S_ISDIR(kind)) return MD_LL_READ_DIR;
-    return ((flags&O_ACCMODE)!=O_WRONLY ? MD_LL_READ_FILE : 0)
-        | ((flags&O_ACCMODE)!=O_RDONLY ? MD_LL_WRITE_FILE : 0);
+    return ((flags&MD_O_ACCMODE)!=O_WRONLY ? MD_LL_READ_FILE : 0)
+        | ((flags&MD_O_ACCMODE)!=O_RDONLY ? MD_LL_WRITE_FILE : 0);
 }
 uint64_t md_landlock_make_access(mode_t kind) {
     switch (kind&S_IFMT) {

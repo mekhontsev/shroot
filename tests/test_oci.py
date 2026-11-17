@@ -1187,7 +1187,7 @@ sys.stdin.read()
             query = "SELECT mode,uid,gid FROM objects WHERE kind=32768 ORDER BY mode,uid,gid"
             self.assertEqual(original.execute(query).fetchall(), copy.execute(query).fetchall())
 
-    def test_restore_rejects_private_native_metadata(self):
+    def test_restore_separates_guest_and_private_native_metadata(self):
         header = encoded({'format': 1, 'guestUsers': 1, 'imageConfig': {}})
         archive = self.root / 'private.tar'
         archive.write_bytes(tar([
@@ -1195,9 +1195,18 @@ sys.stdin.read()
             ('rootfs/file', 'file', b'body', 0o644, 0, 0,
              {'shroot.backup.mode': (0o644).to_bytes(2, 'little'), 'user.shroot.metadata': b'forged'}),
         ]))
-        result = self.command('restore', archive, self.destination, success=False)
-        self.assertIn(os.strerror(errno.EPERM), result.stderr)
-        self.assertFalse(self.destination.exists())
+        self.command('restore', archive, self.destination)
+        body = self.body('file')
+        self.assertEqual(body.read_bytes(), b'body')
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.getxattr.restype = ctypes.c_ssize_t
+        self.assertEqual(libc.getxattr(os.fsencode(body), b'user.shroot.metadata', None, 0), -1)
+        self.assertEqual(ctypes.get_errno(), errno.ENODATA)
+        with database(self.destination / 'namespace.db') as db:
+            self.assertEqual(db.execute('SELECT mode,uid,gid FROM objects WHERE kind=32768').fetchall(),
+                             [(0o644, 0, 0)])
+            self.assertEqual(db.execute('SELECT name,value FROM inode_xattrs').fetchall(),
+                             [('user.shroot.metadata', b'forged')])
         self.assertFalse(list(self.root.glob('.md-image-*')))
 
     def test_rootfs_archive_preserves_whiteout_names(self):

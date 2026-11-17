@@ -44,10 +44,10 @@ int md_fs_mqueue_operation(struct md_filesystem *fs,struct md_mount_namespace *v
     }
     case MD_FS_OPEN: case MD_FS_REOPEN: {
         if (fd<0) { r=(q->flags&O_CREAT) ? -EOPNOTSUPP : -ENOENT; break; }
-        if (q->flags&~(O_CLOEXEC|O_DIRECTORY|O_PATH|O_NOFOLLOW|O_NONBLOCK|O_NOCTTY|MD_O_LARGEFILE|O_ACCMODE|O_CREAT|O_EXCL|O_TRUNC)) {
+        if (q->flags&~(O_CLOEXEC|O_DIRECTORY|O_PATH|O_NOFOLLOW|O_NONBLOCK|O_NOCTTY|MD_O_LARGEFILE|MD_O_ACCMODE|O_CREAT|O_EXCL|O_TRUNC)) {
             r=-EOPNOTSUPP; break;
         }
-        if (!(q->flags&O_PATH) && (q->flags&(O_ACCMODE|O_CREAT|O_TRUNC))) { r=-EISDIR; break; }
+        if (!(q->flags&O_PATH) && (q->flags&(MD_O_ACCMODE|O_CREAT|O_TRUNC))) { r=-EISDIR; break; }
         struct stat st; r=md_mqueue_stat(queues,fd,&st);
         if (!r && !(q->flags&O_PATH)) r=md_file_permissions(&st,R_OK,id);
         if (!r) r=md_reopen_file(fd,(int)q->flags|O_CLOEXEC,&out->open_completion);

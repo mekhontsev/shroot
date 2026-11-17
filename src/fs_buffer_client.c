@@ -1,3 +1,4 @@
+#include "socket_abi.h"
 #include "fs_buffer.h"
 #include "adapter_buffer.h"
 #include "fs_wire.h"
@@ -245,21 +246,21 @@ long md_fs_buffer_inspect(const int *indices, unsigned count, struct md_received
 static long publish_mapped(struct md_fs_buffer_frame *frame, unsigned count, const unsigned char *selectors,
         void *control, size_t capacity, unsigned flags, int *out_flags, size_t *used) {
     struct md_fd_receipt *receipt=(void *)frame->receipt;
-    size_t fit=capacity>CMSG_LEN(0) ? (capacity-CMSG_LEN(0))/sizeof(int) : 0;
+    size_t fit=capacity>MD_CMSG_LEN(0) ? (capacity-MD_CMSG_LEN(0))/sizeof(int) : 0;
     unsigned writable=0;
     int numbers[MD_FD_RECEIPT_MAX];
     unsigned candidate=fit<count ? (unsigned)fit : count;
-    void *words=(char *)control+CMSG_LEN(0);
+    void *words=(char *)control+MD_CMSG_LEN(0);
     /* Match static partial-control faults without changing unused output. The
      * shared receipt, never preflight bytes, owns the installed prefix even if
      * another thread remaps the destination or the caller dies during copying. */
     if (!md_write_memory(words,words,candidate*sizeof(int))) writable=candidate;
     while (writable<candidate) {
-        void *slot=(char *)control+CMSG_LEN(0)+writable*sizeof(int);
+        void *slot=(char *)control+MD_CMSG_LEN(0)+writable*sizeof(int);
         if (md_write_memory(slot,slot,sizeof(int))) break;
         ++writable;
     }
-    receipt->message.msg_controllen=writable ? CMSG_LEN(writable*sizeof(int)) : 0;
+    receipt->message.msg_controllen=writable ? MD_CMSG_LEN(writable*sizeof(int)) : 0;
     long received=RAW3(recvmsg,frame->receive.number,&receipt->message,MSG_DONTWAIT|(flags&MSG_CMSG_CLOEXEC));
     if (received<0) return received;
     int delivered=md_fd_receipt_read(receipt,count,numbers);
@@ -269,12 +270,12 @@ static long publish_mapped(struct md_fs_buffer_frame *frame, unsigned count, con
         if (selectors[i]) error=md_fd_filter_arm_mask(selectors[i],numbers[i]);
     *used=0;
     if (delivered && !error) {
-        struct cmsghdr h={.cmsg_len=CMSG_LEN((unsigned)delivered*sizeof(int)),.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
-        if (!md_write_memory((char *)control+CMSG_LEN(0),numbers,(unsigned)delivered*sizeof(int))
-                && !md_write_memory((char *)control+offsetof(struct cmsghdr,cmsg_level),&h.cmsg_level,sizeof(h.cmsg_level))
-                && !md_write_memory((char *)control+offsetof(struct cmsghdr,cmsg_type),&h.cmsg_type,sizeof(h.cmsg_type))
+        struct md_cmsghdr h={.cmsg_len=MD_CMSG_LEN((unsigned)delivered*sizeof(int)),.cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
+        if (!md_write_memory((char *)control+MD_CMSG_LEN(0),numbers,(unsigned)delivered*sizeof(int))
+                && !md_write_memory((char *)control+offsetof(struct md_cmsghdr,cmsg_level),&h.cmsg_level,sizeof(h.cmsg_level))
+                && !md_write_memory((char *)control+offsetof(struct md_cmsghdr,cmsg_type),&h.cmsg_type,sizeof(h.cmsg_type))
                 && !md_write_memory(control,&h.cmsg_len,sizeof(h.cmsg_len))) {
-            size_t n=CMSG_SPACE((unsigned)delivered*sizeof(int)); *used=n<capacity ? n : capacity;
+            size_t n=MD_CMSG_SPACE((unsigned)delivered*sizeof(int)); *used=n<capacity ? n : capacity;
         }
     }
     if ((unsigned)delivered<count) *out_flags|=MSG_CTRUNC;
@@ -311,7 +312,7 @@ long md_fs_buffer_publish(enum md_received_source source, const int *indices, co
     if (!result && has_selectors) {
         struct rlimit limit;
         result=RAW4(prlimit64,0,RLIMIT_NOFILE,NULL,&limit);
-        size_t fit=capacity>CMSG_LEN(0) ? (capacity-CMSG_LEN(0))/sizeof(int) : 0;
+        size_t fit=capacity>MD_CMSG_LEN(0) ? (capacity-MD_CMSG_LEN(0))/sizeof(int) : 0;
         unsigned next=0;
         for (unsigned fd=0;!result && next<count && next<fit && fd<limit.rlim_cur && fd<INT_MAX;++fd) {
             long occupied=RAW2(fcntl,fd,F_GETFD);
@@ -322,7 +323,7 @@ long md_fs_buffer_publish(enum md_received_source source, const int *indices, co
         }
     }
     struct iovec vector={&frame->receive.token,sizeof(frame->receive.token)};
-    struct msghdr message={.msg_iov=&vector,.msg_iovlen=1,.msg_control=control,.msg_controllen=capacity};
+    struct md_msghdr message={.msg_iov=&vector,.msg_iovlen=1,.msg_control=control,.msg_controllen=capacity};
     if (!result) result=frame->receive.mapped
         ? publish_mapped(frame,count,selectors,control,capacity,flags,out_flags,used)
         : RAW3(recvmsg,frame->receive.number,&message,MSG_DONTWAIT|(flags&MSG_CMSG_CLOEXEC));

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "mapping_reader.h"
 #include "interception_memory.h"
 #include "svc_registry.h"
@@ -628,7 +629,7 @@ int md_memory_mapping_backing(struct md_interception_memory *s, struct md_mappin
     if (!S_ISREG(st.st_mode)) return 0;
     int flags=fcntl(fd,F_GETFL);
     if (flags<0) return -errno;
-    if ((flags&O_PATH) || (flags&O_ACCMODE)==O_WRONLY) return 0;
+    if ((flags&O_PATH) || (flags&MD_O_ACCMODE)==O_WRONLY) return 0;
     error=backing_reuse(s,c,&st,offset);
     if (error) return error<0 ? error : 0;
     /* Backings serve positional file reads/mappings only, never application

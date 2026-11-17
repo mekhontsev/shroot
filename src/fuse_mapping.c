@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "fuse_mapping.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -48,8 +49,8 @@ int md_fuse_mapping_publish(struct md_fuse_mapping **owner,int directory,int ima
         m->reader=m->writer=-1;
         /* Like mount contents, this needs an independently opened read-only
          * description. Shell policy can forbid reopening memfd through proc. */
-        m->writer=openat(directory,".",O_TMPFILE|O_RDWR|O_CLOEXEC,0700);
-        if (m->writer<0) error=-errno;
+        m->writer=(int)md_host_temporary(directory,".",0700);
+        if (m->writer<0) error=m->writer;
         if (!error) {
             char path[64]; snprintf(path,sizeof(path),"/proc/self/fd/%d",m->writer);
             m->reader=open(path,O_RDONLY|O_CLOEXEC);

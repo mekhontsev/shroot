@@ -2,6 +2,7 @@
 #include "guest_debugger.h"
 #include "pid_calls.h"
 #include "task_pending.h"
+#include "resource_abi.h"
 #include <elf.h>
 #include <errno.h>
 #include <stdint.h>
@@ -26,7 +27,7 @@ struct inferior {
     pid_t pid, owner, group, number, exec_former;
     uid_t uid;
     unsigned long options, message;
-    uint64_t sequence;
+    uint64_t sequence, syscall_marker;
     int stopped, status, step, terminal, real_child;
     int seized, pending, syscall_mode, syscall_stop;
     struct ptrace_syscall_info syscall;
@@ -172,7 +173,10 @@ static int wait_result(struct md_debugger *d, pid_t owner,const struct seccomp_d
         error=call->args[1] ? transfer(owner,call->args[1],&chosen->status,sizeof(int),1) : 0;
         usage=call->args[3];
     }
-    if (!error && usage) error=transfer(owner,usage,&chosen->usage,sizeof(chosen->usage),1);
+    if (!error && usage) {
+        struct md_rusage result=md_rusage_kernel(&chosen->usage);
+        error=transfer(owner,usage,&result,sizeof(result),1);
+    }
     if (!error && !(call->nr==SYS_waitid && (wait_options(call)&WNOWAIT))) {
         chosen->sequence=0;
         if (chosen->terminal) {
@@ -290,9 +294,10 @@ int md_debugger_newborn(struct md_debugger *d, pid_t pid) {
 }
 int md_debugger_defer_stop(struct md_debugger *d, pid_t pid, const siginfo_t *info) {
     struct inferior *p=find(d,pid);
-    if (!p || p->terminal || info->si_signo!=SIGSTOP) return 0;
-    /* SIGSTOP cannot be masked during an adapter operation. Retain its first
-     * delivery like a pending standard signal, without stopping resource owners. */
+    if (!p || p->terminal || info->si_signo<=0 || info->si_signo>=NSIG || info->si_signo==SIGKILL) return 0;
+    /* Retain delivery until the adapter restores its context and publishes
+     * any preceding syscall exit. SIGSTOP also uses this queue while an
+     * uninterruptible resource owner finishes. */
     if (!p->deferred_stop.si_signo) p->deferred_stop=*info;
     return 1;
 }
@@ -306,7 +311,7 @@ int md_debugger_boundary(struct md_debugger *d, pid_t pid) {
     if (!p->deferred_stop.si_signo) return 0;
     siginfo_t info=p->deferred_stop;
     p->deferred_stop=(siginfo_t){0};
-    return md_debugger_stop(d,pid,(SIGSTOP<<8)|0x7f,&info,0);
+    return md_debugger_stop(d,pid,(info.si_signo<<8)|0x7f,&info,0);
 }
 int md_debugger_syscall_mode(struct md_debugger *d, pid_t pid) {
     struct inferior *p=find(d,pid);
@@ -321,11 +326,14 @@ int md_debugger_syscall(struct md_debugger *d, pid_t pid, const struct user_pt_r
     if (!p || !p->syscall_mode || (!entry && p->syscall_mode==PTRACE_SYSEMU)) return 0;
     int stopped=md_debugger_stop(d,pid,((SIGTRAP|(p->options&PTRACE_O_TRACESYSGOOD ? 0x80 : 0))<<8)|0x7f,NULL,0);
     p->syscall_stop=entry ? 1 : 2;
+    p->syscall_marker=entry ? 0 : 1;
     p->syscall=(struct ptrace_syscall_info){.op=!(p->options&PTRACE_O_TRACESYSGOOD) ? PTRACE_SYSCALL_INFO_NONE
         : entry ? PTRACE_SYSCALL_INFO_ENTRY : PTRACE_SYSCALL_INFO_EXIT,
         .arch=AUDIT_ARCH_AARCH64,.instruction_pointer=r->pc,.stack_pointer=r->sp};
     if (entry) {
-        p->syscall.entry.nr=r->regs[8];
+        /* ARM64 records the signed syscall number from w8, independently of
+         * the full x8 value retained in the application's register set. */
+        p->syscall.entry.nr=(uint64_t)(int64_t)(int32_t)r->regs[8];
         for (unsigned i=0;i<6;i++) p->syscall.entry.args[i]=r->regs[i];
     } else {
         p->syscall.exit.rval=(int64_t)r->regs[0];
@@ -351,10 +359,13 @@ void md_debugger_exit(struct md_debugger *d, pid_t pid, int status) {
         if ((p->pid==pid && !p->terminal) || p->owner==pid) {
             *at=p->next;
             if (p->pid==pid) owner=p->owner;
-            else if (!p->terminal && (p->options & PTRACE_O_EXITKILL)) kill(p->pid,SIGKILL);
-            else {
+            else if (!p->terminal) {
+                if (p->options & PTRACE_O_EXITKILL) kill(p->pid,SIGKILL);
+                /* The real ptracer survives the guest tracer. Release its
+                 * stop even after EXITKILL: an exit-event stop cannot die
+                 * until its ptracer resumes it. */
                 d->host.options(p->pid,0);
-                if (p->stopped) d->host.resume(p->pid,0,&p->origin);
+                if (p->stopped) d->host.resume(p->pid,0,&p->origin,0);
             }
             if (p->terminal && d->host.reaped) d->host.reaped(pid,p->pid,0);
             free(p);
@@ -369,8 +380,10 @@ void md_debugger_exit(struct md_debugger *d, pid_t pid, int status) {
         } else waiting=&w->next;
     }
     if (notify) wake(d,notify);
-    if (owner) wake(d,owner);
-    if (parent && parent!=owner && parent!=notify) wake(d,parent);
+    /* Real children already publish a kernel SIGCHLD, respecting SIG_IGN and
+     * SA_NOCLDWAIT. Only the synthetic tracer relationship needs a notice. */
+    if (owner) wake_waiters(d,owner);
+    if (parent && parent!=owner && parent!=notify) wake_waiters(d,parent);
 }
 void md_debugger_rekey(struct md_debugger *d, pid_t old, pid_t pid) {
     struct inferior *source=find(d,old);
@@ -397,6 +410,28 @@ static unsigned long supported_options(const struct md_debugger *d) {
         |PTRACE_O_TRACEEXEC|PTRACE_O_TRACEVFORKDONE|PTRACE_O_TRACEEXIT|PTRACE_O_EXITKILL
         |(d->host.seccomp_events ? PTRACE_O_TRACESECCOMP : 0);
 }
+static void syscall_registers_changed(struct inferior *p,uintptr_t note,const void *bytes,size_t size) {
+    struct ptrace_syscall_info *info=&p->syscall;
+    int entry=info->op==PTRACE_SYSCALL_INFO_ENTRY || info->op==PTRACE_SYSCALL_INFO_SECCOMP;
+    if (note==NT_ARM_SYSTEM_CALL && size>=sizeof(int) && entry) {
+        int number; memcpy(&number,bytes,sizeof(number));
+        info->entry.nr=(uint64_t)(int64_t)number;
+    } else if (note==NT_PRSTATUS && info->op!=PTRACE_SYSCALL_INFO_NONE) {
+        /* orig_x0 and the latched syscall number are independent of x0/x8.
+         * Other fields reflect successful regset writes, including prefixes. */
+        if (size>=offsetof(struct user_pt_regs,pc)+sizeof(uint64_t))
+            memcpy(&info->instruction_pointer,(const char *)bytes+offsetof(struct user_pt_regs,pc),sizeof(uint64_t));
+        if (size>=offsetof(struct user_pt_regs,sp)+sizeof(uint64_t))
+            memcpy(&info->stack_pointer,(const char *)bytes+offsetof(struct user_pt_regs,sp),sizeof(uint64_t));
+        if (entry) {
+            for (unsigned i=1;i<6;++i) if (size>=(i+1)*sizeof(uint64_t))
+                memcpy(&info->entry.args[i],(const char *)bytes+i*sizeof(uint64_t),sizeof(uint64_t));
+        } else if (info->op==PTRACE_SYSCALL_INFO_EXIT && size>=sizeof(uint64_t)) {
+            memcpy(&info->exit.rval,bytes,sizeof(uint64_t));
+            info->exit.is_error=(uint64_t)info->exit.rval>=(uint64_t)-4095;
+        }
+    }
+}
 static long regset(struct md_debugger *d,pid_t caller, struct inferior *p, int op, uintptr_t note, uintptr_t address) {
     struct iovec guest;
     int r=transfer(caller,address,&guest,sizeof(guest),0);
@@ -408,18 +443,22 @@ static long regset(struct md_debugger *d,pid_t caller, struct inferior *p, int o
     if (op==PTRACE_SETREGSET) r=transfer(caller,(uintptr_t)guest.iov_base,bytes,guest.iov_len,0);
     size_t marker=offsetof(struct user_pt_regs,regs[7]);
     int syscall_registers=note==NT_PRSTATUS && p->syscall_stop && local.iov_len>=marker+sizeof(uint64_t);
-    /* ARM64 reserves x7 at syscall stops. It is a direction marker, not a
-     * writable application register, even when our physical stop is a trap. */
+    /* ARM64 saves the application x7 across a syscall stop. Regset writes
+     * change the visible marker until resume, not that saved application x7. */
+    uint64_t written_marker=0;
     if (!r && syscall_registers && op==PTRACE_SETREGSET) {
+        memcpy(&written_marker,(char *)bytes+marker,sizeof(written_marker));
         struct user_pt_regs current;
         struct iovec saved={&current,sizeof(current)};
         r=(int)request(d,PTRACE_GETREGSET,p->pid,NT_PRSTATUS,&saved);
         if (!r) memcpy((char *)bytes+marker,&current.regs[7],sizeof(uint64_t));
     }
     if (!r) r=(int)request(d,op,p->pid,note,&local);
+    if (!r && op==PTRACE_SETREGSET) syscall_registers_changed(p,note,bytes,local.iov_len);
+    if (!r && syscall_registers && op==PTRACE_SETREGSET
+            && local.iov_len>=marker+sizeof(uint64_t)) p->syscall_marker=written_marker;
     if (!r && syscall_registers && op==PTRACE_GETREGSET) {
-        uint64_t direction=p->syscall_stop-1;
-        memcpy((char *)bytes+marker,&direction,sizeof(direction));
+        memcpy((char *)bytes+marker,&p->syscall_marker,sizeof(p->syscall_marker));
     }
     if (!r && op==PTRACE_GETREGSET) r=transfer(caller,(uintptr_t)guest.iov_base,bytes,local.iov_len,1);
     guest.iov_len=local.iov_len;
@@ -563,6 +602,7 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
     case PTRACE_CONT: case PTRACE_SINGLESTEP: case PTRACE_SYSCALL: case PTRACE_SYSEMU: case PTRACE_DETACH: {
         if (data>64) return -EIO;
         struct md_signal_origin origin=p->origin;
+        int delivery_stop=!p->syscall_stop && !((unsigned)p->status>>16);
         p->origin.valid=0;
         p->stopped=0; p->sequence=0; p->step=op==PTRACE_SINGLESTEP;
         p->syscall_mode=op==PTRACE_SYSCALL || op==PTRACE_SYSEMU ? op : 0;
@@ -571,7 +611,7 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
             while (*at!=p) at=&(*at)->next;
             *at=p->next; free(p); d->host.options(pid,0);
         }
-        d->host.resume(pid,(int)data,&origin); return 0;
+        d->host.resume(pid,(int)data,&origin,delivery_stop); return 0;
     }
     default: return -EIO;
     }

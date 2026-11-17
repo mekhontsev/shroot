@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/magic.h>
+#include <linux/fs.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -242,13 +243,13 @@ static struct md_fs_result run_request(struct md_fs_context *context,struct md_f
     struct md_fs_continuation *pending=NULL;
     output.continuation=&pending;
     struct md_fs_result r; md_fs_context_execute(context,q,&r,&output);
-    for (unsigned step=0;r.error==-EINPROGRESS;++step) {
+    for (unsigned step=0;r.error==MD_OPERATION_PENDING;++step) {
         assert(step<64 && pending);
         if (!pending->ready(pending)) assert(serve(connection));
         assert(pending->ready(pending));
         struct md_fs_continuation *old=pending; pending=NULL;
         md_fs_context_resume(context,old,&r,&output);
-        assert(md_fs_continuation_pending(old,&pending,&r)==(r.error==-EINPROGRESS));
+        assert(md_fs_continuation_pending(old,&pending,&r)==(r.error==MD_OPERATION_PENDING));
     }
     assert(!pending); return r;
 }
@@ -270,8 +271,8 @@ static long io_buffer(struct md_proc_file *file,struct md_fs_context *context,st
     assert(md_proc_file_io_begin(&io,file,operation,0,0,0,size,NULL)==1);
     io.actor=(struct md_control_actor){.identity=&context->task.identity};
     long result=md_proc_file_io_execute(&io,&context->task.identity,NULL,data,capacity,4096);
-    assert(result==-EINPROGRESS && io.pending);
-    for (unsigned step=0; result==-EINPROGRESS; ++step) {
+    assert(result==MD_OPERATION_PENDING && io.pending);
+    for (unsigned step=0; result==MD_OPERATION_PENDING; ++step) {
         assert(step<8 && serve(connection));
         result=md_proc_file_io_execute(&io,&context->task.identity,NULL,data,capacity,4096);
     }
@@ -296,7 +297,7 @@ static void command(struct md_proc_file *file,struct md_fs_context *context,
     struct md_proc_file_io io={0};
     assert(md_proc_file_io_begin(&io,file,MD_PROC_FILE_COMMAND,0,value,command,0,NULL)==1);
     io.actor=(struct md_control_actor){.identity=&context->task.identity};
-    assert(md_proc_file_io_execute(&io,&context->task.identity,NULL,NULL,0,4096)==-EINPROGRESS);
+    assert(md_proc_file_io_execute(&io,&context->task.identity,NULL,NULL,0,4096)==MD_OPERATION_PENDING);
     assert(serve(connection));
     assert(md_proc_file_io_execute(&io,&context->task.identity,NULL,NULL,0,4096)==0);
     assert(!md_proc_file_io_offer(&io) && !md_proc_file_io_finish(&io,0));
@@ -306,13 +307,13 @@ static int mapping_flags(struct md_proc_file *file,struct md_fs_context *context
     struct md_control_file control=md_proc_file_control(file);
     struct md_control_actor actor={.identity=&context->task.identity};
     struct md_control_pending *pending=NULL;
-    assert(control.ops->mapping(control.context,&actor,PROT_READ,flags,&pending)==-EINPROGRESS && pending);
+    assert(control.ops->mapping(control.context,&actor,PROT_READ,flags,&pending)==MD_OPERATION_PENDING && pending);
     assert(pending->retry_preparation);
     long result;
     for (;;) {
         while (serve(connection)) {}
         result=pending->resume(pending,NULL,0);
-        if (result!=-EINPROGRESS) break;
+        if (result!=MD_OPERATION_PENDING) break;
     }
     pending->dispose(pending);
     if (result<0) fprintf(stderr,"FUSE mapping flags=%u: %ld\n",flags,result);
@@ -547,7 +548,7 @@ static long read_page(struct md_proc_file_io *op,struct md_fs_context *context,
         struct md_fuse_connection *connection,void *data,size_t capacity) {
     op->actor=(struct md_control_actor){.identity=&context->task.identity};
     long result=md_proc_file_io_execute(op,&context->task.identity,NULL,data,capacity,4096);
-    for (unsigned step=0;result==-EINPROGRESS;++step) {
+    for (unsigned step=0;result==MD_OPERATION_PENDING;++step) {
         assert(step<8 && serve(connection));
         result=md_proc_file_io_execute(op,&context->task.identity,NULL,data,capacity,4096);
     }
@@ -590,7 +591,7 @@ static void paged_reads(struct md_fs_context *context,struct md_fuse_connection 
             assert(!md_proc_file_io_more(&read) && !md_proc_file_io_cancel(&read));
         } else if (variant==6) {
             read.actor=(struct md_control_actor){.identity=&context->task.identity};
-            assert(md_proc_file_io_execute(&read,&context->task.identity,NULL,data,sizeof(data),4096)==-EINPROGRESS);
+            assert(md_proc_file_io_execute(&read,&context->task.identity,NULL,data,sizeof(data),4096)==MD_OPERATION_PENDING);
             assert(!md_proc_file_io_cancel(&read) && !serve(connection));
         } else {
             long count=read_page(&read,context,connection,data,sizeof(data));
@@ -635,10 +636,14 @@ static void paged_reads(struct md_fs_context *context,struct md_fuse_connection 
     r=run_request(context,connection,&q,(struct md_fs_output){.control=capture_file,.control_context=&file});
     open_flags=0;
     assert(!r.error && r.fd>=0); close(r.fd);
-    assert(md_proc_file_io_begin(&end,file,MD_PROC_FILE_READ,1,UINT64_C(1)<<32,0,1,NULL)==1);
-    before=read_requests; read_error=-EIO;
-    assert(read_page(&end,context,connection,data,sizeof(data))==-EIO && read_requests==before+1);
-    read_error=0; assert(!md_proc_file_io_cancel(&end));
+    const int read_errors[]={-EIO,-EINPROGRESS};
+    for (unsigned i=0;i<sizeof(read_errors)/sizeof(*read_errors);++i) {
+        end=(struct md_proc_file_io){0};
+        assert(md_proc_file_io_begin(&end,file,MD_PROC_FILE_READ,1,UINT64_C(1)<<32,0,1,NULL)==1);
+        before=read_requests; read_error=read_errors[i];
+        assert(read_page(&end,context,connection,data,sizeof(data))==read_error && read_requests==before+1);
+        read_error=0; assert(!md_proc_file_io_cancel(&end));
+    }
     md_proc_file_release(file); assert(serve(connection)==FUSE_RELEASE);
     memcpy(contents,saved,sizeof(contents)); content_size=saved_size;
     puts("PASS FUSE paged reads: one OFD turn, positional IO, EOF, error, copy fault and cancellation");
@@ -652,21 +657,22 @@ static void close_completion(struct md_fs_context *context,struct md_fuse_connec
     assert(!r.error && r.fd>=0); close(r.fd);
     struct md_control_actor actor={.identity=&context->task.identity};
     struct md_fd_object *object=md_proc_file_object(file);
-    for (unsigned i=0;i<2;++i) {
+    const int close_errors[]={0,-EIO,-EINPROGRESS};
+    for (unsigned i=0;i<sizeof(close_errors)/sizeof(*close_errors);++i) {
         struct md_control_pending *pending=NULL;
-        assert(object->type->close(object,&actor,&pending)==-EINPROGRESS && pending);
-        assert(pending->resume(pending,NULL,0)==-EINPROGRESS);
-        flush_error=i==1 ? -EIO : 0;
+        assert(object->type->close(object,&actor,&pending)==MD_OPERATION_PENDING && pending);
+        assert(pending->resume(pending,NULL,0)==MD_OPERATION_PENDING);
+        flush_error=close_errors[i];
         assert(serve(connection)==FUSE_FLUSH); flush_error=0;
-        assert(pending->resume(pending,NULL,0)==(i==1 ? -EIO : 0));
+        assert(pending->resume(pending,NULL,0)==close_errors[i]);
         pending->dispose(pending);
         assert(releases==start_release && !serve(connection));
     }
     struct md_control_pending *pending=NULL;
-    assert(object->type->close(object,&actor,&pending)==-EINPROGRESS);
+    assert(object->type->close(object,&actor,&pending)==MD_OPERATION_PENDING);
     pending->dispose(pending); /* Interrupted close keeps even an unread FLUSH. */
     flush_error=-ENOSYS;
-    assert(serve(connection)==FUSE_FLUSH && flushes==start_flush+3); flush_error=0;
+    assert(serve(connection)==FUSE_FLUSH && flushes==start_flush+4); flush_error=0;
     pending=NULL;
     assert(!object->type->close(object,&actor,&pending) && !pending && !serve(connection));
     md_proc_file_release(file);
@@ -699,35 +705,35 @@ static void append_ordering(struct md_fs_context *context,struct md_fuse_connect
     struct md_control_actor actor={.identity=&context->task.identity};
     assert(md_proc_file_io_begin(&first,files[0],MD_PROC_FILE_WRITE,0,0,0,6,NULL)==1);
     first.actor=actor;
-    assert(execute_io(&first,context)==-EINPROGRESS);
+    assert(execute_io(&first,context)==MD_OPERATION_PENDING);
     assert(serve(connection)==FUSE_GETATTR);
-    assert(execute_io(&first,context)==-EINPROGRESS);
+    assert(execute_io(&first,context)==MD_OPERATION_PENDING);
     defer_opcode=FUSE_WRITE;
     assert(serve(connection)==FUSE_WRITE && deferred_size);
     size_t after_first=content_size;
     assert(md_proc_file_io_begin(&second,files[1],MD_PROC_FILE_WRITE,0,0,0,6,NULL)==1);
     second.actor=actor;
-    assert(execute_io(&second,context)==-EINPROGRESS && !serve(connection));
+    assert(execute_io(&second,context)==MD_OPERATION_PENDING && !serve(connection));
     assert(!md_proc_file_io_cancel(&first));
     assert(!md_proc_file_io_begin(&same,files[0],MD_PROC_FILE_SEEK,0,0,SEEK_CUR,0,NULL));
     assert(md_resource_order_state(&same.turn)==MD_RESOURCE_ORDER_QUEUED);
-    assert(execute_io(&second,context)==-EINPROGRESS && !serve(connection));
+    assert(execute_io(&second,context)==MD_OPERATION_PENDING && !serve(connection));
     assert(md_fuse_connection_write(connection,deferred_reply,deferred_size)==(long)deferred_size);
     deferred_size=0;
     assert(md_resource_order_state(&same.turn)==MD_RESOURCE_ORDER_READY);
     assert(md_proc_file_io_execute(&same,NULL,NULL,NULL,0,4096)==(long)after_first);
     assert(!md_proc_file_io_finish(&same,0));
-    assert(execute_io(&second,context)==-EINPROGRESS);
+    assert(execute_io(&second,context)==MD_OPERATION_PENDING);
     assert(serve(connection)==FUSE_GETATTR);
-    assert(execute_io(&second,context)==-EINPROGRESS);
+    assert(execute_io(&second,context)==MD_OPERATION_PENDING);
     write_limit=3; assert(serve(connection)==FUSE_WRITE); write_limit=0;
     assert(execute_io(&second,context)==3);
     assert(!md_proc_file_io_offer(&second) && !md_proc_file_io_finish(&second,0));
     assert(content_size==after_first+3 && position(files[1])==(long)content_size);
     assert(md_proc_file_io_begin(&first,files[0],MD_PROC_FILE_WRITE,0,0,0,6,NULL)==1);
     first.actor=actor;
-    assert(execute_io(&first,context)==-EINPROGRESS && serve(connection)==FUSE_GETATTR);
-    assert(execute_io(&first,context)==-EINPROGRESS);
+    assert(execute_io(&first,context)==MD_OPERATION_PENDING && serve(connection)==FUSE_GETATTR);
+    assert(execute_io(&first,context)==MD_OPERATION_PENDING);
     write_error=-ENOSPC; assert(serve(connection)==FUSE_WRITE); write_error=0;
     assert(execute_io(&first,context)==-ENOSPC && !md_proc_file_io_finish(&first,0));
     assert(content_size==after_first+3);
@@ -912,15 +918,15 @@ static void name_leases(struct md_fs_context *context,struct md_fuse_connection 
     struct md_fs_continuation *pending=NULL;
     struct md_fs_output output={.continuation=&pending};
     md_fs_context_execute(context,&q,&r,&output);
-    assert(r.error==-EINPROGRESS && pending && serve(connection)==FUSE_LOOKUP && deferred_size);
+    assert(r.error==MD_OPERATION_PENDING && pending && serve(connection)==FUSE_LOOKUP && deferred_size);
     assert(md_fuse_connection_write(connection,&invalid,size)==(long)size);
     assert(md_fuse_connection_write(connection,deferred_reply,deferred_size)==(long)deferred_size);
     deferred_size=0;
-    while (r.error==-EINPROGRESS) {
+    while (r.error==MD_OPERATION_PENDING) {
         if (!pending->ready(pending)) assert(serve(connection));
         struct md_fs_continuation *old=pending; pending=NULL;
         md_fs_context_resume(context,old,&r,&output);
-        assert(md_fs_continuation_pending(old,&pending,&r)==(r.error==-EINPROGRESS));
+        assert(md_fs_continuation_pending(old,&pending,&r)==(r.error==MD_OPERATION_PENDING));
     }
     assert(!r.error);
     names=lookups;
@@ -987,7 +993,7 @@ static void attribute_leases(struct md_fs_context *context,struct md_fuse_connec
     struct md_fs_continuation *pending=NULL;
     struct md_fs_output output={.continuation=&pending};
     md_fs_context_execute(context,&q,&r,&output);
-    assert(r.error==-EINPROGRESS && pending && serve(connection)==FUSE_GETATTR && deferred_size);
+    assert(r.error==MD_OPERATION_PENDING && pending && serve(connection)==FUSE_GETATTR && deferred_size);
     assert(md_fuse_connection_write(connection,&invalid,sizeof(invalid))==sizeof(invalid));
     assert(md_fuse_connection_write(connection,deferred_reply,deferred_size)==(long)deferred_size);
     deferred_size=0;
@@ -1174,7 +1180,7 @@ void md_test_fuse_filesystem(struct md_filesystem *fs) {
     shared_mappings(&context,connection);
     q=(struct md_fs_request){.operation=MD_FS_STAT,.directory={-1,-1},.path={"/fuse/file",NULL}};
     struct md_fs_continuation *pending=NULL; output=(struct md_fs_output){.continuation=&pending};
-    md_fs_context_execute(&context,&q,&r,&output); assert(r.error==-EINPROGRESS && pending);
+    md_fs_context_execute(&context,&q,&r,&output); assert(r.error==MD_OPERATION_PENDING && pending);
     md_control_file_release(device);
     assert(pending->ready(pending));
     struct md_fs_continuation *old=pending; pending=NULL;

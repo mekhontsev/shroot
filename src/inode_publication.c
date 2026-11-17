@@ -3,6 +3,7 @@
 #include "inode_publication.h"
 #include "inode_native.h"
 #include "inode_leaf.h"
+#include "host_open.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fs.h>
@@ -110,7 +111,7 @@ static int publish(struct md_inode_store *s,const struct intent *p) {
     int r=a<0 ? a : b<0 ? b : (a && b) || (!a && !b) ? -ESTALE
         : !matches(a ? &source : &target,p) ? -ESTALE : 0;
     if (!r) r=watch_boundary(s,1);
-    if (!r && a && renameat2(directory,p->name,s->objects,p->object,RENAME_NOREPLACE)) r=-errno;
+    if (!r && a) r=(int)md_host_rename(directory,p->name,s->objects,p->object,RENAME_NOREPLACE);
     /* Promotion changes representation, not the visible parent contents. */
     if (!r && a && futimens(directory,times)) r=-errno;
     if (!r) r=mdi_sync(s,s->objects);

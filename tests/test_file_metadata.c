@@ -1,10 +1,23 @@
 #define _GNU_SOURCE
 #include "file_metadata.h"
 #include <assert.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 int main(void) {
+    struct { uint64_t before; struct md_statx value; uint64_t after; } wire={
+        .before=UINT64_C(0xabcdef0123456789),.after=UINT64_C(0x9876543210fedcba)};
+    struct stat host;
+    assert(!stat(".",&host));
+    assert(!syscall(SYS_statx,AT_FDCWD,".",0,STATX_BASIC_STATS|STATX_MNT_ID,&wire.value));
+    assert(wire.before==UINT64_C(0xabcdef0123456789) && wire.after==UINT64_C(0x9876543210fedcba));
+    assert(wire.value.stx_ino==host.st_ino && wire.value.stx_mode==host.st_mode);
+    assert(wire.value.stx_uid==host.st_uid && wire.value.stx_gid==host.st_gid);
+    assert(wire.value.stx_dev_major==major(host.st_dev) && wire.value.stx_dev_minor==minor(host.st_dev));
+    assert((wire.value.stx_mask&STATX_MNT_ID) && wire.value.stx_mnt_id);
     const struct stat original={.st_dev=makedev(511,70001),.st_ino=UINT64_C(0x123456789abcdef),
         .st_nlink=37,.st_rdev=makedev(123,456789),.st_size=INT64_C(0x123456789),
         .st_blocks=INT64_C(0xabcdef),.st_mode=S_IFCHR|06751,.st_uid=12345,.st_gid=67890,
@@ -17,7 +30,7 @@ int main(void) {
     md_fs_info_stat(&info,&restored);
     md_fs_stat_info(&restored,&roundtrip);
     assert(!memcmp(&info,&roundtrip,sizeof(info)));
-    struct statx native, logical;
+    struct md_statx native, logical;
     md_stat_statx(&original,&native);
     md_fs_info_statx(&info,&logical);
     assert(!memcmp(&native,&logical,sizeof(native)));
@@ -36,6 +49,6 @@ int main(void) {
     info.mount_id=UINT64_C(0x123456789);
     md_fs_info_statx(&info,&logical);
     assert(logical.stx_mask==(STATX_BASIC_STATS|STATX_MNT_ID) && logical.stx_mnt_id==info.mount_id);
-    puts("PASS file metadata: native/namespace stat and statx share complete fields");
+    puts("PASS file metadata: kernel ABI and native/namespace stat and statx share complete fields");
     return 0;
 }

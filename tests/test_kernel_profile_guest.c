@@ -2,7 +2,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/stat.h>
+#include "../src/statx_abi.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
@@ -26,7 +26,7 @@ int test_kernel_profile_guest(void) {
     int process=(int)syscall(SYS_pidfd_open,getpid(),0); assert(process>=0);
     int ns=ioctl(process,0xff09 /* PIDFD_GET_USER_NAMESPACE */,0); assert(ns>=0);
     close(ns); close(process);
-    struct statx metadata;
+    struct md_statx metadata;
     assert(!syscall(SYS_statx,AT_FDCWD,"/",0,STATX_BASIC_STATS|STATX_MNT_ID|0x4000,&metadata));
     assert((metadata.stx_mask&STATX_MNT_ID) && !(metadata.stx_mask&0x4000));
     /* Guest filters must remain independent of the host test filter. */

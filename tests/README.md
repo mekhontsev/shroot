@@ -43,7 +43,7 @@ applicable signal-checkpoint controls.
 | Raspberry Pi 5, Debian 13 | UID/GID 1000, no effective capabilities or inherited seccomp | 6.18.60+rpt-rpi-2712 / 16 KiB | Installed production API/CLI, independent CMake consumer, stripped archive audit, stock Alpine 3.23.8 with `apk update`, Debian trixie with `dpkg --audit` and `apt-get update`, stock k3s with network policies, Traefik ingress, PVC and server restart |
 | Android, Termux | UID/GID 10601, `untrusted_app_27`, no effective capabilities, inherited seccomp | 6.12.23-android16 / 4 KiB | Shared standalone native test set; not MagicDesk's Zygote identity or Shell |
 
-Android passes all 83 checks with Clang and bundled static dependencies. The Pi
+Android passes all 87 checks with Clang and bundled static dependencies. The Pi
 passes all 82 applicable checks with GCC, system SQLite and dynamic runtime
 helpers. The static-only installed-bundle test is not registered for that
 configuration. Stock Alpine and Debian execute successfully with both builds in
@@ -52,8 +52,9 @@ Base and lazy-SVC modes, sharing the same installed stores without copies.
 Linux package checks include logical guest root, shell execution, hardlinks and
 file IO; lazy-SVC completion is observed. This is not the full distribution
 GUI/container matrix or a performance comparison. The `linux-5.15` profile tests
-capability fallbacks on these hosts, not a real 5.15 kernel. A musl guest is not
-evidence of building the host runtime against musl.
+capability fallbacks on these hosts, not a real 5.15 kernel. Executing stock musl
+applications alone does not qualify a musl-hosted runtime; that build is covered
+separately below.
 
 ### Nested Runtime
 
@@ -65,12 +66,23 @@ and 24 launches. Both depths pass on the Android Termux host above. Nested
 distribution workloads, Linux/16 KiB placement and performance comparisons are
 not yet qualified.
 
+Alpine 3.23.8 running inside the Android-hosted runtime builds Shroot with GCC
+15.2 and its stock musl toolchain. The same 87 checks pass there, including the
+installed/relocated bundle, netlink descriptor admission, Base/lazy nested
+launches, debugger and signal controls. The outer runtime keeps the Termux UID;
+guest root is logical. This covers a musl-built supervisor and worker, not only
+musl applications running under an Android-built runtime.
+
 `--case debugger` exercises the same C scenarios used by
-`test_debugger_runtime.py`: seccomp TRACE and number changes, SYSEMU, pending
+`test_debugger_runtime.py`: syscall-info mutation, signal interruption of
+metadata/poll/epoll calls, seccomp TRACE and number changes, SYSEMU, pending
 interrupts, pidfd descriptor copies, foreign proc-FD reopen, service admission
 and nondestructive signal-queue inspection. `--native-control` also executes
-these scenarios directly on the host. CTest registers `nested_debugger` and
-`nested_nested`; these supplement, not replace, ordinary runtime and ELF tests.
+these scenarios directly on the host. `--case signals` reuses the signal-delivery
+and machine-context fixtures under Base and lazy entry, including ignored signals
+and interrupts during native signal-frame construction. CTest registers
+`nested_debugger`, `nested_signals` and `nested_nested`; these supplement, not
+replace, ordinary runtime and ELF tests.
 
 ## Fixture Transports
 

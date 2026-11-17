@@ -84,5 +84,5 @@ int md_fuse_image_advance(struct md_fuse_image *p,struct md_resource_wakeup *wak
         error=md_fuse_session_request(p->session,&p->identity,p->pid,FUSE_READ,p->node,
             &in,sizeof(in),p->requested,0,wake,&p->request);
     }
-    return error ? error : -EINPROGRESS;
+    return error ? error : MD_OPERATION_PENDING;
 }

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "lwip_context.h"
+#include "../src/host_random.h"
 #include "lwip/init.h"
 #include "lwip/ip_addr.h"
 #include <mbedtls/sha256.h>
@@ -74,7 +75,8 @@ MD_LWIP_MODULES(MD_LWIP_DECLARE)
 struct md_lwip_context *md_lwip_context_new(void) {
     struct md_lwip_context *c=calloc(1,sizeof(*c));
     if (!c) return NULL;
-    arc4random_buf(c->sequence_key,sizeof(c->sequence_key));
+    int error=md_random_bytes(c->sequence_key,sizeof(c->sequence_key));
+    if (error) { free(c); errno=-error; return NULL; }
 #define MD_LWIP_ALLOCATE(name,id) \
     c->modules[MD_LWIP_##id]=calloc(1,md_lwip_##name##_size()); \
     if (!c->modules[MD_LWIP_##id]) { md_lwip_context_free(c); return NULL; }

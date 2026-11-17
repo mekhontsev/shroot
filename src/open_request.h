@@ -11,7 +11,7 @@ static inline int md_open_creates(uint64_t flags) {
 
 /* Validation is independent of the transport that captured open_how. */
 static inline int md_open_how_validate(const struct open_how *how) {
-    const uint64_t allowed=O_ACCMODE|O_CREAT|O_EXCL|O_NOCTTY|O_TRUNC|O_APPEND|
+    const uint64_t allowed=MD_O_ACCMODE|O_CREAT|O_EXCL|O_NOCTTY|O_TRUNC|O_APPEND|
         O_NONBLOCK|O_DSYNC|O_ASYNC|O_DIRECT|MD_O_LARGEFILE|O_DIRECTORY|O_NOFOLLOW|
         O_NOATIME|O_CLOEXEC|O_SYNC|O_PATH|O_TMPFILE;
     if ((how->flags&~allowed) || (how->mode&~07777UL)) return -EINVAL;

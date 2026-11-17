@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 #include "task_receive.h"
 #include "socket_control.h"
+#include "socket_payload.h"
+#include "fd_receipt.h"
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
@@ -74,6 +76,21 @@ static void vectors(unsigned messages_count, unsigned rights_count, unsigned com
         messages_count,rights_count,completed,split,parcels);
 }
 void test_task_receive(int *budget) {
+    /* A musl host must not discard the upper half of guest kernel lengths. */
+    struct md_ipc_io_message io={0};
+    struct md_msghdr message={.msg_iovlen=UINT64_C(1)<<32};
+    assert(md_socket_payload_layout(&io,&message)==-EMSGSIZE);
+    struct md_cmsghdr header={.cmsg_len=(UINT64_C(1)<<32)+MD_CMSG_LEN(sizeof(int)),
+        .cmsg_level=SOL_SOCKET,.cmsg_type=SCM_RIGHTS};
+    message=(struct md_msghdr){.msg_control=&header,.msg_controllen=sizeof(header)};
+    struct md_task_receive_frame frame={.input={.messages=(uintptr_t)&message,.count=1,.socket=123},.result=1};
+    assert(md_task_receive_collect(&frame)==-EPROTO);
+    struct md_fd_receipt *receipt=calloc(1,md_fd_receipt_size(1));
+    assert(receipt && !md_fd_receipt_reset(receipt,1));
+    receipt->message.msg_controllen+=UINT64_C(1)<<32;
+    int fd;
+    assert(md_fd_receipt_read(receipt,1,&fd)==-EPROTO);
+    free(receipt);
     const unsigned counts[]={0,1,2,252,253};
     for (unsigned i=0;i<sizeof(counts)/sizeof(*counts);++i) {
         vectors(1,counts[i],1,0,budget);

@@ -444,7 +444,7 @@ static void process_backing(void) {
     struct md_task_registry *tasks=md_task_registry_create(); assert(tasks);
     struct md_task_resources resources={0};
     assert(!md_task_registry_publish(tasks,getpid(),getpid(),&id,&resources));
-    const enum md_proc_file_kind kinds[]={MD_PROC_FILE_STATUS,MD_PROC_FILE_STAT,MD_PROC_FILE_LIMITS};
+    const enum md_proc_file_kind kinds[]={MD_PROC_FILE_STATUS,MD_PROC_FILE_STAT,MD_PROC_FILE_LIMITS,MD_PROC_FILE_SYSCALL};
     for (unsigned i=0;i<sizeof(kinds)/sizeof(*kinds);++i) {
         char path[64]; snprintf(path,sizeof(path),"/proc/self/%s",md_proc_file_process_name(kinds[i]));
         int fd=open(path,O_RDONLY|O_CLOEXEC); assert(fd>=0);
@@ -474,13 +474,92 @@ static void process_backing(void) {
         assert(captured.st_uid==1234 && captured.st_gid==1235);
         assert(!prctl(PR_SET_DUMPABLE,dumpable));
         char prefix[17];
-        assert(md_proc_file_read_at(file,NULL,NULL,prefix,sizeof(prefix),1)==sizeof(prefix));
-        assert(!memcmp(prefix,text+1,sizeof(prefix)));
+        /* syscall can contain the kernel's short "running\n" snapshot. */
+        size_t remaining=(size_t)size-1;
+        size_t copied=remaining<sizeof(prefix) ? remaining : sizeof(prefix);
+        assert(md_proc_file_read_at(file,NULL,NULL,prefix,sizeof(prefix),1)==(long)copied);
+        assert(!memcmp(prefix,text+1,copied));
+        assert(!md_proc_file_read_at(file,NULL,NULL,prefix,sizeof(prefix),size));
+        if (kinds[i]==MD_PROC_FILE_STATUS) {
+            mode_t saved=umask(0027);
+            int event=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC); assert(event>=0);
+            struct md_resource_wakeup *wake=NULL; assert(!md_resource_wakeup_create(event,&wake));
+            struct md_proc_file_io io={0};
+            /* A fresh positional read updates native and logical fields before
+             * publication; subsequent chunks keep the same read snapshot. */
+            for (unsigned pass=0;pass<3;++pass) {
+                umask(pass ? 0071 : 0027);
+                id.no_new_privs=pass!=0;
+                int64_t offset=pass==1 ? 1 : 0;
+                assert(md_proc_file_io_begin(&io,file,MD_PROC_FILE_READ,1,offset,0,sizeof(text)-1,wake)==1);
+                assert(!md_proc_file_io_prepare(&io));
+                md_proc_file_process_state(file,&id,NULL,0,1,NULL);
+                size=md_proc_file_io_execute(&io,&id,NULL,text,sizeof(text)-1,4096);
+                assert(size>0); text[size]=0;
+                assert(strstr(text,pass==2 ? "Umask:\t0071\n" : "Umask:\t0027\n"));
+                assert(strstr(text,pass==2 ? "NoNewPrivs:\t1\n" : "NoNewPrivs:\t0\n"));
+                assert(!md_proc_file_io_offer(&io) && !md_proc_file_io_finish(&io,size));
+            }
+            id.no_new_privs=0; umask(saved);
+            md_resource_wakeup_release(wake); close(event);
+        } else if (kinds[i]==MD_PROC_FILE_SYSCALL) {
+            struct md_proc_file_io io={0};
+            struct md_proc_syscall_view view={.number=SYS_read,.args={3,0x1234,128},
+                .stack=0x5000,.instruction=0x6004};
+            assert(md_proc_file_io_begin(&io,file,MD_PROC_FILE_READ,1,0,0,sizeof(text)-1,NULL)==1);
+            assert(!md_proc_file_io_prepare(&io));
+            md_proc_file_process_state(file,&id,NULL,0,1,NULL);
+            md_proc_file_syscall_state(file,&view);
+            size=md_proc_file_io_execute(&io,&id,NULL,text,sizeof(text)-1,4096);
+            assert(size>0); text[size]=0;
+            assert(!strcmp(text,"63 0x3 0x1234 0x80 0x0 0x0 0x0 0x5000 0x6004\n"));
+            assert(!md_proc_file_io_offer(&io) && !md_proc_file_io_finish(&io,size));
+            assert(md_proc_file_io_begin(&io,file,MD_PROC_FILE_READ,1,0,0,sizeof(text)-1,NULL)==1);
+            assert(!md_proc_file_io_prepare(&io));
+            md_proc_file_process_state(file,&id,NULL,0,0,NULL);
+            assert(md_proc_file_io_execute(&io,&id,NULL,text,sizeof(text)-1,4096)==-EPERM);
+            assert(!md_proc_file_io_finish(&io,-EPERM));
+        }
         md_proc_file_release(file);
     }
     md_task_registry_destroy(tasks);
     md_identity_release(&id);
     assert(descriptors()==before);
+}
+static void process_retirement(void) {
+    struct md_identity id=md_identity_new(getuid(),getgid());
+    int gate[2]; assert(!pipe2(gate,O_CLOEXEC));
+    pid_t child=fork(); assert(child>=0);
+    if (!child) {
+        close(gate[1]);
+        char byte;
+        /* EVENT_WAIT: parent opens proc views before permitting task exit. */
+        assert(read(gate[0],&byte,1)==1); _exit(0);
+    }
+    close(gate[0]);
+    const enum md_proc_file_kind kinds[]={MD_PROC_FILE_STATUS,MD_PROC_FILE_STAT,MD_PROC_FILE_LIMITS};
+    struct md_proc_file *files[6];
+    for (unsigned i=0;i<3;++i) {
+        struct md_proc_file_node node; struct stat st;
+        assert(!md_proc_file_task_stat(child,&id,NULL,kinds[i],&node,&st));
+        char path[64]; snprintf(path,sizeof(path),"/proc/%d/%s",child,md_proc_file_process_name(kinds[i]));
+        int fd=open(path,O_RDONLY|O_CLOEXEC); assert(fd>=0);
+        for (unsigned pin=0;pin<2;++pin) {
+            struct md_proc_file *file=md_proc_file_open(NULL,kinds[i],&id,O_RDONLY); assert(file);
+            md_proc_file_node(file,node);
+            if (pin) assert(!md_proc_file_backing(file,fd,&st,0));
+            files[2*i+pin]=file;
+        }
+        close(fd);
+    }
+    assert(write(gate[1],"x",1)==1); close(gate[1]);
+    int status; assert(waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status));
+    for (unsigned i=0;i<6;++i) {
+        char data[4096];
+        assert(md_proc_file_read_at(files[i],NULL,NULL,data,sizeof(data),0)==-ESRCH);
+        md_proc_file_release(files[i]);
+    }
+    md_identity_release(&id);
 }
 static void process_directory_backing(void) {
     unsigned before=descriptors();
@@ -521,6 +600,7 @@ void test_user_namespace(void) {
     descriptor_lifetime();
     proc_files();
     process_backing();
+    process_retirement();
     const uint64_t caps=(UINT64_C(1)<<CAP_SETUID)|(UINT64_C(1)<<CAP_SETGID)|(UINT64_C(1)<<CAP_SETFCAP)
         |(UINT64_C(1)<<CAP_SYS_ADMIN);
     struct md_user_namespace *n=md_user_namespace_new(NULL,2000,2000,0); assert(n);

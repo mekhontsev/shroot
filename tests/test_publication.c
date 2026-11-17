@@ -25,10 +25,10 @@ static void checkpoint(enum md_inode_checkpoint point,void *context) {
     if (point==MD_PUBLICATION_INTENT && sync_after_intent) fail_sync=1;
     if ((int)point==kill_point) { kill(getpid(),SIGKILL); _exit(99); }
 }
-int __real_renameat2(int,const char *,int,const char *,unsigned);
-int __wrap_renameat2(int a,const char *b,int c,const char *d,unsigned flags) {
-    if (fail_move) { errno=ENOSPC; return -1; }
-    return __real_renameat2(a,b,c,d,flags);
+long __real_md_host_rename(int,const char *,int,const char *,unsigned);
+long __wrap_md_host_rename(int a,const char *b,int c,const char *d,unsigned flags) {
+    if (fail_move) return -ENOSPC;
+    return __real_md_host_rename(a,b,c,d,flags);
 }
 int __real_fsync(int);
 int __wrap_fsync(int fd) {

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "pty_events.h"
 #include "fs_anchor.h"
 #include "inode_watch.h"
@@ -62,7 +63,7 @@ static void destroy(struct md_fd_object *object) {
     if (d->master) {
         t->retired=1;
         emit(d,IN_DELETE_SELF);
-    } else if (d->published) emit(d,(d->flags&O_ACCMODE)==O_RDONLY ? IN_CLOSE_NOWRITE : IN_CLOSE_WRITE);
+    } else if (d->published) emit(d,(d->flags&MD_O_ACCMODE)==O_RDONLY ? IN_CLOSE_NOWRITE : IN_CLOSE_WRITE);
     if (!--t->references) {
         struct terminal **link=&p->buckets[bucket(t->device,t->inode)];
         while (*link!=t) link=&(*link)->next;

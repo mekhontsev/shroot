@@ -19,7 +19,7 @@
 #include <sys/stat.h>
 #include <sys/vfs.h>
 #include <sys/sysmacros.h>
-#include <linux/stat.h>
+#include "statx_abi.h"
 #include <linux/magic.h>
 #include <linux/nsfs.h>
 
@@ -98,7 +98,7 @@ long md_proc_control_link_metadata(const struct md_proc_path *ref,long nr,const 
         if (nr==SYS_fstat || nr==SYS_newfstatat)
             result=md_write_memory((void *)a[nr==SYS_fstat ? 1 : 2],&st,sizeof(st));
         else if (nr==SYS_statx) {
-            struct statx value;
+            struct md_statx value;
             if (query.nofollow && namespace && mount) metadata.value.mount_id=mount;
             md_fs_info_statx(&metadata.value,&value);
             result=md_write_memory((void *)a[4],&value,sizeof(value));

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "inode_custody.h"
 #include "inode_internal.h"
 #include "sealed_manifest.h"
@@ -46,7 +47,7 @@ void md_inode_custody_parcel_close(struct md_inode_custody_parcel *p) {
 static int directory(int fd, struct stat *st) {
     int flags=fcntl(fd,F_GETFL);
     if (flags<0) return -errno;
-    if ((flags&O_PATH) || (flags&O_ACCMODE)!=O_RDONLY) return -EPROTO;
+    if ((flags&O_PATH) || (flags&MD_O_ACCMODE)!=O_RDONLY) return -EPROTO;
     if (fstat(fd,st)) return -errno;
     return S_ISDIR(st->st_mode) ? 0 : -EPROTO;
 }

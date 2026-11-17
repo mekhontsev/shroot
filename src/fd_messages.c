@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "fd_messages.h"
 #include "fd_receipt.h"
 #include "ipc_scope.h"
@@ -148,7 +149,7 @@ int md_fd_messages_publish(struct md_fd_messages *s, struct md_fd_message *p,
     if (flags<0) return -errno;
     int fd_flags=fcntl(reader,F_GETFD);
     if (fd_flags<0) return -errno;
-    if (!S_ISFIFO(identity.st_mode) || (flags&O_ACCMODE)!=O_RDONLY
+    if (!S_ISFIFO(identity.st_mode) || (flags&MD_O_ACCMODE)!=O_RDONLY
             || !(flags&O_NONBLOCK) || !(fd_flags&FD_CLOEXEC)) return -EINVAL;
     int events=s->events;
     if (events<0 && (events=epoll_create1(EPOLL_CLOEXEC))<0) return -errno;

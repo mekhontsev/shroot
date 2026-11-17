@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "cgroup.h"
 #include "cgroup_program.h"
 #include "cgroup_resources.h"
@@ -1238,10 +1239,10 @@ int md_cgroup_open(struct md_cgroup_view *v,int fd,int flags,const struct md_ide
     struct group *g=lookup(v,&st,&file);
     int r=!g || g->removed ? -ENOENT : 0;
     if (!r && file==FILES) {
-        if (!(flags&O_PATH) && (flags&O_ACCMODE)!=O_RDONLY) r=-EISDIR;
+        if (!(flags&O_PATH) && (flags&MD_O_ACCMODE)!=O_RDONLY) r=-EISDIR;
         else if (!(flags&O_PATH)) r=md_file_permissions(&g->identity,R_OK,id);
     } else if (!r) {
-        int access=flags&O_ACCMODE;
+        int access=flags&MD_O_ACCMODE;
         if (flags&O_DIRECTORY) r=-ENOTDIR;
         else if (!(flags&O_PATH) && ((access!=O_RDONLY && !(control(file)->mode&0200))
                 || (access!=O_WRONLY && !(control(file)->mode&0444)))) r=-EACCES;

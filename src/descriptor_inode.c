@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "host_open.h"
 #include "descriptor_inode.h"
 #include "file_permissions.h"
 #include <errno.h>
@@ -157,8 +158,8 @@ int md_descriptor_inode_export(struct md_fd_object *object, int data_fd, int dir
     struct shared *page=MAP_FAILED; int fd=-1;
     error=pthread_mutex_lock(&node->lock); if (error) return -error;
     if (!node->shared) {
-        fd=openat(directory,".",O_TMPFILE|O_RDWR|O_CLOEXEC,0600);
-        if (fd<0) error=-errno;
+        fd=(int)md_host_temporary(directory,".",0600);
+        if (fd<0) error=fd;
         if (!error && ftruncate(fd,sizeof(*page))) error=-errno;
         if (!error) {
             page=mmap(NULL,sizeof(*page),PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);

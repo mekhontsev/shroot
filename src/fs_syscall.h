@@ -4,7 +4,7 @@
 #include "fs_xattr_call.h"
 #include "fs_syscall_strings.h"
 #include "linux_abi.h"
-#include <linux/stat.h>
+#include "statx_abi.h"
 #include <time.h>
 
 /* Scalar syscall decoding has no transport or task-memory ownership. Both

@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "sysfs_view.h"
 #include "provider_tree.h"
 #include "guest_identity.h"
@@ -411,7 +412,7 @@ int md_sysfs_node_open(struct md_sysfs *v,const struct md_sysfs_node *node,int f
     if ((flags&O_DIRECTORY) && !S_ISDIR(st->st_mode)) return -ENOTDIR;
     if (!(flags&O_PATH)) {
         if (S_ISLNK(st->st_mode)) return -ELOOP;
-        if (flags&(O_ACCMODE|O_TRUNC)) return S_ISDIR(st->st_mode) ? -EISDIR : -EOPNOTSUPP;
+        if (flags&(MD_O_ACCMODE|O_TRUNC)) return S_ISDIR(st->st_mode) ? -EISDIR : -EOPNOTSUPP;
         int r=md_file_permissions(st,R_OK,id);
         if (r) return r;
     }

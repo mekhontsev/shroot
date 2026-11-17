@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "linux_abi.h"
 #include "fd_native_pin.h"
 #include "fs_buffer_service.h"
 #include "fs_buffer.h"
@@ -691,12 +692,12 @@ static void run(struct md_fs_work *work, struct md_filesystem *fs, int error) {
     if (r->executable) {
         r->error=md_fs_command_prepare(&r->context,&r->request,&r->proc_image,&r->output->command,&r->images,
             &r->image_origin,&r->execfd_origin,&r->setid,&r->execution);
-        if (r->error==-EINPROGRESS) { r->error=0; r->work.await=continuation_ready; }
+        if (r->error==MD_OPERATION_PENDING) { r->error=0; r->work.await=continuation_ready; }
         return;
     }
     struct md_fs_response *reply=&r->output->reply;
     if (r->reopened && !(r->request.flags&O_PATH)) {
-        int mode=r->request.flags&O_ACCMODE;
+        int mode=r->request.flags&MD_O_ACCMODE;
         r->error=md_descriptor_inode_access(r->reopened,&r->context.task.identity,
             mode==O_RDONLY ? R_OK : mode==O_WRONLY ? W_OK : R_OK|W_OK);
         if (r->error) return;

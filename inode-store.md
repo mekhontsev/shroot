@@ -106,13 +106,16 @@ unlink, including stale listeners; existing connections survive unlink/rebind.
 Format 17 is the compatibility baseline. SQLite `application_id=0x53485254`
 identifies Shroot, `user_version=17` identifies the storage family, and the
 `properties` row `schema-revision` identifies the metadata revision (initially 1,
-currently 5). Revision 2 adds native-publication intents and large directory-cookie
+currently 6). Revision 2 adds native-publication intents and large directory-cookie
 mappings. Revision 3 replaces fixed overlay-attribute slots with named logical
 xattrs, preserving existing overlay values and tombstones. Guest `trusted.*`
 attributes use the same inode identity and guest capability checks; they do not
 require Android trusted-xattr permissions. Revision 4 adds stable directory-entry
 identities for exact descriptor paths, backfilled from the existing namespace.
 Revision 5 admits store-relative shared-source paths; absolute rows remain readable.
+Revision 6 retains logical xattrs of open-unlinked native files. A private random
+identity on the retained inode keys these attributes, independently of inode-number
+reuse; exclusive maintenance collects the records after all store custodians exit.
 These revisions do not move installed
 data or change image import identity.
 Admission validates those markers before current-schema namespace queries or
@@ -284,6 +287,12 @@ invalidating existing IO. Readonly mounts protect metadata, not device IO.
 
 ## Native Publication
 
+Private runtime backings use native `O_TMPFILE` first. Where the backing
+filesystem does not support it, `host_file` creates an exclusive random name in
+the caller's scratch directory and unlinks it before returning the descriptor.
+Access failures do not trigger fallback. This internal anonymous-file contract
+does not add guest `O_TMPFILE` or link-after-creation support to the inode provider.
+
 Eligible guest creation uses native leaves by default. The parent must be
 attached, local, have
 virtual permissions and no default ACL. The store probes user-xattr metadata on
@@ -333,10 +342,16 @@ including after rename/unlink. They never reopen the former guest pathname.
 Common records are read once into a bounded local buffer; larger ACL records
 use a heap buffer after a size query. Every read validates the complete record,
 and no native-leaf metadata or permission result is retained between operations.
-The shared xattr boundary hides/rejects the reserved `user.shroot.` namespace.
-Attribute copying for COW and overlay does not import a source's private record
-or erase a destination's record. Portable backups export logical ownership and
-permissions, omit private records and reject forged private records on restore.
+The shared xattr boundary hides physical `user.shroot.` markers. Same-named
+guest attributes have independent catalogue custody; writing one promotes a
+named native leaf. An already unlinked native leaf uses `detached_xattrs` keyed
+by a random private inode marker, without recreating a name or overwriting its
+physical metadata. This also lets
+a nested runtime use its own markers without either layer knowing the other.
+Attribute copying for COW and overlay does not import a source's physical record
+or erase a destination's record. Portable backups export logical ownership,
+permissions and guest attributes; restore cannot turn those attributes into
+host metadata.
 
 Promotion retains the same physical regular inode, including existing FDs,
 mappings, locks and data. The caller borrows the existing store gate and must

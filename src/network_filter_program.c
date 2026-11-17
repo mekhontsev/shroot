@@ -1,6 +1,7 @@
 #include "network_filter.h"
 #include "network_filter_compare.h"
 #include "network_ipset.h"
+#include "host_random.h"
 #include <errno.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter/nf_tables.h>
@@ -197,7 +198,10 @@ static int source_nat(const struct md_filter_expression *e,const unsigned char *
         if (low>high) return -EINVAL;
     }
     if (e->nat_flags) {
-        port=low+arc4random_uniform((unsigned)high-low+1);
+        uint32_t offset;
+        int error=md_random_bounded((unsigned)high-low+1,&offset);
+        if (error) return error;
+        port=low+offset;
         p->source_port=htons(port);
     }
     if (p->source_nat) return p->source_nat(p->route_context,p,low,high);
@@ -220,7 +224,12 @@ static int evaluate_chain(struct md_network_filter *f,const struct md_filter_cha
             case MD_FILTER_STATISTIC: {
                 if (p->unmediated) return -EBUSY;
                 struct md_filter_statistic *s=&e->statistic;
-                if (s->mode==XT_STATISTIC_MODE_RANDOM) match=(arc4random()&0x7fffffffU)<s->value;
+                if (s->mode==XT_STATISTIC_MODE_RANDOM) {
+                    uint32_t random;
+                    int error=md_random_u32(&random);
+                    if (error) return error;
+                    match=(random&0x7fffffffU)<s->value;
+                }
                 else {
                     s->count=s->count==s->value ? 0 : s->count+1;
                     match=s->count==0;
