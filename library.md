@@ -43,6 +43,28 @@ or an incomplete catalog reports an error. Reads and removal never create librar
 Names contain 1-64 ASCII letters, digits, `_`, `.` or `-`, starting
 with a letter or digit. Arguments and paths are never interpreted as shell code.
 
+## Use Termux:X11
+
+A guest launched from Termux can use its existing Termux:X11 server. For
+display `:1`, forward just the local X socket (both pathname and abstract
+forms). In this example `$auth` is a private directory containing only the
+server's `Xauthority` file, with a cookie valid for the guest's display name.
+Start the server with that file (`termux-x11 :1 -nolisten tcp -auth "$auth/Xauthority"`).
+
+```sh
+socket="$TMPDIR/.X11-unix/X1"
+shroot exec debian --env DISPLAY=:1 --env XAUTHORITY=/tmp/xauth/Xauthority \
+  --bind-ro-create "$auth" /tmp/xauth \
+  --socket-path /tmp/.X11-unix/X1 "$socket" \
+  --socket-abstract /tmp/.X11-unix/X1 "$socket" -- /usr/bin/xev
+```
+
+The guest does not need the rest of Termux's temporary directory or disabled X
+access control. To verify a running server, use
+`python tests/test_termux_x11.py debian --display 1 --authority "$auth/Xauthority"`.
+The test needs `xdpyinfo` and `xev` in the guest and `xdotool` in Termux. It
+checks that the window maps and receives a mouse click and a keystroke.
+
 ## Identity And Storage
 
 The library contains `names`, `instances`, `images`, `layers`, `cache` and `work`.
