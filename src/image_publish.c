@@ -61,13 +61,16 @@ int md_image_publish_recover(const char *directory) {
 }
 int md_image_publish_begin(const char *destination, struct md_image_publish *p) {
     memset(p, 0, sizeof(*p)); p->stage = p->parent = -1;
-    if (!destination || destination[0] != '/' || strlen(destination) >= PATH_MAX) return -EINVAL;
+    if (!destination || !*destination) return -EINVAL;
+    if (strlen(destination) >= PATH_MAX) return -ENAMETOOLONG;
     char directory[PATH_MAX]; strcpy(directory, destination);
-    char *name = strrchr(directory, '/');
-    if (!name[1] || !strcmp(name+1, ".") || !strcmp(name+1, "..") || strlen(name+1) > NAME_MAX) return -EINVAL;
-    strcpy(p->name, name+1);
-    if (name == directory) name[1] = 0; else *name = 0;
-    p->parent = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    char *slash = strrchr(directory, '/');
+    const char *leaf = slash ? slash + 1 : directory;
+    if (!*leaf || !strcmp(leaf, ".") || !strcmp(leaf, "..")) return -EINVAL;
+    if (strlen(leaf) > NAME_MAX) return -ENAMETOOLONG;
+    strcpy(p->name, leaf);
+    if (slash) *slash = 0;
+    p->parent = open(!slash ? "." : slash == directory ? "/" : directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (p->parent < 0) return -errno;
     struct stat st;
     /* EVENT_WAIT: another publisher finishes its staging handoff; operation

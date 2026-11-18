@@ -30,18 +30,64 @@ class LibraryTest(unittest.TestCase):
         archive_fixture(BUILD, self.archive)
         self.call("init")
 
-    def command(self, *args, code=0):
+    def command(self, *args, code=0, env=None, cwd=None, error=None):
         result = subprocess.run(self.cli + [str(arg) for arg in args], text=True,
-                                capture_output=True, timeout=30)
+                                capture_output=True, timeout=30, env=env, cwd=cwd)
         self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+        if error is not None:
+            self.assertIn(str(error), result.stderr)
         return result.stdout
 
     def call(self, *args, code=0):
-        return self.command("library", self.library, *args, code=code)
+        return self.command("--library", self.library, *args, code=code)
 
     def install(self, name):
-        self.call("install", "rootfs", self.archive, name)
+        self.call("install", self.archive, "--rootfs", "--name", name)
         return json.loads(self.call("resolve", name))
+
+    def test_cli_selects_default_without_touching_storage(self):
+        home = self.root / "home with spaces"
+        home.mkdir()
+        env = dict(os.environ, HOME=str(home), XDG_DATA_HOME="relative", PREFIX="/outer/termux")
+        expected = home / ".local/share/shroot"
+        # A packager-selected path is fixed. Never run a mutator on that location.
+        cache = BUILD / "CMakeCache.txt"
+        configured = next((line.partition("=")[2] for line in cache.read_text().splitlines()
+                           if line.startswith("SHROOT_DEFAULT_LIBRARY:")), "") if cache.exists() else ""
+        if configured:
+            self.assertEqual(self.command("--print-library", env=env).strip(), configured)
+            return
+        self.assertEqual(self.command("--print-library", env=env).strip(), str(expected))
+        self.assertEqual(json.loads(self.command("list", env=env)), [])
+        self.assertFalse((home / ".local").exists())
+        env["XDG_DATA_HOME"] = str(self.root / "data")
+        expected = self.root / "data/shroot"
+        self.assertEqual(self.command("--print-library", env=env).strip(), str(expected))
+        self.command("--library", expected, "list", env=env, code=1, error=expected)
+        self.assertFalse(expected.parent.exists())
+        (self.root / "work").mkdir()
+        def default(*args, **kwargs):
+            return self.command(*args, env=env, cwd=self.root, **kwargs)
+        default("install", self.archive, "--rootfs", "--name", "work")
+        default("exec", "work", "--", "/bin/client-guest", "exit42", code=42)
+        self.assertEqual(json.loads(default("--library", self.library, "list")), [])
+        self.assertEqual(json.loads(default("list"))[0]["name"], "work")
+        default("backup", "work", "copy.tar.zst")
+        default("remove", "work")
+        self.assertTrue((self.root / "work").is_dir())
+        default("restore", "copy.tar.zst", "--name", "work")
+        store = Path(json.loads(default("resolve", "work"))["store"])
+        default("exec", os.path.relpath(store, self.root), "--", "/bin/client-guest", "exit42", code=42)
+
+    def test_cli_invalid_locations_never_fall_back(self):
+        env = dict(os.environ, HOME="", XDG_DATA_HOME="")
+        self.assertEqual(json.loads(self.command("--library", self.library, "list", env=env)), [])
+        for bad in (self.archive, self.archive / "subdir", self.root / "dangling", self.root / "partial"):
+            if bad.name == "dangling":
+                bad.symlink_to(self.root / "absent")
+            if bad.name == "partial":
+                bad.mkdir()
+            self.command("--library", bad, "list", env=env, code=1, error=bad)
 
     def synthetic(self, name, sources=(), version=2):
         identity, key = str(uuid.uuid4()), str(uuid.uuid4())
@@ -86,7 +132,7 @@ class LibraryTest(unittest.TestCase):
         self.call("resolver", "first", "nameserver 192.0.2.1\n", "--replace")
         backup = self.root / "backup.tar.zst"
         self.call("backup", "first", backup)
-        self.call("restore", backup, "restored")
+        self.call("restore", backup, "--name", "restored")
         restored = json.loads(self.call("resolve", "restored"))
         self.assertEqual(restored["image"], "")
         self.assertNotEqual(first["id"], restored["id"])
@@ -95,8 +141,8 @@ class LibraryTest(unittest.TestCase):
     def test_local_oci_reuses_shared_layers(self):
         layout = self.root / "layout"
         write_layout([self.archive], layout)
-        self.call("install", "oci", layout, "a")
-        self.call("install", "oci", layout, "b")
+        self.call("install", layout, "--oci", "--name", "a")
+        self.call("install", layout, "--oci", "--name", "b")
         self.assertEqual(len(list((self.library / "layers").iterdir())), 1)
         self.call("remove", "a")
         self.call("prune")
@@ -122,7 +168,7 @@ class LibraryTest(unittest.TestCase):
                 source = layout / "index.json" if name == "index.json" else layout / "blobs/sha256" / descriptor["digest"][7:]
                 source.unlink()
                 os.mkfifo(source)
-                self.call("install", "oci", layout, "fifo", code=1)
+                self.call("install", layout, "--oci", "--name", "fifo", code=1)
         self.assertFalse(list((self.library / "names").iterdir()))
 
     def test_relocation_preserves_identity_and_relative_sources(self):
@@ -253,7 +299,7 @@ class LibraryTest(unittest.TestCase):
 
     def test_live_guest_store_and_catalog_cancellation(self):
         self.install("held")
-        command = self.cli + ["library", str(self.library), "exec", "held", "--", "/bin/client-guest", "hold"]
+        command = self.cli + ["--library", str(self.library), "exec", "held", "--", "/bin/client-guest", "hold"]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             with selectors.DefaultSelector() as selector:
@@ -274,11 +320,11 @@ class LibraryTest(unittest.TestCase):
     def test_nonregular_input_and_interrupted_install_cleanup(self):
         fifo = self.root / "fifo"
         os.mkfifo(fifo)
-        self.call("install", "rootfs", fifo, "blocked", code=1)
+        self.call("install", fifo, "--rootfs", "--name", "blocked", code=1)
         link = self.root / "link"
         link.symlink_to(self.archive)
-        self.call("install", "rootfs", link, "blocked", code=1)
-        self.call("install", "rootfs", self.archive, "blocked", "--resolver", "x" * 8193, code=1)
+        self.call("install", link, "--rootfs", "--name", "blocked", code=1)
+        self.call("install", self.archive, "--rootfs", "--name", "blocked", "--resolver", "x" * 8193, code=1)
         self.assertEqual(json.loads(self.call("list")), [])
         self.call("prune")
         self.assertFalse(list((self.library / "instances").iterdir()))

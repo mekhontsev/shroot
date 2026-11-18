@@ -333,6 +333,7 @@ int md_library_command(int argc,char **argv) {
     struct md_library lib;
     int locked=strcmp(operation,"list") && strcmp(operation,"resolve");
     r=open_library(argv[0],install_command || restore || !strcmp(operation,"init"),locked,&lib);
+    if (r) fprintf(stderr,"shroot: library %s: %s\n",argv[0],strerror(-r));
     if (!r && argc==2 && !strcmp(operation,"init")) { }
     else if (!r && install_command) r=install(&lib,argv[2],argv[3],argv[4],resolver,&trust);
     else if (!r && restore) r=install(&lib,"restore",argv[2],argv[3],NULL,NULL);

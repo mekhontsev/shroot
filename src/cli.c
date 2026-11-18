@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include "shroot.h"
+#include "cli_library.h"
 #include <errno.h>
 #include <limits.h>
 #include <poll.h>
@@ -11,7 +11,7 @@
 #include <sys/signalfd.h>
 #include <unistd.h>
 
-static int launch(shroot_store *store, shroot_library *library, const char *name,
+int cli_launch(shroot_store *store, shroot_library *library, const char *name,
         enum shroot_launch_kind kind, int argc, char **argv, shroot_job **out) {
     struct shroot_launch_options options = {.kind=kind};
     const char **env = calloc((size_t)argc + 1, sizeof(*env));
@@ -80,42 +80,9 @@ static int launch(shroot_store *store, shroot_library *library, const char *name
     if (!r) r = library ? shroot_environment_launch(library,name,&options,NULL,out) : shroot_launch(store, &options, NULL, out);
     free(env); free(dns); free(ports); free(subnets); free(gateways); free(binds); free(routes); free(owners); return r;
 }
-static int library_submit(shroot_context *context,int argc,char **argv,shroot_job **out) {
-    if (argc<2) return -EINVAL;
-    shroot_library *library=NULL;
-    int r=shroot_library_open(context,argv[0],&library);
-    if (r) return r;
-    const char *operation=argv[1];
-    r=-EINVAL;
-    if (argc==2 && !strcmp(operation,"init")) r=shroot_library_initialize(library,NULL,out);
-    else if (argc==2 && !strcmp(operation,"list")) r=shroot_library_list(library,NULL,out);
-    else if (argc==2 && !strcmp(operation,"prune")) r=shroot_library_prune(library,NULL,out);
-    else if (argc==3 && !strcmp(operation,"resolve")) r=shroot_environment_resolve(library,argv[2],NULL,out);
-    else if (argc==3 && !strcmp(operation,"remove")) r=shroot_environment_remove(library,argv[2],NULL,out);
-    else if (argc==4 && !strcmp(operation,"backup")) r=shroot_environment_backup(library,argv[2],argv[3],NULL,out);
-    else if (argc==4 && !strcmp(operation,"restore")) r=shroot_environment_restore(library,argv[2],argv[3],NULL,out);
-    else if (argc>=5 && !strcmp(operation,"install")) {
-        struct shroot_install_options options={.source=argv[3],.name=argv[4]};
-        const char *kinds[]={"rootfs","oci","registry"};
-        for (size_t i=0; i<3; ++i) if (!strcmp(argv[2],kinds[i])) { options.kind=(enum shroot_source_kind)i; r=0; break; }
-        for (int i=5; !r && i<argc; i+=2) {
-            const char **field=!strcmp(argv[i],"--resolver") ? &options.resolver
-                : !strcmp(argv[i],"--ca-file") ? &options.ca_file
-                : !strcmp(argv[i],"--ca-directory") ? &options.ca_directory : NULL;
-            if (!field || *field || i+1>=argc) r=-EINVAL;
-            else *field=argv[i+1];
-        }
-        if (!r) r=shroot_environment_install(library,&options,NULL,out);
-    } else if ((argc==4 || (argc==5 && !strcmp(argv[4],"--replace"))) && !strcmp(operation,"resolver"))
-        r=shroot_environment_resolver(library,argv[2],argv[3],argc==5,NULL,out);
-    else if (argc>=3 && (!strcmp(operation,"run") || !strcmp(operation,"exec") || !strcmp(operation,"login")))
-        r=launch(NULL,library,argv[2],!strcmp(operation,"run") ? SHROOT_RUN : !strcmp(operation,"exec") ? SHROOT_EXEC : SHROOT_LOGIN,argc-3,argv+3,out);
-    shroot_library_close(library); return r;
-}
 static int submit(shroot_context *context, int argc, char **argv, shroot_job **out) {
     if (!argc) return -EINVAL;
     const char *name = argv[0];
-    if (!strcmp(name,"library")) return library_submit(context,argc-1,argv+1,out);
     if (argc == 1 && !strcmp(name, "format")) return shroot_storage_format(context, NULL, out);
     if (argc == 1 && !strcmp(name, "import-version")) return shroot_import_version(context, NULL, out);
     if (argc == 2 && !strcmp(name, "recover-staging")) return shroot_recover_staging(context, argv[1], NULL, out);
@@ -156,7 +123,7 @@ static int submit(shroot_context *context, int argc, char **argv, shroot_job **o
     else if ((argc == 3 || (argc == 4 && !strcmp(argv[3], "--replace"))) && !strcmp(name, "resolver"))
         r = shroot_resolver(store, argv[2], argc == 4, NULL, out);
     else if (!strcmp(name, "run") || !strcmp(name, "exec") || !strcmp(name, "login"))
-        r = launch(store, NULL, NULL, !strcmp(name, "run") ? SHROOT_RUN : !strcmp(name, "exec") ? SHROOT_EXEC : SHROOT_LOGIN, argc-2, argv+2, out);
+        r = cli_launch(store, NULL, NULL, !strcmp(name, "run") ? SHROOT_RUN : !strcmp(name, "exec") ? SHROOT_EXEC : SHROOT_LOGIN, argc-2, argv+2, out);
     shroot_store_close(store); return r;
 }
 static int runtime_directory(char path[PATH_MAX]) {
@@ -174,12 +141,13 @@ static int runtime_directory(char path[PATH_MAX]) {
     strcat(path, "/../libexec/shroot"); return 0;
 }
 static void usage(void) {
-    puts("Usage: shroot [--runtime DIRECTORY] [--parent-pid PID] COMMAND [ARGS]\n"
-        "  library DIRECTORY init | list | prune | resolve NAME | remove NAME\n"
-        "  library DIRECTORY install rootfs|oci|registry SOURCE NAME [--resolver CONTENTS]\n"
+    puts("Usage: shroot [--library DIR] [--runtime DIR] [--parent-pid PID] COMMAND [ARGS]\n"
+        "  --print-library | init | list | prune | resolve NAME | remove NAME\n"
+        "  install SOURCE [--rootfs|--oci] --name NAME [--resolver CONTENTS]\n"
         "      [--ca-file FILE] [--ca-directory DIRECTORY] (registry only)\n"
-        "  library DIRECTORY backup NAME ARCHIVE | restore ARCHIVE NAME\n"
-        "  library DIRECTORY exec|run|login NAME [OPTIONS] [-- COMMAND...]\n"
+        "  backup NAME ARCHIVE | restore ARCHIVE --name NAME\n"
+        "  exec|run|login NAME [OPTIONS] [-- COMMAND...]\n"
+        "  A bare name selects an environment; use ./STORE or /path for a store.\n"
         "  rootfs ARCHIVE NEW_IMAGE | import OCI_LAYOUT NEW_IMAGE --preserve-ownership\n"
         "  create IMAGE NEW_INSTANCE | restore ARCHIVE NEW_INSTANCE\n"
         "  inspect STORE | prepare STORE | maintain STORE | remove STORE\n"
@@ -193,13 +161,14 @@ static void usage(void) {
 int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--version")) { puts(shroot_version()); return 0; }
     if (argc == 1 || (argc == 2 && !strcmp(argv[1], "--help"))) { usage(); return argc == 1 ? 2 : 0; }
-    char runtime[PATH_MAX]; const char *directory = NULL, *parent = NULL;
+    char runtime[PATH_MAX]; const char *directory = NULL, *parent = NULL, *library = NULL;
     int at = 1, r = 0;
     while (!r && at < argc) {
         const char **option = !strcmp(argv[at], "--runtime") ? &directory
-            : !strcmp(argv[at], "--parent-pid") ? &parent : NULL;
+            : !strcmp(argv[at], "--parent-pid") ? &parent
+            : !strcmp(argv[at], "--library") ? &library : NULL;
         if (!option) break;
-        if (*option || at + 1 >= argc) { r = -EINVAL; break; }
+        if (*option || at + 1 >= argc || !*argv[at+1]) { r = -EINVAL; break; }
         *option = argv[at+1]; at += 2;
     }
     if (!r && parent) {
@@ -209,6 +178,10 @@ int main(int argc, char **argv) {
         if (errno || !*parent || *end || pid <= 1 || pid > INT_MAX) r = -EINVAL;
         else if (prctl(PR_SET_PDEATHSIG, SIGTERM)) r = -errno;
         else if (getppid() != pid) r = -ECHILD;
+    }
+    if (!r && argc-at == 1 && !strcmp(argv[at], "--print-library")) {
+        char path[PATH_MAX];
+        if (library || !(r = cli_default_library(path))) { puts(library ? library : path); return 0; }
     }
     if (!r && !directory) { r = runtime_directory(runtime); directory = runtime; }
     shroot_context *context = NULL;
@@ -221,7 +194,9 @@ int main(int argc, char **argv) {
     int signal_fd = r ? -1 : signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
     if (!r && signal_fd < 0) r = -errno;
     shroot_job *job = NULL;
-    if (!r) r = submit(context, argc-at, argv+at, &job);
+    if (!r) r = library || cli_named_command(argc-at, argv+at)
+        ? cli_library_submit(context, library, argc-at, argv+at, &job)
+        : submit(context, argc-at, argv+at, &job);
     struct shroot_result result = {0};
     while (!r && job) {
         r = shroot_job_wait(job, 1, &result);

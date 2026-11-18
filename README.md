@@ -49,26 +49,28 @@ With a [built and installed bundle](#build), install an ARM64 environment from
 an OCI registry and open its shell:
 
 ```sh
-shroot library "$HOME/linux" install registry docker.io/library/debian:stable debian
-shroot library "$HOME/linux" login debian
+shroot install debian:stable --name debian
+shroot login debian
 ```
 
 Or import an ARM64 rootfs archive you already have:
 
 ```sh
-shroot library "$HOME/linux" install rootfs alpine-rootfs.tar.gz alpine
-shroot library "$HOME/linux" exec alpine -- /bin/sh -c 'id; uname -a'
+shroot install alpine-rootfs.tar.gz --rootfs --name alpine
+shroot exec alpine -- /bin/sh -c 'id; uname -a'
 ```
 
 List environments, back one up, or restore it under another name:
 
 ```sh
-shroot library "$HOME/linux" list
-shroot library "$HOME/linux" backup alpine alpine.tar.zst
-shroot library "$HOME/linux" restore alpine.tar.zst restored
+shroot list
+shroot backup alpine alpine.tar.zst
+shroot restore alpine.tar.zst --name restored
 ```
 
-The [library guide](library.md) covers registry access, DNS, removal and cleanup.
+`shroot --print-library` shows where environments live. To select another
+catalog for one command, use `shroot --library DIR list`. The
+[library guide](library.md) covers defaults, registry access, DNS and cleanup.
 Backups preserve guest metadata, ownership and hardlinks; see
 [images and storage](images.md) for formats and sharing rules.
 
@@ -157,6 +159,18 @@ cmake --install build --prefix "$HOME/.local" --component Shroot
 
 Ensure `$HOME/.local/bin` is on `PATH`. Android cross builds use the NDK CMake
 toolchain with `ANDROID_ABI=arm64-v8a` and `ANDROID_PLATFORM=android-34`.
+
+For a local ARM64 Termux package, use a separate build directory:
+
+```sh
+cmake -S . -B build/termux -G Ninja -C packaging/termux.cmake -DCMAKE_BUILD_TYPE=Release
+cmake --build build/termux -j 4
+cpack --config build/termux/CPackConfig.cmake -B build/packages
+```
+
+The package installs one `shroot` command and selects `$PREFIX/var/lib/shroot`
+at build time. Cross-packagers supply the target `TERMUX_PREFIX` and Android
+toolchain. The package does not contain or own any installed environments.
 
 Dependencies are pinned and linked statically by default. SQLite can instead
 come from the system or an embedding project's CMake target, subject to the

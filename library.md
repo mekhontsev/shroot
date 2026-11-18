@@ -1,31 +1,46 @@
 # Environment Libraries
 
-A library is an explicitly selected directory of named, independently writable
+A library is a directory of named, independently writable
 environments. The native image owner manages it; the CLI and `libshroot` use the
 same implementation. Names are local to that library, not global distributions.
 
+Without options, the standalone CLI uses the absolute `$XDG_DATA_HOME/shroot`,
+or `$HOME/.local/share/shroot` when XDG data home is unset, empty or relative.
+The Termux package selects its target `$PREFIX/var/lib/shroot` at build time;
+an inherited `PREFIX` does not redirect a Linux binary running inside a guest.
+Packagers can set an absolute `SHROOT_DEFAULT_LIBRARY` at CMake configuration.
+This is a CLI choice: callers of `libshroot` always supply their own path.
+
+`shroot --print-library` prints the selected directory without opening or
+creating it. `shroot --library DIR COMMAND` selects a different library for one
+invocation. A bare `work` in `login`, `exec`, `run`, `backup`, `remove` or
+`resolver` is always an environment name; `./work` and `/path/to/work`
+refer to a store directly. Selection never depends on what exists in the current directory.
+
 ```sh
-shroot library "$HOME/linux" install rootfs alpine-rootfs.tar.gz alpine
-shroot library "$HOME/linux" install registry docker.io/library/debian:stable debian
-shroot library "$HOME/linux" list
-shroot library "$HOME/linux" login alpine
-shroot library "$HOME/linux" exec alpine -- /bin/sh -c 'id; uname -a'
-shroot library "$HOME/linux" backup alpine alpine.tar.zst
-shroot library "$HOME/linux" restore alpine.tar.zst restored
-shroot library "$HOME/linux" remove restored
-shroot library "$HOME/linux" prune
+shroot install alpine-rootfs.tar.gz --rootfs --name alpine
+shroot install debian:stable --name debian
+shroot list
+shroot login alpine
+shroot exec alpine -- /bin/sh -c 'id; uname -a'
+shroot backup alpine alpine.tar.zst
+shroot restore alpine.tar.zst --name restored
+shroot remove restored
+shroot prune
 ```
 
-`install oci LAYOUT NAME` imports a local OCI layout, selecting Linux ARM64 and
-preserving guest ownership. `install registry REFERENCE NAME` pulls a public OCI
+`install LAYOUT --oci --name NAME` imports a local OCI layout, selecting Linux ARM64 and
+preserving guest ownership. `install REFERENCE --name NAME` pulls a public OCI
 image over HTTPS, including registries requiring anonymous Bearer authorization.
 `--resolver CONTENTS` on installation seeds an absent or empty
 resolver file; `resolver NAME CONTENTS --replace` explicitly replaces it while
 the environment is idle. No host DNS choice or network privilege is implicit.
 
-Initialization, installation and restore can create the selected library root;
-its parent must exist. Read and removal operations do not create missing
-libraries. Names contain 1-64 ASCII letters, digits, `_`, `.` or `-`, starting
+Initialization, installation and restore can create the library root and, for
+the default location, its parents. An explicit directory's parent must exist.
+An absent default library lists as `[]`; a missing explicitly selected library
+or an incomplete catalog reports an error. Reads and removal never create libraries.
+Names contain 1-64 ASCII letters, digits, `_`, `.` or `-`, starting
 with a letter or digit. Arguments and paths are never interpreted as shell code.
 
 ## Identity And Storage

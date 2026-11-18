@@ -29,9 +29,9 @@ same store with different policies; they do not implicitly share a network.
 Run an Alpine BusyBox HTTP server with a loopback-only published port:
 
 ```sh
-shroot library "$HOME/linux" exec alpine --network bridge \
+shroot exec alpine --network bridge \
   -p 127.0.0.1:8080:80 -- /bin/busybox httpd -f -p 80
-shroot library "$HOME/linux" login alpine --network none
+shroot login alpine --network none
 ```
 
 Repeated `-p` / `--publish` accepts `[IPv4:]HOST:GUEST[/tcp|/udp]` or
@@ -44,7 +44,7 @@ reservations; normal exit and cancellation also release its ports.
 Bridge addressing can be selected per launch:
 
 ```sh
-shroot library "$HOME/linux" login alpine --network bridge \
+shroot login alpine --network bridge \
   --subnet 172.23.8.0/24 --ip 172.23.8.42 --gateway 172.23.8.7 \
   --subnet fd42:1234::/64 --ip6 fd42:1234::42 --gateway fd42:1234::7
 ```

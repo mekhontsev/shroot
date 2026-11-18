@@ -103,7 +103,7 @@ class RegistryTest(unittest.TestCase):
         self.registry = self.server("registry")
         self.cdn = self.server("cdn")
         self.ref = f"localhost:{self.registry.server_port}/project/test:latest"
-        self.cli = [str(BUILD / "shroot"), "--runtime", str(BUILD), "library", str(self.library)]
+        self.cli = [str(BUILD / "shroot"), "--runtime", str(BUILD), "--library", str(self.library)]
         self.call("init")
 
     def server(self, role):
@@ -169,7 +169,7 @@ class RegistryTest(unittest.TestCase):
         return result.stdout
 
     def install(self, name="test", reference=None, code=0, trust=True):
-        args = ["install", "registry", reference or self.ref, name]
+        args = ["install", reference or self.ref, "--name", name]
         if trust:
             args += ["--ca-file", str(self.cert)]
         return self.call(*args, code=code)
@@ -190,7 +190,7 @@ class RegistryTest(unittest.TestCase):
 
     def test_explicit_digest_and_directory_trust(self):
         reference = self.ref.rsplit(":", 1)[0] + "@" + self.identity["digest"]
-        self.call("install", "registry", reference, "test", "--ca-directory", self.cert.parent)
+        self.call("install", reference, "--name", "test", "--ca-directory", self.cert.parent)
         self.call("exec", "test", "--", "/bin/client-guest", "exit42", code=42)
 
     def test_certificate_verification_and_no_plaintext_redirect(self):
@@ -265,7 +265,7 @@ class RegistryTest(unittest.TestCase):
     def test_cancelled_download_has_no_named_partial_and_releases_lock(self):
         self.redirect = False
         self.pause_layer = True
-        command = self.cli + ["install", "registry", self.ref, "test", "--ca-file", str(self.cert)]
+        command = self.cli + ["install", self.ref, "--name", "test", "--ca-file", str(self.cert)]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             self.assertTrue(self.layer_entered.wait(10), "download did not reach the layer")
