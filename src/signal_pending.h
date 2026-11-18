@@ -20,6 +20,7 @@ int md_signal_pending_exec(struct md_signal_pending *);
 void md_signal_pending_release(struct md_signal_pending *);
 int md_signal_pending_put(struct md_signal_pending *,enum md_signal_scope,const siginfo_t *);
 int md_signal_pending_peek(const struct md_signal_pending *,struct md_signal_pending_value *);
+int md_signal_pending_peek_scope(const struct md_signal_pending *,enum md_signal_scope,struct md_signal_pending_value *);
 int md_signal_pending_take(struct md_signal_pending *,const struct md_signal_pending_value *);
 int md_signal_pending_has(const struct md_signal_pending *,enum md_signal_scope);
 void md_signal_pending_clear(struct md_signal_pending *,int shared);

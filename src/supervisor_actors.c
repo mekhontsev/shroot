@@ -550,13 +550,13 @@ static void task_action_call_start(struct task_action *owner) {
                 &saved,abi.task_call,abi.task_return,image,address);
         } else error=md_fd_filter_build(owner->kind,owner->number,&gates,&image->code);
         if (!error && !owner->pid_filter) {
-            owner->selector_instructions=image->code.count;
-            owner->selector_number=md_fd_selector_target(owner->group,owner->number,image->code.count);
+            owner->selector_instructions=md_fd_filter_instructions(&image->code);
+            owner->selector_number=md_fd_selector_target(owner->group,owner->number,owner->selector_instructions);
             if (owner->selector_number< -1) error=owner->selector_number;
         }
         if (!error && !owner->pid_filter) error=md_task_filter_begin(&owner->filter,native_trace,actor->pid,boundary,
             &saved,abi.task_call,abi.task_return,span.data,address,owner->kind,owner->selector_number,&gates);
-        if (!error && !owner->pid_filter) owner->selector_instructions=image->code.count;
+        if (!error && !owner->pid_filter) owner->selector_instructions=md_fd_filter_instructions(&image->code);
     }
     if (error && owner->filter.task.stage) {
         CHECK(error==-ESRCH); actor->resume_lost=1; return;
@@ -594,6 +594,24 @@ int selector_has(struct thread *t,unsigned kind,int number) {
     return 1;
 }
 
+int selector_prepare(struct thread *t,unsigned required,int number,
+        enum md_task_call_boundary boundary,const struct user_pt_regs *continuation,
+        void (*complete)(struct thread *,long)) {
+    for (unsigned kind=0;kind<MD_FD_SELECTOR_KINDS;++kind) {
+        if (!(required&(1U<<kind))) continue;
+        int ready=selector_has(t,kind,number);
+        if (ready<0) return ready;
+        if (ready) continue;
+        struct task_action *action=task_action_new(t);
+        if (!action) return -ENOMEM;
+        action->continuation=*continuation; action->boundary=boundary;
+        action->kind=(enum md_fd_selector_kind)kind; action->number=number;
+        action->complete=complete;
+        task_action_start(t); return 1;
+    }
+    return 0;
+}
+
 static int task_files_queued(const struct thread *p) {
     /* The table turn has not begun, so none of these owners may execute
      * task-affine work yet. Keep eligibility tied to resource state, not to
@@ -603,7 +621,8 @@ static int task_files_queued(const struct thread *p) {
         &p->proc.delivery.files,p->readiness ? &p->readiness->files : NULL,
         p->readiness ? &p->readiness->loans[p->readiness->lending].delivery.files : NULL,
         p->io.outgoing ? &p->io.outgoing->files : NULL,p->io.receive ? &p->io.receive->files : NULL,
-        p->memory_op.mapping ? &p->memory_op.mapping->files : NULL,p->signals.control ? &p->signals.control->files : NULL};
+        p->memory_op.mapping ? &p->memory_op.mapping->files : NULL,p->signals.control ? &p->signals.control->files : NULL,
+        p->seccomp.install ? &p->seccomp.install->files : NULL};
     for (unsigned i=0;i<sizeof(turns)/sizeof(*turns);++i)
         if (md_fd_order_state(turns[i])==MD_RESOURCE_ORDER_QUEUED) return 1;
     return md_fs_buffer_waiting_files(p->fs.call)
@@ -739,6 +758,7 @@ void task_action_start(struct thread *t) {
     if (!owner->selected_group && owner->number>=0 && md_fd_order_state(&t->descriptors.order)!=MD_RESOURCE_ORDER_RUNNING
             && md_fd_order_state(&t->fs.returned.files)!=MD_RESOURCE_ORDER_RUNNING
             && !(t->signals.control && md_fd_order_state(&t->signals.control->files)==MD_RESOURCE_ORDER_RUNNING)
+            && !(t->seccomp.install && md_fd_order_state(&t->seccomp.install->files)==MD_RESOURCE_ORDER_RUNNING)
             && !(t->readiness && md_fd_order_state(&t->readiness->files)==MD_RESOURCE_ORDER_RUNNING)) {
         if (!owner->files.table) {
             int ready=md_fd_order_begin(t->resources.files,&owner->files,fd_wakeup);
@@ -951,21 +971,24 @@ struct md_task_call *task_call_continuation(struct thread *t) {
     return NULL;
 }
 
-void task_group_stop(struct thread *t) {
+int task_group_listen(struct thread *t) {
     /* EVENT_WAIT: preserve the exact operation until kernel SIGCONT or exit.
      * A group stop is not a completion/error of a borrowed syscall. */
+    if (native_trace(PTRACE_LISTEN,t->pid,NULL,NULL)) return -errno;
     t->listening=1; group_stops++;
-    if (native_trace(PTRACE_LISTEN,t->pid,NULL,NULL)) {
-        CHECK(errno==ESRCH); t->resume_lost=1;
-    } else {
-        t->kernel_stopped=0;
-        /* A freeze request may have been observed before the group-stop
-         * acknowledgement. LISTEN is now quiescent without another cgroup
-         * generation change; publish it through the common member owner. */
-        if (freezer_enabled && md_cgroup_member_freezing(t->resources.cgroup))
-            md_cgroup_member_frozen(t->resources.cgroup,1);
-        md_debugger_child_changed(debugger,t->pid);
-    }
+    t->kernel_stopped=0;
+    /* A freeze request may have been observed before the group-stop
+     * acknowledgement. LISTEN is now quiescent without another cgroup
+     * generation change; publish it through the common member owner. */
+    if (freezer_enabled && md_cgroup_member_freezing(t->resources.cgroup))
+        md_cgroup_member_frozen(t->resources.cgroup,1);
+    md_debugger_child_changed(debugger,t->pid);
+    return 0;
+}
+
+void task_group_stop(struct thread *t) {
+    int error=task_group_listen(t);
+    if (error) { CHECK(error==-ESRCH); t->resume_lost=1; }
 }
 
 int task_call_signal(struct thread *t,struct md_task_call *call,int status) {
@@ -973,7 +996,7 @@ int task_call_signal(struct thread *t,struct md_task_call *call,int status) {
         if (md_debugger_traced(debugger,t->pid)) {
             siginfo_t info;
             if (!tracee_request(t,PTRACE_GETSIGINFO,NULL,&info,"task-call-debugger-stop")) return 1;
-            CHECK(md_debugger_defer_stop(debugger,t->pid,&info));
+            CHECK(!md_signal_delivery_defer_stop(&t->signals.delivery,&info));
             /* Restore the application boundary before exposing this stop.
              * Injecting it would group-stop peers that GDB needs to collect. */
             if (call->arguments.flags&MD_TASK_CALL_INTERRUPTIBLE) {
@@ -1079,6 +1102,20 @@ int task_action_event(pid_t pid,int status,const struct rusage *usage) {
             if (result) { CHECK(result==-ESRCH); t->resume_lost=1; }
             else t->kernel_stopped=0;
             return 1;
+        }
+        if (!owner->loan && !owner->pid_filter && owner->selector_number>=0 && call->result==-ENOMEM) {
+            struct md_buffer_span span;
+            CHECK(!md_buffer_span(&owner->buffer,&span));
+            struct md_task_filter_image *image=span.data;
+            struct md_fd_filter_gates gates=md_fd_filter_runtime_gates(&abi);
+            result=md_task_filter_retry_all(&owner->filter,image,owner->kind,&gates);
+            if (result!=-ENOMEM) {
+                owner->selector_number=-1;
+                owner->selector_instructions=md_fd_filter_instructions(&image->code);
+                if (result) { CHECK(result==-ESRCH); t->resume_lost=1; }
+                else t->kernel_stopped=0;
+                return 1;
+            }
         }
         int single=!md_task_helpers_group_busy(helpers,t->tgid);
         for (struct thread *peer=threads;single && peer;peer=peer->next)

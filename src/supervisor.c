@@ -135,6 +135,7 @@ int socket_events=-1;
 struct md_namespace_broker *broker;
 struct md_task_registry *tasks;
 struct md_identity launch_identity;
+uid_t native_uid;
 int virtual_identity;
 struct md_admission admission = {.source = -1};
 unsigned admitted_images;
@@ -496,9 +497,9 @@ static pid_t deferred_event(int *status,struct rusage *usage) {
 static pid_t kernel_event(int *status,struct rusage *usage,int runnable) {
     int64_t start=md_cost_begin(statistics ? &statistics->event_collect : NULL);
     int accounting=md_debugger_active(debugger);
-    /* Refresh the lossy TID hint before a kernel query, not for an owned batch.
-     * The periodic source budget still services all other event owners. */
-    if (!task_wait.pending_count && !task_wait.count && !task_wait.drained) drain();
+    /* Signal readiness belongs to progress_events. Speculatively reading here
+     * repeats the just-consumed notification on every kernel stop; the shared
+     * event-count budget already bounds hint refresh and cancellation. */
     pid_t pid=md_task_wait_ready(&task_wait,status,accounting ? usage : NULL,runnable);
     /* Deferred events may outlive a debugger attachment. Absent accounting
      * must be explicit, not a previous event's or uninitialized stack data. */
@@ -539,7 +540,10 @@ static pid_t wait_event(int *status, struct rusage *usage) {
     static unsigned progress_budget;
     for (;;) {
         task_continuations_progress();
+        int64_t progress_start=md_cost_begin(statistics ? &statistics->retained_progress : NULL);
         retained_progress();
+        md_cost_end(statistics ? &statistics->retained_progress : NULL,progress_start);
+        progress_start=md_cost_begin(statistics ? &statistics->task_progress : NULL);
         signal_entries_progress();
         policy_sync_progress();
         entry_fence_progress();
@@ -550,6 +554,7 @@ static pid_t wait_event(int *status, struct rusage *usage) {
             memory_completions_pending=0;
             CHECK(!md_fs_worker_dispatch(filesystem)); fd_progress();
         }
+        md_cost_end(statistics ? &statistics->task_progress : NULL,progress_start);
         struct pollfd events[EVENT_SOURCES];
         /* Bound task/memory progress so runnable work cannot starve other sources.
          * No readiness is inferred: an empty task queue immediately enters the
@@ -565,7 +570,9 @@ static pid_t wait_event(int *status, struct rusage *usage) {
             progress_budget=PROGRESS_BATCH;
         }
         --progress_budget;
+        progress_start=md_cost_begin(statistics ? &statistics->entry_progress : NULL);
         int entry_progress=md_broker_entry_progress(broker);
+        md_cost_end(statistics ? &statistics->entry_progress : NULL,progress_start);
         /* Progress callbacks can finish the last private task without leaving
          * another kernel event. The outer loop uses this same lifetime owner. */
         if (!tasks_pending()) return 0;
@@ -590,7 +597,12 @@ static pid_t wait_event(int *status, struct rusage *usage) {
                 md_broker_park(broker,pid);
                 return pid;
             }
-            int held=md_broker_hold_event(broker,pid,*status,usage); CHECK(held>=0);
+            int held=md_broker_hold_event(broker,pid,*status,usage);
+            if (held<0) {
+                fprintf(stderr,"Shroot: broker event pid=%d status=%x error=%d\n",pid,*status,held);
+                md_broker_describe(broker,STDERR_FILENO);
+            }
+            CHECK(held>=0);
             if (held) { retained_barrier_blocked(pid); continue; }
             return pid;
         }
@@ -678,7 +690,8 @@ int main(int argc, char **argv) {
 #ifdef MD_KERNEL_TESTING
     int kernel_profile=md_test_kernel_profile_prepare(argc,argv);
 #endif
-    CHECK(argc >= 2 && md_launch_identity(getuid(), geteuid(), getgid(), getegid()));
+    native_uid=getuid();
+    CHECK(argc >= 2 && md_launch_identity(native_uid, geteuid(), getgid(), getegid()));
     struct sigaction host_failure={.sa_sigaction=supervisor_sigsys,.sa_flags=SA_SIGINFO|SA_RESETHAND};
     CHECK(!sigaction(SIGSYS,&host_failure,NULL));
     md_page_size = (size_t)sysconf(_SC_PAGESIZE);
@@ -967,7 +980,9 @@ int main(int argc, char **argv) {
     if (seconds) cancellation_arm((unsigned)seconds);
     while (tasks_pending()) {
         signal_entries_progress();
+        int64_t collect_start=md_cost_begin(statistics ? &statistics->pid_collect : NULL);
         pid_collect();
+        md_cost_end(statistics ? &statistics->pid_collect : NULL,collect_start);
         int status; struct rusage usage; pid_t pid = wait_event(&status, &usage);
         if (!pid) break;
         struct thread *signalled=WIFSTOPPED(status) && (unsigned)status>>16==PTRACE_EVENT_STOP
@@ -1016,6 +1031,7 @@ int main(int argc, char **argv) {
             CHECK(owned>=0);
             if (owned==MD_SIGNAL_CARRIER) { resume(pid,deliver); continue; }
             restored_signal=owned==MD_SIGNAL_RESTORED;
+            if (restored_signal) status=(deliver<<8)|0x7f;
         }
         if (completed_notification_event(t,status,&usage)) continue;
         if (metadata_restart_event(t,status)) continue;
@@ -1149,6 +1165,15 @@ static void report_statistics(void) {
         fprintf(stderr,"MD_EVENT_TIME collectCalls=%llu collectNs=%llu sleepCalls=%llu sleepNs=%llu\n",
             (unsigned long long)statistics->event_collect.calls,(unsigned long long)statistics->event_collect.nanoseconds,
             (unsigned long long)statistics->event_sleep.calls,(unsigned long long)statistics->event_sleep.nanoseconds);
+        const struct md_cost *progress_costs[]={&statistics->retained_progress,&statistics->task_progress,
+            &statistics->entry_progress,&statistics->pid_collect};
+        const char *progress_names[]={"retained","task","entry","pidCollect"};
+        for (unsigned i=0;i<sizeof(progress_costs)/sizeof(*progress_costs);++i)
+            fprintf(stderr,"MD_PROGRESS phase=%s calls=%llu ns=%llu\n",progress_names[i],
+                (unsigned long long)progress_costs[i]->calls,(unsigned long long)progress_costs[i]->nanoseconds);
+        fprintf(stderr,"MD_RETAINED groupScans=%llu actorScans=%llu\n",
+            (unsigned long long)statistics->retirement_group_scans,
+            (unsigned long long)statistics->retirement_actor_scans);
         fprintf(stderr,"MD_QUIESCENCE interrupts=%llu memoryRepairs=%llu\n",
             (unsigned long long)statistics->quiesce_interrupts,(unsigned long long)statistics->memory_repairs);
         fprintf(stderr,"MD_FD_NATIVE untrackedClose=%llu unchangedFlags=%llu\n",

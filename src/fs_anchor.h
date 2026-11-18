@@ -21,6 +21,9 @@ struct md_inode_store;
 int md_fs_anchor_native_leaf(const struct md_fs_anchor *,const struct md_inode_store *,int fd);
 /* Live mount policy under the caller's already retained provenance. */
 unsigned md_fs_anchor_policy(const struct md_fs_anchor *);
+/* Metadata effects on an ordinary writable host attachment need no provider
+ * mutation. The caller still owns the FD-table turn and native result. */
+int md_fs_anchor_native_metadata(const struct md_fs_anchor *);
 struct md_cgroup_view;
 /* Borrowed provider identity, pinned by this anchor's mount lifetime. */
 struct md_cgroup_view *md_fs_anchor_cgroup(const struct md_fs_anchor *);

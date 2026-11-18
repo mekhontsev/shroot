@@ -31,7 +31,7 @@ int md_procfs_pressure_probe(int proc_root);
 int md_procfs_kernel_snapshot(int upper,int lower);
 int md_procfs_options(const struct md_view_mount *,const struct md_identity *,char *,size_t);
 int md_procfs_check(struct md_filesystem *,const struct md_view_mount *,const char *path,unsigned minimum);
-int md_procfs_path(const struct md_view_mount *,int,char *,size_t);
+int md_procfs_path(const struct md_view_mount *,int,const struct stat *,char *,size_t);
 /* Descriptive filesystem-relative name, with this proc mount's PID numbers. */
 int md_procfs_guest_path(const struct md_view_mount *,int,char *,size_t);
 int md_procfs_noatime(struct md_filesystem *,int,const char *);

@@ -52,6 +52,14 @@ int md_task_call_begin(struct md_task_call *,long (*trace)(int,pid_t,void *,void
  * A restored restart exit has a pending synthetic interrupt, owned by the
  * enclosing dispatcher after completion or consumed by again(). */
 int md_task_call_event(struct md_task_call *,int status);
+/* A sequence owner may collect a noninterruptible result at its borrowed exit,
+ * retaining the original registers/mask until another effect or finish().
+ * It must not resume the actor, release admission or lend it to another owner
+ * before finish() completes. Interruptible/restarted effects restore normally. */
+int md_task_call_collect(struct md_task_call *,int status);
+/* 1 is already restored; 0 requires event() until restoration completes.
+ * Neither collection nor restoration repeats the completed native effect. */
+int md_task_call_finish(struct md_task_call *);
 /* The owner has completed the original entry (for example a USER_NOTIF reply).
  * Restore at its skipped exit without evaluating a newer seccomp policy.
  * Completion publishes boundary==EXIT; the owner supplies the final result.
@@ -79,6 +87,6 @@ int md_task_call_cancel_entry(long (*trace)(int,pid_t,void *,void *),pid_t,uintp
 /* Exact kernel notification of the currently executing borrowed call. */
 struct seccomp_notif;
 int md_task_call_notification(const struct md_task_call *,const struct seccomp_notif *);
-/* Run another syscall from a completed, restored boundary. */
+/* Run another syscall from a completed or collected result. */
 int md_task_call_again(struct md_task_call *,const struct md_task_call_arguments *);
 #endif

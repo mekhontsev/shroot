@@ -3,6 +3,18 @@
 #include "raw.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+
+long md_host_chmod_fd(int fd,unsigned mode) {
+    if (fd==AT_FDCWD) return RAW3(fchmodat,fd,".",mode);
+    struct stat st;
+    long result=RAW2(fstat,fd,&st);
+    if (result<0) return result;
+    if (S_ISLNK(st.st_mode)) return -EOPNOTSUPP;
+    char path[64]="/proc/self/fd/";
+    md_decimal(path+sizeof("/proc/self/fd/")-1,(unsigned)fd);
+    return RAW3(fchmodat,AT_FDCWD,path,mode);
+}
 
 long md_host_rename(int source,const char *name,int target,const char *next,unsigned flags) {
     return RAW5(renameat2,source,name,target,next,flags);

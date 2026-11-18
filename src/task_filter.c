@@ -37,6 +37,17 @@ int md_task_filter_retry_thread(struct md_task_filter *f) {
     if (!error) f->thread_only=1;
     return error;
 }
+int md_task_filter_retry_all(struct md_task_filter *f,struct md_task_filter_image *image,
+        enum md_fd_selector_kind kind,const struct md_fd_filter_gates *gates) {
+    if (!f || !image || f->task.result!=-ENOMEM) return -EINVAL;
+    struct md_fd_filter_program code;
+    int error=md_fd_filter_build(kind,-1,gates,&code);
+    if (error) return error;
+    if (code.count>=image->code.count) return -ENOMEM;
+    image->code=code; image->program.len=code.count;
+    struct md_task_call_arguments args=f->task.arguments;
+    return md_task_call_again(&f->task,&args);
+}
 int md_task_filter_event(struct md_task_filter *f,int status) {
     return f ? md_task_call_event(&f->task,status) : -EINVAL;
 }

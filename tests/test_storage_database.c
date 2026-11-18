@@ -197,12 +197,12 @@ static void contract(void) {
 }
 void test_storage_database(void) {
     assert(sqlite3_threadsafe()!=0);
-    contract();
-    temporary();
-    concurrent();
-    retained("PRAGMA journal_mode=WAL");
-    retained("PRAGMA journal_mode=PERSIST");
-    exhausted();
+    contract(); fprintf(stderr,"PASS database SQL contract\n");
+    temporary(); fprintf(stderr,"PASS database temporary files\n");
+    concurrent(); fprintf(stderr,"PASS database concurrent owners\n");
+    retained("PRAGMA journal_mode=WAL"); fprintf(stderr,"PASS database retained WAL\n");
+    retained("PRAGMA journal_mode=PERSIST"); fprintf(stderr,"PASS database retained rollback\n");
+    exhausted(); fprintf(stderr,"PASS database exhausted descriptors\n");
     assert(md_database_result(-EMFILE)==-EMFILE);
     assert(md_database_result(SQLITE_NOMEM)==-ENOMEM);
     assert(md_database_result(SQLITE_FULL)==-ENOSPC);

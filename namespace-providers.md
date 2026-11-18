@@ -358,6 +358,15 @@ processes do not acquire guest credentials. Policy-free proc views skip these
 checks, and native file-data IO is unchanged. Filesystem-option remounts fail
 explicitly; per-mount bind flags retain their separate contract.
 
+Provider trees capture the identities of their retained roots at creation and
+import. Proc traversal reuses the walk's same-FD metadata to recognize a root
+and passes the resolved relative path to that operation's lookup. Other directory
+paths remain live across renames; no mutable pathname or guest permission is
+cached. The same retained identities classify provider filesystem types without
+repeated root stats. A provider also owns traversal of its native lower
+descriptors: their physical proc paths cannot bypass its visibility policy.
+Unowned native proc descriptors retain caller-side delegation.
+
 Mounted proc admits optional PSI once, during provider creation, by opening and
 reading `pressure/cpu`, `pressure/memory` and `pressure/io` under the real
 executor identity. If any component is absent, disabled or access-denied,
@@ -449,6 +458,9 @@ metadata is read from that FD rather than by replaying a reusable proc spelling.
 Typed proc descriptors keep their logical provider metadata. Foreign executable
 stat retains the guest image description for worker resolution, not the Android
 bootstrap or a temporary descriptor installed in the caller.
+Readlink resolves retained logical targets before consulting native carriers;
+only unknown origins require the native fallback. Both paths retain their
+process-access checks.
 Typed metadata uses the common `md_fs_info` representation. Providers with a
 retained filesystem origin add its mount ID and mount-root attribute without
 restatting their inert carrier or resolving a path. This applies to ordinary and
@@ -463,13 +475,22 @@ for ordinary opens without O_NOATIME. `test_proc_policy.py` covers own/foreign
 processes, inherited descriptors, mounted proc, and flag changes; this also
 permits procps-ng versions that request O_NOATIME for ordinary process scans.
 
-Current-process `fdinfo` captures the actual proc file in a private-table helper,
-not a copy of the described application FD. Seeking to zero refreshes native
+`fdinfo` captures the actual proc file in a private-table helper.
+An alias selecting another thread or process also pins that target's descriptor;
+it never borrows the caller's coincidentally numbered slot. Thread groups may
+have independent descriptor tables. Seeking to zero refreshes native
 position, flags and close/reuse state. PID fields translate through the selected
 logical proc namespace; a host without CONFIG_PID_NS can still supply logical
 NSpid from the runtime's retained identities. Unknown native fields are preserved.
 The typed read-only provider shares offsets across dup and preserves positional
-reads. Foreign-process fdinfo remains explicitly unsupported.
+reads. Native capture enforces access to foreign targets; typed provider metadata
+and the target's native identity remain separate.
+
+Following a supervised task's proc-FD link retains the selected object's logical
+origin after the common process-inspection check. Directory captures preserve
+their mount and provider, including when the path continues below that FD;
+the physical carrier alone cannot represent a merged directory. Untracked host
+descriptors retain caller-affine native capture. No per-read/write lookup is added.
 
 Explicit mounts override the initial root's implicit proc/dev providers. Bind
 source resolution can retain those providers through old-root descriptors after
@@ -491,6 +512,9 @@ return ENXIO on data open. Native attached directories reject device creation
 with EPERM.
 The origin retains the logical carrier separately from endpoint identity, so
 fstat, chmod/chown, reopen and transferred descriptors use guest metadata.
+Startup attaches the standard device nodes and retained `/dev/shm` in one atomic mount-graph publication.
+The shared attachment owner prepares every sibling before publication and releases
+the entire candidate on failure; ordinary mount propagation keeps its own contract.
 Callers may bind an existing native device onto a regular placeholder, including
 through a retained proc-FD target. Native rdev, IO and access checks are preserved;
 nodev rejects new opens without invalidating already-open descriptions.

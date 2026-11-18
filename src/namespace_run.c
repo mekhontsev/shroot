@@ -124,7 +124,9 @@ void md_boot(uintptr_t *stack) {
     }
     char bootstrap[PATH_MAX], supervisor[PATH_MAX], endpoint[96] = "md-namespace-";
     long executable = RAW4(readlinkat, AT_FDCWD, "/proc/self/exe", bootstrap, sizeof(bootstrap) - 1);
-    if (executable <= 0 || executable == sizeof(bootstrap) - 1) md_die("runner identity", -EIO);
+    if (executable < 0) md_die("runner identity", executable);
+    if (!executable) md_die("runner identity", -EIO);
+    if (executable == sizeof(bootstrap) - 1) md_die("runner identity", -ENAMETOOLONG);
     bootstrap[executable] = 0;
     while (executable && bootstrap[executable - 1] != '/') --executable;
     bootstrap[executable] = 0;

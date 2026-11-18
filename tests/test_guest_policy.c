@@ -238,6 +238,19 @@ static int namespace_service_filter(void) {
     assert(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
     assert(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
     for (unsigned i=0;i<3;++i) assert(!setns(net,CLONE_NEWNET));
+    int socket=(int)syscall(SYS_socket,AF_NETLINK,SOCK_RAW|SOCK_CLOEXEC,NETLINK_ROUTE);
+    int queue=epoll_create1(EPOLL_CLOEXEC);
+    assert(socket>=0 && queue>=0);
+    struct epoll_event event={.events=EPOLLIN,.data.u64=41},observed;
+    assert(!epoll_ctl(queue,EPOLL_CTL_ADD,socket,&event));
+    struct { struct nlmsghdr header; struct ifinfomsg link; } request={
+        .header={.nlmsg_len=NLMSG_LENGTH(sizeof(struct ifinfomsg)),.nlmsg_type=RTM_GETLINK,
+            .nlmsg_flags=NLM_F_REQUEST|NLM_F_DUMP,.nlmsg_seq=41},.link={.ifi_family=AF_UNSPEC}};
+    struct sockaddr_nl address={.nl_family=AF_NETLINK};
+    assert(sendto(socket,&request,sizeof(request),0,(void *)&address,sizeof(address))==sizeof(request));
+    assert(epoll_wait(queue,&observed,1,1000)==1 && observed.data.u64==41 && (observed.events&EPOLLIN));
+    char reply[8192]; assert(recv(socket,reply,sizeof(reply),0)>0);
+    close(queue); close(socket);
     pid_t child=fork(); assert(child>=0);
     if (!child) { syscall(SYS_prctl,PR_SET_SECCOMP,SECCOMP_MODE_STRICT,0); _exit(12); }
     int status;
@@ -247,7 +260,7 @@ static int namespace_service_filter(void) {
     if (!child) _exit(getpid()==1 ? 0 : 11);
     assert(waitpid(child,&status,0)==child && !status);
     close(net); alarm(0);
-    puts("PASS namespace services: network reentry and PID admission with forbidden filter installation");
+    puts("PASS namespace services: late typed FD/epoll, network reentry and PID admission with forbidden filter installation");
     return 0;
 }
 static int relative_path_filter(void) {
@@ -937,12 +950,14 @@ static void listener_signal(int signal) {
 static int listener_transfer(int mode) {
     pid_t parent=getpid();
     const char *target="/tmp/listener-mount";
-    int interrupted=mode>=7 && mode<=10, restarting=mode==8 || mode==10;
+    int interrupted=(mode>=7 && mode<=10) || mode==20 || mode==21;
+    int restarting=mode==8 || mode==10 || mode==21;
+    int stat_call=mode==4 || mode==20 || mode==21;
     int adding=mode>=11 && mode<=17, fixed=mode==13 || mode==14 || mode==16;
     int send=mode==11 || mode==14 || mode==15 || mode==16, protected=mode>=15 && mode<=17;
     int cold=mode==5 || mode==6 || mode==9 || mode==10;
     if (cold) assert(!mkdir(target,0700) || errno==EEXIST);
-    long number=mode==4 ? SYS_newfstatat : cold ? SYS_mount : SYS_getppid;
+    long number=stat_call ? SYS_newfstatat : cold ? SYS_mount : SYS_getppid;
     int signal_pipe[2]; assert(!pipe2(signal_pipe,O_CLOEXEC));
     int sockets[2]; assert(!socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,sockets));
     pid_t child=fork(); assert(child>=0);
@@ -981,11 +996,11 @@ static int listener_transfer(int mode) {
             perror("listener exec"); _exit(1);
         }
         struct stat metadata;
-        long result=mode==4 ? syscall(SYS_newfstatat,AT_FDCWD,"/bin/sh",&metadata,0)
+        long result=stat_call ? syscall(SYS_newfstatat,AT_FDCWD,"/bin/sh",&metadata,0)
             : cold ? cold_mount(target) : syscall(SYS_getppid);
         int expected_error=mode==2 ? EACCES : mode==3 ? ENOSYS : interrupted && !restarting ? EINTR : 0;
         long expected=expected_error ? cold ? -expected_error : -1 : mode==1 ? parent
-            : mode==4 || mode==6 ? 0 : adding ? fixed ? 42 : result : 713;
+            : mode==4 || mode==6 || mode==21 ? 0 : adding ? fixed ? 42 : result : 713;
         if (result!=expected || (expected_error && errno!=expected_error))
             fprintf(stderr,"notification result: mode=%d value=%ld expected=%ld errno=%d (%s)\n",mode,result,expected,errno,strerror(errno));
         assert(result==expected && (!expected_error || cold || errno==expected_error));
@@ -995,7 +1010,7 @@ static int listener_transfer(int mode) {
             char bytes[2]; assert(read((int)result,bytes,sizeof(bytes))==sizeof(bytes) && !memcmp(bytes,"cd",2));
             assert(!close((int)result));
         }
-        if (mode==4) assert(S_ISREG(metadata.st_mode));
+        if (mode==4 || mode==21) assert(S_ISREG(metadata.st_mode));
         if (mode==6) {
             int marker=open("/tmp/listener-mount/marker",O_CREAT|O_WRONLY|O_EXCL,0600);
             assert(marker>=0 && !close(marker) && !umount(target));
@@ -1023,6 +1038,14 @@ static int listener_transfer(int mode) {
     assert(!received_result);
     assert(notification.pid==(unsigned)child && notification.data.nr==number);
     assert(!ioctl(listener,SECCOMP_IOCTL_NOTIF_ID_VALID,&notification.id));
+    /* The listener must be able to inspect an absent proc leaf without
+     * borrowing the task that is waiting for this listener's reply. */
+    char missing[128]; struct stat absent;
+    snprintf(missing,sizeof(missing),"/proc/%d/shroot-absent-leaf",child);
+    assert(lstat(missing,&absent)==-1 && errno==ENOENT);
+    assert(open(missing,O_PATH|O_NOFOLLOW|O_CLOEXEC)==-1 && errno==ENOENT);
+    assert(open(missing,O_RDONLY|O_CLOEXEC)==-1 && errno==ENOENT);
+    assert(!ioctl(listener,SECCOMP_IOCTL_NOTIF_ID_VALID,&notification.id));
     if (mode==19) {
         assert(!kill(child,SIGKILL));
         int status;
@@ -1047,7 +1070,7 @@ static int listener_transfer(int mode) {
     }
     close(signal_pipe[0]);
     struct seccomp_notif_resp reply={.id=notification.id,.val=713};
-    if (mode==1 || mode==4 || mode==6) { reply.val=0; reply.flags=SECCOMP_USER_NOTIF_FLAG_CONTINUE; }
+    if (mode==1 || stat_call || mode==6) { reply.val=0; reply.flags=SECCOMP_USER_NOTIF_FLAG_CONTINUE; }
     if (mode==2) { reply.val=0; reply.error=-EACCES; }
     int source=-1;
     if (adding) {
@@ -1896,7 +1919,12 @@ static int policy_sync_notification(int mode) {
     assert(fd>=0);
     pthread_t worker; assert(!pthread_create(&worker,NULL,sync_notified_worker,&mode));
     struct seccomp_notif request={0};
-    assert(!ioctl(fd,SECCOMP_IOCTL_NOTIF_RECV,&request) && request.data.nr==sync_notified_number(mode)
+    int received=ioctl(fd,SECCOMP_IOCTL_NOTIF_RECV,&request);
+    if (received || request.data.nr!=sync_notified_number(mode) || request.data.args[5]!=SYNC_CALL_MARKER)
+        fprintf(stderr,"TSYNC notification: result=%d errno=%d nr=%d expected=%ld marker=%#llx id=%llu\n",
+            received,errno,request.data.nr,sync_notified_number(mode),
+            (unsigned long long)request.data.args[5],(unsigned long long)request.id);
+    assert(!received && request.data.nr==sync_notified_number(mode)
         && request.data.args[5]==SYNC_CALL_MARKER);
     assert(!ioctl(fd,SECCOMP_IOCTL_NOTIF_ID_VALID,&request.id));
     rules[4].k=SECCOMP_RET_ERRNO|EACCES;
@@ -2137,6 +2165,8 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "listener-error")) return listener_transfer(2);
     if (!strcmp(argv[1], "listener-close")) return listener_transfer(3);
     if (!strcmp(argv[1], "listener-stat")) return listener_transfer(4);
+    if (!strcmp(argv[1], "listener-stat-interrupt")) return listener_transfer(20);
+    if (!strcmp(argv[1], "listener-stat-restart")) return listener_transfer(21);
     if (!strcmp(argv[1], "listener-reject")) return listener_rejection();
     if (!strcmp(argv[1], "listener-cold")) return listener_transfer(5);
     if (!strcmp(argv[1], "listener-cold-continue")) return listener_transfer(6);

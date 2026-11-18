@@ -21,18 +21,19 @@
 #endif
 
 struct inferior {
-    struct inferior *next;
+    struct inferior *next,*indexed;
+    struct inferior *ready_next,**ready_previous;
     /* The debugger and real parent consume separate exit events. Its admitted
      * visible number remains valid after the parent has reaped native state. */
     pid_t pid, owner, group, number, exec_former;
     uid_t uid;
     unsigned long options, message;
-    uint64_t sequence, syscall_marker;
+    uint64_t syscall_marker;
     int stopped, status, step, terminal, real_child;
     int seized, pending, syscall_mode, syscall_stop;
     struct ptrace_syscall_info syscall;
     struct rusage usage;
-    siginfo_t info, deferred_stop;
+    siginfo_t info;
     struct md_signal_origin origin;
 };
 struct waiting {
@@ -43,16 +44,45 @@ struct waiting {
     size_t candidate,count;
     int probing, retry, filtered, native_children;
 };
+enum { INFERIOR_BUCKETS=257 };
 struct md_debugger {
     struct md_debugger_host host;
     struct inferior *inferiors;
+    struct inferior *index[INFERIOR_BUCKETS];
+    struct inferior *ready,**ready_tail;
     struct waiting *waiters;
-    uint64_t sequence;
 };
+static void ready_remove(struct md_debugger *d,struct inferior *p) {
+    if (!p->ready_previous) return;
+    *p->ready_previous=p->ready_next;
+    if (p->ready_next) p->ready_next->ready_previous=p->ready_previous;
+    else d->ready_tail=p->ready_previous;
+    p->ready_next=NULL; p->ready_previous=NULL;
+}
+static void ready_append(struct md_debugger *d,struct inferior *p) {
+    ready_remove(d,p);
+    p->ready_previous=d->ready_tail;
+    *d->ready_tail=p; d->ready_tail=&p->ready_next;
+}
 static void wait_free(struct waiting *w) { free(w->candidates); free(w); }
 static struct inferior *find(struct md_debugger *d, pid_t pid) {
-    for (struct inferior *p=d->inferiors; p; p=p->next) if (p->pid==pid) return p;
+    for (struct inferior *p=d->index[(unsigned)pid%INFERIOR_BUCKETS]; p; p=p->indexed)
+        if (p->pid==pid) return p;
     return NULL;
+}
+static void index_add(struct md_debugger *d,struct inferior *p) {
+    unsigned bucket=(unsigned)p->pid%INFERIOR_BUCKETS;
+    p->indexed=d->index[bucket]; d->index[bucket]=p;
+}
+static void index_remove(struct md_debugger *d,struct inferior *p) {
+    struct inferior **at=&d->index[(unsigned)p->pid%INFERIOR_BUCKETS];
+    while (*at!=p) at=&(*at)->indexed;
+    *at=p->indexed; p->indexed=NULL;
+}
+static void unlink_inferior(struct md_debugger *d,struct inferior **at) {
+    struct inferior *p=*at;
+    ready_remove(d,p);
+    *at=p->next; index_remove(d,p);
 }
 static int transfer(pid_t pid, uintptr_t address, void *bytes, size_t size, int write) {
     if (!size) return 0;
@@ -69,12 +99,12 @@ static long request(struct md_debugger *d,int op, pid_t pid, uintptr_t address, 
 }
 struct md_debugger *md_debugger_create(const struct md_debugger_host *host) {
     struct md_debugger *d=calloc(1,sizeof(*d));
-    if (d) d->host=*host;
+    if (d) { d->host=*host; d->ready_tail=&d->ready; }
     return d;
 }
 void md_debugger_destroy(struct md_debugger *d) {
     if (!d) return;
-    while (d->inferiors) { struct inferior *p=d->inferiors; d->inferiors=p->next; free(p); }
+    while (d->inferiors) { struct inferior *p=d->inferiors; unlink_inferior(d,&d->inferiors); free(p); }
     while (d->waiters) { struct waiting *p=d->waiters; d->waiters=p->next; wait_free(p); }
     free(d);
 }
@@ -89,9 +119,9 @@ static int add(struct md_debugger *d, pid_t pid, pid_t owner, unsigned long opti
          * is also the thread group's real parent. */
         .real_child=d->host.group(pid)==pid
             && d->host.group(d->host.parent(pid))==d->host.group(owner),.group=getpgid(pid)};
-    d->inferiors=p;
+    d->inferiors=p; index_add(d,p);
     int error=d->host.observe(owner);
-    if (error) { d->inferiors=p->next; free(p); }
+    if (error) { unlink_inferior(d,&d->inferiors); free(p); }
     return error;
 }
 static pid_t visible(struct md_debugger *d,pid_t observer,pid_t native) {
@@ -133,30 +163,107 @@ static int pending_peek_copy(void *context,const siginfo_t *info) {
     return ++p->copied==p->limit;
 }
 static int selected(struct md_debugger *d,pid_t owner, const struct seccomp_data *call, const struct inferior *p) {
-    pid_t pid=p->number, group=visible(d,owner,p->group);
+    pid_t pid=p->number;
     if (!pid) return 0;
     if (call->nr==SYS_waitid) {
         if (call->args[0]==P_ALL) return 1;
         if (call->args[0]==P_PID) return call->args[1]==(unsigned)pid;
-        return call->args[0]==P_PGID && (call->args[1] ? group==(pid_t)call->args[1] : p->group==getpgid(owner));
+        return call->args[0]==P_PGID && (call->args[1] ? visible(d,owner,p->group)==(pid_t)call->args[1] : p->group==getpgid(owner));
     }
     pid_t wanted=(pid_t)call->args[0];
     return wanted==-1 || wanted==pid || (!wanted && p->group==getpgid(owner))
-        || (wanted < -1 && (int64_t)group==-(int64_t)wanted);
+        || (wanted < -1 && (int64_t)visible(d,owner,p->group)==-(int64_t)wanted);
 }
 static unsigned wait_options(const struct seccomp_data *call) {
     return (unsigned)call->args[call->nr==SYS_waitid ? 3 : 2];
 }
-static int wait_result(struct md_debugger *d, pid_t owner,const struct seccomp_data *call,int *children) {
-    struct inferior *chosen=NULL;
-    *children=0;
-    for (struct inferior *p=d->inferiors; p; p=p->next) {
-        if (d->host.group(p->owner)!=d->host.group(owner) || !selected(d,owner,call,p)) continue;
-        *children=1;
-        if (call->nr==SYS_waitid && !(wait_options(call)&(p->terminal ? WEXITED : WSTOPPED))) continue;
-        if (p->sequence && (!chosen || p->sequence<chosen->sequence)) chosen=p;
+static int wait_children(struct md_debugger *d,pid_t owner,const struct seccomp_data *call,
+        pid_t **candidates,size_t *count,int *live) {
+    *live=0;
+    int filtered=d->host.wait_children ? d->host.wait_children(owner,call,candidates,count) : 0;
+    if (filtered<=0 || !*count || !d->inferiors || (wait_options(call)&(WCONTINUED|__WNOTHREAD))) return filtered;
+    pid_t group=d->host.group(owner);
+    size_t kept=0;
+    for (size_t i=0;i<*count;++i) {
+        struct inferior *p=find(d,native(d,owner,(*candidates)[i]));
+        /* Live tracees publish stops here, not in the real parent's queue.
+         * Their exit removes/transitions this record before native reaping.
+         * Private-child exclusion must not re-probe every sleeping tracee. */
+        int owned=p && (p->owner==owner || d->host.group(p->owner)==group);
+        if (p && !p->terminal && (owned || !(wait_options(call)&WUNTRACED))) {
+            if (!owned) *live=1;
+            continue;
+        }
+        (*candidates)[kept++]=(*candidates)[i];
     }
-    if (!chosen) return 0;
+    *count=kept;
+    return filtered;
+}
+static int wait_info(pid_t owner,uintptr_t address,const siginfo_t *info) {
+    if (!address) return 0;
+    if (address>UINTPTR_MAX-sizeof(*info)) return -EFAULT;
+    /* waitid writes these fields only, leaving padding, times and rusage
+     * unchanged when no event is ready. Publish them with one memory copy. */
+#define FIELD(name) {offsetof(siginfo_t,name),sizeof(info->name)}
+    static const struct { size_t offset,size; } fields[]={
+        FIELD(si_signo),FIELD(si_errno),FIELD(si_code),FIELD(si_pid),FIELD(si_uid),FIELD(si_status)};
+#undef FIELD
+    enum { COUNT=sizeof(fields)/sizeof(*fields) };
+    struct iovec local[COUNT],remote[COUNT];
+    size_t size=0;
+    for (unsigned i=0;i<COUNT;++i) {
+        local[i]=(struct iovec){(char *)info+fields[i].offset,fields[i].size};
+        remote[i]=(struct iovec){(void *)(address+fields[i].offset),fields[i].size};
+        size+=fields[i].size;
+    }
+    return process_vm_writev(owner,local,COUNT,remote,COUNT,0)==(ssize_t)size ? 0 : -EFAULT;
+}
+static void wait_empty(struct md_debugger *d,pid_t owner,const struct seccomp_data *call,long value) {
+    if (!value && call->nr==SYS_waitid) value=wait_info(owner,call->args[2],&(siginfo_t){0});
+    d->host.complete(owner,value);
+}
+static int wait_result(struct md_debugger *d, pid_t owner,const struct seccomp_data *call,int *children) {
+    struct inferior *chosen=NULL,*exact=NULL;
+    *children=0;
+    int id=call->nr==SYS_waitid;
+    int directed=id ? call->args[0]==P_PID : (pid_t)call->args[0]>0;
+    struct inferior *first=d->inferiors;
+    if (directed && first) {
+        pid_t number=(pid_t)call->args[id ? 1 : 0];
+        struct inferior *indexed=find(d,native(d,owner,number));
+        /* A real parent may already have retired the namespace entry while
+         * the debugger still owns its terminal event and visible number. */
+        if (indexed && indexed->number==number) first=indexed;
+    }
+    pid_t group=d->inferiors ? d->host.group(owner) : 0;
+    /* Publication order belongs to the event queue, not to the complete task
+     * population. Sleeping inferiors need no visit when an event is ready. */
+    if (!directed) for (struct inferior *p=d->ready;p;p=p->ready_next) {
+        if ((p->owner!=owner && d->host.group(p->owner)!=group) || !selected(d,owner,call,p)) continue;
+        if (!id || (wait_options(call)&(p->terminal ? WEXITED : WSTOPPED))) {
+            chosen=p; *children=1; break;
+        }
+    }
+    for (struct inferior *p=chosen ? NULL : first; p; p=p->next) {
+        if ((p->owner!=owner && d->host.group(p->owner)!=group) || !selected(d,owner,call,p)) continue;
+        *children=1;
+        if (directed) {
+            exact=p;
+            if (p->ready_previous && (!id || (wait_options(call)&(p->terminal ? WEXITED : WSTOPPED)))) chosen=p;
+        }
+        break;
+    }
+    if (!chosen) {
+        /* This exact live inferior's stops belong to this owner. Its terminal
+         * event removes/transitions the record before real-parent reaping;
+         * no native child can contribute a different result for this PID. */
+        if (exact && !exact->terminal && (wait_options(call)&WNOHANG)
+                && !(wait_options(call)&(WCONTINUED|__WNOTHREAD))) {
+            int error=id ? wait_info(owner,call->args[2],&(siginfo_t){0}) : 0;
+            d->host.complete(owner,error); return 1;
+        }
+        return 0;
+    }
     long value=chosen->number;
     int error;
     uintptr_t usage;
@@ -167,7 +274,7 @@ static int wait_result(struct md_debugger *d, pid_t owner,const struct seccomp_d
             : WCOREDUMP(chosen->status) ? CLD_DUMPED : CLD_KILLED) : CLD_TRAPPED;
         info.si_status=chosen->terminal ? (WIFEXITED(chosen->status) ? WEXITSTATUS(chosen->status)
             : WTERMSIG(chosen->status)) : (chosen->status>>8);
-        error=call->args[2] ? transfer(owner,call->args[2],&info,sizeof(info),1) : 0;
+        error=wait_info(owner,call->args[2],&info);
         usage=call->args[4]; value=0;
     } else {
         error=call->args[1] ? transfer(owner,call->args[1],&chosen->status,sizeof(int),1) : 0;
@@ -178,11 +285,11 @@ static int wait_result(struct md_debugger *d, pid_t owner,const struct seccomp_d
         error=transfer(owner,usage,&result,sizeof(result),1);
     }
     if (!error && !(call->nr==SYS_waitid && (wait_options(call)&WNOWAIT))) {
-        chosen->sequence=0;
+        ready_remove(d,chosen);
         if (chosen->terminal) {
             struct inferior **at=&d->inferiors;
             while (*at!=chosen) at=&(*at)->next;
-            *at=chosen->next;
+            unlink_inferior(d,at);
             if (d->host.reaped) d->host.reaped(owner,chosen->pid,0);
             free(chosen);
         }
@@ -214,6 +321,9 @@ void md_debugger_child_changed(struct md_debugger *d,pid_t pid) {
 int md_debugger_stop(struct md_debugger *d, pid_t pid, int status, const siginfo_t *info, unsigned long message) {
     struct inferior *p=find(d,pid);
     if (!p) return 0;
+    /* Any published ptrace stop satisfies INTERRUPT, including a syscall
+     * exit racing its delivery. Internal runtime stops never reach here. */
+    p->pending=0;
     p->stopped=1; p->status=status; p->message=message; p->step=0;
     p->uid=d->host.uid(pid);
     d->host.usage(pid,&p->usage);
@@ -225,7 +335,7 @@ int md_debugger_stop(struct md_debugger *d, pid_t pid, int status, const siginfo
     p->origin.valid=0;
     if (d->host.signal_origin) d->host.signal_origin(pid,&p->info,&origin,1);
     p->origin=origin;
-    p->sequence=++d->sequence;
+    ready_append(d,p);
     wake(d,p->owner);
     return 1;
 }
@@ -284,7 +394,7 @@ int md_debugger_running(struct md_debugger *d,pid_t target) {
 }
 int md_debugger_stop_pending(struct md_debugger *d,pid_t pid) {
     struct inferior *p=d ? find(d,pid) : NULL;
-    return p && !p->terminal && !p->stopped && (p->pending || p->deferred_stop.si_signo);
+    return p && !p->terminal && !p->stopped && p->pending;
 }
 int md_debugger_active(struct md_debugger *d) { return d->inferiors!=NULL || d->waiters!=NULL; }
 int md_debugger_newborn(struct md_debugger *d, pid_t pid) {
@@ -292,26 +402,9 @@ int md_debugger_newborn(struct md_debugger *d, pid_t pid) {
     return p && md_debugger_stop(d,pid,p->seized ? (SIGTRAP<<8)|0x7f|(PTRACE_EVENT_STOP<<16)
         : (SIGSTOP<<8)|0x7f,NULL,0);
 }
-int md_debugger_defer_stop(struct md_debugger *d, pid_t pid, const siginfo_t *info) {
-    struct inferior *p=find(d,pid);
-    if (!p || p->terminal || info->si_signo<=0 || info->si_signo>=NSIG || info->si_signo==SIGKILL) return 0;
-    /* Retain delivery until the adapter restores its context and publishes
-     * any preceding syscall exit. SIGSTOP also uses this queue while an
-     * uninterruptible resource owner finishes. */
-    if (!p->deferred_stop.si_signo) p->deferred_stop=*info;
-    return 1;
-}
 int md_debugger_boundary(struct md_debugger *d, pid_t pid) {
     struct inferior *p=find(d,pid);
-    if (!p || p->stopped) return 0;
-    if (p->pending) {
-        p->pending=0;
-        return md_debugger_newborn(d,pid);
-    }
-    if (!p->deferred_stop.si_signo) return 0;
-    siginfo_t info=p->deferred_stop;
-    p->deferred_stop=(siginfo_t){0};
-    return md_debugger_stop(d,pid,(info.si_signo<<8)|0x7f,&info,0);
+    return p && !p->stopped && p->pending ? md_debugger_newborn(d,pid) : 0;
 }
 int md_debugger_syscall_mode(struct md_debugger *d, pid_t pid) {
     struct inferior *p=find(d,pid);
@@ -321,24 +414,24 @@ int md_debugger_syscall_emulated(struct md_debugger *d,pid_t pid) {
     struct inferior *p=find(d,pid);
     return p && p->syscall_mode==PTRACE_SYSEMU;
 }
-int md_debugger_syscall(struct md_debugger *d, pid_t pid, const struct user_pt_regs *r, int entry) {
+int md_debugger_syscall_entry(struct md_debugger *d,pid_t pid,struct seccomp_data *call) {
+    struct inferior *p=find(d,pid);
+    if (!p || (p->syscall_stop!=1 && p->syscall.op!=PTRACE_SYSCALL_INFO_SECCOMP)) return 0;
+    *call=(struct seccomp_data){.nr=(int)p->syscall.entry.nr,.arch=p->syscall.arch,
+        .instruction_pointer=p->syscall.instruction_pointer};
+    memcpy(call->args,p->syscall.entry.args,sizeof(call->args));
+    return 1;
+}
+int md_debugger_syscall_observed(struct md_debugger *d,pid_t pid,const struct ptrace_syscall_info *info) {
+    int entry=info->op==PTRACE_SYSCALL_INFO_ENTRY;
+    if (!entry && info->op!=PTRACE_SYSCALL_INFO_EXIT) return 0;
     struct inferior *p=find(d,pid);
     if (!p || !p->syscall_mode || (!entry && p->syscall_mode==PTRACE_SYSEMU)) return 0;
     int stopped=md_debugger_stop(d,pid,((SIGTRAP|(p->options&PTRACE_O_TRACESYSGOOD ? 0x80 : 0))<<8)|0x7f,NULL,0);
     p->syscall_stop=entry ? 1 : 2;
     p->syscall_marker=entry ? 0 : 1;
-    p->syscall=(struct ptrace_syscall_info){.op=!(p->options&PTRACE_O_TRACESYSGOOD) ? PTRACE_SYSCALL_INFO_NONE
-        : entry ? PTRACE_SYSCALL_INFO_ENTRY : PTRACE_SYSCALL_INFO_EXIT,
-        .arch=AUDIT_ARCH_AARCH64,.instruction_pointer=r->pc,.stack_pointer=r->sp};
-    if (entry) {
-        /* ARM64 records the signed syscall number from w8, independently of
-         * the full x8 value retained in the application's register set. */
-        p->syscall.entry.nr=(uint64_t)(int64_t)(int32_t)r->regs[8];
-        for (unsigned i=0;i<6;i++) p->syscall.entry.args[i]=r->regs[i];
-    } else {
-        p->syscall.exit.rval=(int64_t)r->regs[0];
-        p->syscall.exit.is_error=(uint64_t)r->regs[0]>=(uint64_t)-4095;
-    }
+    p->syscall=*info;
+    if (!(p->options&PTRACE_O_TRACESYSGOOD)) p->syscall.op=PTRACE_SYSCALL_INFO_NONE;
     return stopped;
 }
 void md_debugger_exit(struct md_debugger *d, pid_t pid, int status) {
@@ -350,14 +443,14 @@ void md_debugger_exit(struct md_debugger *d, pid_t pid, int status) {
         ending->terminal=1; ending->status=status; ending->stopped=0;
         ending->uid=d->host.uid(pid);
         d->host.usage(pid,&ending->usage);
-        ending->sequence=++d->sequence; notify=ending->owner;
+        ready_append(d,ending); notify=ending->owner;
     }
     struct inferior **at=&d->inferiors;
     pid_t owner=0;
     while (*at) {
         struct inferior *p=*at;
         if ((p->pid==pid && !p->terminal) || p->owner==pid) {
-            *at=p->next;
+            unlink_inferior(d,at);
             if (p->pid==pid) owner=p->owner;
             else if (!p->terminal) {
                 if (p->options & PTRACE_O_EXITKILL) kill(p->pid,SIGKILL);
@@ -390,11 +483,12 @@ void md_debugger_rekey(struct md_debugger *d, pid_t old, pid_t pid) {
     struct inferior **at=&d->inferiors;
     while (*at) {
         struct inferior *p=*at;
-        if (p->pid==pid && source && p!=source) { *at=p->next; free(p); continue; }
+        if (p->pid==pid && source && p!=source) { unlink_inferior(d,at); free(p); continue; }
         if (p->pid==old) {
             p->exec_former=visible(d,p->owner,old);
             p->number=visible(d,p->owner,pid);
-            p->pid=pid; p->real_child=d->host.group(d->host.parent(pid))==d->host.group(p->owner);
+            index_remove(d,p); p->pid=pid; index_add(d,p);
+            p->real_child=d->host.group(d->host.parent(pid))==d->host.group(p->owner);
         }
         if (p->owner==old) p->owner=pid;
         at=&p->next;
@@ -483,7 +577,10 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
         if (!error && op==PTRACE_ATTACH) {
             target->pending=1; error=d->host.interrupt(pid);
         }
-        if (error) { d->inferiors=target->next; free(target); }
+        if (error) {
+            unlink_inferior(d,&d->inferiors); free(target);
+            d->host.options(pid,0);
+        }
         return error;
     }
     struct inferior *p=find(d,pid);
@@ -492,8 +589,11 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
     if (!p || p->terminal || p->owner!=caller) return -ESRCH;
     if (op==PTRACE_INTERRUPT) {
         if (!p->seized) return -EIO;
+        int previous=p->pending;
         p->pending=1;
-        return p->stopped ? 0 : d->host.interrupt(pid);
+        int error=p->stopped ? 0 : d->host.interrupt(pid);
+        if (error) p->pending=previous;
+        return error;
     }
     if (op==PTRACE_KILL) return kill(pid,SIGKILL) ? -errno : 0;
     if (!p->stopped) return -ESRCH;
@@ -501,7 +601,7 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
     case PTRACE_LISTEN: {
         if (!p->seized || (unsigned)p->status>>16!=PTRACE_EVENT_STOP) return -EIO;
         int error=d->host.listen(pid);
-        if (!error) { p->stopped=0; p->sequence=0; }
+        if (!error) { p->stopped=0; ready_remove(d,p); }
         return error;
     }
     case PTRACE_SETOPTIONS: {
@@ -604,12 +704,12 @@ static long control(struct md_debugger *d, pid_t caller, const struct seccomp_da
         struct md_signal_origin origin=p->origin;
         int delivery_stop=!p->syscall_stop && !((unsigned)p->status>>16);
         p->origin.valid=0;
-        p->stopped=0; p->sequence=0; p->step=op==PTRACE_SINGLESTEP;
+        p->stopped=0; ready_remove(d,p); p->step=op==PTRACE_SINGLESTEP;
         p->syscall_mode=op==PTRACE_SYSCALL || op==PTRACE_SYSEMU ? op : 0;
         if (op==PTRACE_DETACH) {
             struct inferior **at=&d->inferiors;
             while (*at!=p) at=&(*at)->next;
-            *at=p->next; free(p); d->host.options(pid,0);
+            unlink_inferior(d,at); free(p); d->host.options(pid,0);
         }
         d->host.resume(pid,(int)data,&origin,delivery_stop); return 0;
     }
@@ -630,7 +730,7 @@ static void wait_retry(struct md_debugger *d,struct waiting *w) {
     w->candidate=0; w->native_children=0; w->retry=0;
     if (w->filtered) {
         free(w->candidates); w->candidates=NULL; w->count=0;
-        int filtered=d->host.wait_children(w->pid,&w->call,&w->candidates,&w->count);
+        int filtered=wait_children(d,w->pid,&w->call,&w->candidates,&w->count,&w->native_children);
         if (filtered>=0) w->filtered=filtered;
         if (filtered<0 || (filtered && !w->count)) {
             md_debugger_wait_complete(d,w->pid,filtered<0 ? filtered : -ECHILD,NULL);
@@ -656,16 +756,16 @@ int md_debugger_call(struct md_debugger *d,pid_t pid,struct seccomp_data call) {
     int children;
     int ready=wait_result(d,pid,&call,&children);
     if (ready) return ready;
-    pid_t *candidates=NULL; size_t count=0;
-    int filtered=d->host.wait_children ? d->host.wait_children(pid,&call,&candidates,&count) : 0;
+    pid_t *candidates=NULL; size_t count=0; int live=0;
+    int filtered=wait_children(d,pid,&call,&candidates,&count,&live);
     if (filtered<0) { free(candidates); d->host.complete(pid,filtered); return 1; }
     if (!children && !filtered) { free(candidates); return 0; }
-    if (!children && filtered && !count) { free(candidates); d->host.complete(pid,-ECHILD); return 1; }
+    if (!children && filtered && !count && !live) { free(candidates); d->host.complete(pid,-ECHILD); return 1; }
     if (d->host.wait_admit && !d->host.wait_admit(pid)) { free(candidates); return MD_DEBUG_CALL_CONTEXT; }
     struct waiting *w=malloc(sizeof(*w));
     if (!w) { free(candidates); d->host.complete(pid,-ENOMEM); return 1; }
     *w=(struct waiting){.next=d->waiters,.pid=pid,.call=call,.probing=1,
-        .filtered=filtered,.candidates=candidates,.count=count}; d->waiters=w;
+        .filtered=filtered,.candidates=candidates,.count=count,.native_children=live}; d->waiters=w;
     if (filtered && !count) md_debugger_wait_complete(d,pid,-ECHILD,NULL);
     else wait_probe(d,w,MD_DEBUG_WAIT_PROBE);
     /* EVENT_WAIT: a guest trace stop or actual child exit resumes this wait.
@@ -717,7 +817,7 @@ void md_debugger_wait_complete(struct md_debugger *d,pid_t pid,long value,const 
         /* The queued trace event owns completion. */
     } else if (w->filtered) {
         if ((!children && !w->native_children) || (wait_options(&w->call)&WNOHANG)) {
-            d->host.complete(pid,children || w->native_children ? 0 : -ECHILD);
+            wait_empty(d,pid,&w->call,children || w->native_children ? 0 : -ECHILD);
         } else {
             w->probing=0;
             if (w->retry) wait_retry(d,w);

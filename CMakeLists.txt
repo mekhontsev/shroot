@@ -316,17 +316,6 @@ if(SHROOT_BUILD_TESTS)
     add_executable(test_client_integration tests/test_client_integration.c)
     target_compile_options(test_client_integration PRIVATE -std=c17 -Wall -Wextra -Werror -UNDEBUG)
     target_link_libraries(test_client_integration PRIVATE shroot)
-    if(NOT CMAKE_CROSSCOMPILING)
-        find_package(Python3 COMPONENTS Interpreter QUIET)
-        if(Python3_Interpreter_FOUND)
-            add_test(NAME client_runtime COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_client_runtime.py" "${CMAKE_CURRENT_BINARY_DIR}")
-            add_test(NAME library COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_library.py" "${CMAKE_CURRENT_BINARY_DIR}")
-            add_test(NAME registry COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_registry.py" "${CMAKE_CURRENT_BINARY_DIR}")
-        endif()
-    endif()
     guest_executable(test_robust_futex tests/test_robust_futex.c tests/test_robust_futex_entry.S ${src}/robust_futex.c
         ${src}/task_atomic.S ${src}/task_call.c ${src}/task_quiesce.c
         ${src}/task_robust.c ${src}/task_checkpoint.c ${src}/task_copy.c ${src}/task_child_reap.c

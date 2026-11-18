@@ -155,9 +155,15 @@ static int entry_file(struct md_inode_store *s, struct archive *ar, struct archi
     if (!link && !device && kind != S_IFREG && kind != S_IFDIR && kind != S_IFLNK && kind != S_IFIFO) return -ENOTSUP;
     if (kind == S_IFIFO && archive_entry_size(entry)) return -EINVAL;
     int r = md_image_acl_record(s,entry,path);
-    if (!r) r = parents(s, path);
+    if (r) return r;
     struct mdi_location loc;
-    if (!r) r = mdi_walk(s, MD_INODE_ROOT, path, MDI_ENTRY, 1, &loc);
+    r = mdi_walk(s, MD_INODE_ROOT, path, MDI_ENTRY, 1, &loc);
+    /* An absent final name is already a valid insertion point. Only an
+     * absent intermediate directory needs the archive's implicit parents. */
+    if (r == -ENOENT) {
+        r = parents(s, path);
+        if (!r) r = mdi_walk(s, MD_INODE_ROOT, path, MDI_ENTRY, 1, &loc);
+    }
     if (!r && loc.exists && (link || kind != S_IFDIR || loc.node.kind != S_IFDIR))
         r = remove_tree(s, &loc, 0);
     if (r) return r;
@@ -316,6 +322,8 @@ static int metadata(struct md_inode_store *s, int preserve) {
             {sqlite3_column_int64(q, 2), sqlite3_column_int64(q, 3)}};
         if (sqlite3_column_type(q, 6) != SQLITE_NULL)
             times[0] = (struct timespec){sqlite3_column_int64(q, 6), sqlite3_column_int64(q, 7)};
+        if (!r && preserve) r = mdi_metadata(s, &node, (uint32_t)sqlite3_column_int64(q, 4),
+            (uint32_t)sqlite3_column_int64(q, 5), (mode_t)sqlite3_column_int(q, 1));
         if (!r && node.kind == S_IFLNK && utimensat(s->objects, object, times, AT_SYMLINK_NOFOLLOW)) r = -errno;
         int carrier=!r && (node.kind==S_IFIFO || node.kind==S_IFCHR || node.kind==S_IFBLK);
         if (!r && carrier) {
@@ -326,12 +334,11 @@ static int metadata(struct md_inode_store *s, int preserve) {
             int fd = openat(s->objects, object, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
             if (fd < 0) r = -errno;
             else {
-                if (fchmod(fd, (mode_t)sqlite3_column_int(q, 1) & 01777) || futimens(fd, times) || fsync(fd)) r = -errno;
+                if ((!preserve && fchmod(fd, (mode_t)sqlite3_column_int(q, 1) & 01777))
+                        || futimens(fd, times) || fsync(fd)) r = -errno;
                 close(fd);
             }
         }
-        if (!r && preserve) r = mdi_metadata(s, &node, (uint32_t)sqlite3_column_int64(q, 4),
-            (uint32_t)sqlite3_column_int64(q, 5), (mode_t)sqlite3_column_int(q, 1));
         if (!r && !preserve && node.shared) r = mdi_metadata(s, &node, geteuid(), getegid(),
             (mode_t)sqlite3_column_int(q, 1) & 01777);
         if (!r && preserve) r=mdi_acl_chmod(s,&node,(mode_t)sqlite3_column_int(q,1));
@@ -345,6 +352,10 @@ static int read_tree(struct md_inode_store *s, int fd, uint64_t *bytes, uint64_t
     int source = 0;
     if (objects >= 0) r = mdi_source_register(s, objects, &source);
     if (!r && source) r = mdi_sources_open(s);
+    /* A layer publishes one transaction. Keep individual data barriers, but
+     * flush its shared backing directory only before that transaction commits. */
+    int batching=0;
+    if (!r) { r=mdi_sync_batch_begin(s); batching=!r; }
     if (!r) r = mdi_sql(s, "CREATE TEMP TABLE IF NOT EXISTS image_metadata(object TEXT PRIMARY KEY,mode INTEGER,seconds INTEGER,nanos INTEGER,uid INTEGER,gid INTEGER,atime INTEGER,atime_nanos INTEGER);"
         "CREATE TEMP TABLE layer_links(parent TEXT,name BLOB,target TEXT,capability BLOB,ready INTEGER DEFAULT 0,waiting_parent TEXT,waiting_name BLOB,UNIQUE(parent,name));"
         "CREATE INDEX temp.layer_links_ready ON layer_links(ready) WHERE ready IS NOT NULL;"
@@ -403,7 +414,8 @@ static int read_tree(struct md_inode_store *s, int fd, uint64_t *bytes, uint64_t
     if (!r) r = links(s);
     if (!r) r = md_image_acls_finish(s);
     if (!r) r = mdi_sql(s, "DROP TABLE temp.layer_links; DROP TABLE temp.layer_paths; DROP TABLE temp.layer_acls");
-    if (!r && fsync(s->objects)) r = -errno;
+    if (!r) r=mdi_sync(s,s->objects);
+    if (batching) r=mdi_sync_batch_end(s,r);
     return mdi_commit(s, r);
 }
 int md_image_layer(struct md_inode_store *s, int fd, uint64_t *bytes, uint64_t *entries) {

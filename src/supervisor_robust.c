@@ -34,6 +34,7 @@
 struct retained_memory *retained_memories,*retained_creation,*retained_work;
 static struct retained_memory *retained_actors[RETAINED_ACTOR_BUCKETS];
 static unsigned robust_replays;
+static uint64_t retirement_pass;
 struct retained_retirement *retained_retirement;
 struct md_task_quiesce *retained_barrier;
 
@@ -47,7 +48,7 @@ static void robust_cleanup_complete(struct retained_memory *m,int state);
 static void retained_memory_release(struct retained_memory *m);
 static void retained_retirement_finish(int completed);
 static int retained_retirement_member(const struct thread *t,pid_t parent);
-static int retained_retirement_group_ready(pid_t parent);
+static int retained_retirement_group_ready(pid_t parent,uint64_t pass);
 static void retained_retirement_progress(void);
 
 int retained_task_held(const struct thread *t) {
@@ -67,12 +68,12 @@ struct retained_memory *retained_actor(pid_t pid) {
 }
 
 int retained_child_identity(const struct retained_memory *m,pid_t *parent,pid_t *group,int *signal) {
-    /* A ready private actor completed setsid and was cloned with exit_signal
-     * zero. Its traced parent cannot reparent it before the terminal boundary.
+    /* A ready private actor completed setsid. Its traced parent cannot
+     * reparent it before the terminal boundary; adoption refreshes exit_signal.
      * Detach clears this borrowed pointer before the thread slot can be reused. */
     if (!m || !m->ready || !m->parent || !m->parent->pid
             || m->parent->terminal_stop || m->parent->resume_lost) return 0;
-    *parent=m->parent->tgid; *group=m->retained.actor; *signal=0;
+    *parent=m->parent->tgid; *group=m->retained.actor; *signal=m->parent_exit_signal;
     return 1;
 }
 
@@ -201,7 +202,7 @@ static void retained_creation_finish(struct retained_memory *m,long error) {
 void retained_creation_begin(struct retained_memory *m,struct thread *t,
         const struct user_pt_regs *regs,enum md_task_call_boundary call) {
     CHECK(!retained_creation && !m->ready && !m->creator && !m->retiring);
-    m->creator=t; m->parent=t; retained_creation=m;
+    m->creator=t; m->parent=t; m->parent_exit_signal=0; retained_creation=m;
     int error=task_observe_exit(t);
     if (error) { retained_creation_finish(m,error); return; }
     int boundary=md_task_checkpoint_suspend(&checkpoints,t->pid);
@@ -306,11 +307,19 @@ static int retained_retirement_member(const struct thread *t,pid_t parent) {
     return t->pid && t->born && (t->tgid==parent || md_task_parent(t->pid)==parent);
 }
 
-static int retained_retirement_group_ready(pid_t parent) {
-    for (struct thread *t=threads;t;t=t->next) if (t->pid && t->born
+static int retained_retirement_group_ready(pid_t parent,uint64_t pass) {
+    struct thread *leader=find_thread(parent);
+    if (pass && leader && leader->robust.retirement_blocked==pass) return 0;
+    for (struct thread *t=threads;t;t=t->next) {
+        if (statistics) ++statistics->retirement_group_scans;
+        if (t->pid && t->born
             && (t->terminal_stop || retained_task_held(t) || md_task_helpers_group_busy(helpers,t->tgid)
                 || md_broker_task_active(broker,t->pid))
-            && retained_retirement_member(t,parent)) return 0;
+            && retained_retirement_member(t,parent)) {
+            if (leader) leader->robust.retirement_blocked=pass;
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -375,11 +384,27 @@ static void retained_retirement_progress(void) {
         return;
     }
     if (quiescence_busy(NULL) || retained_barrier) return;
+    /* One event-loop turn cannot release a blocked parent group midway
+     * through this scan. Many adopted actors therefore share one check. */
+    if (!++retirement_pass) {
+        for (struct thread *t=threads;t;t=t->next) t->robust.retirement_blocked=0;
+        ++retirement_pass;
+    }
     for (struct retained_memory *m=retained_work,*next;m;m=next) {
         next=m->work_next;
         if (!m->retiring || m->members || m->cleaning || m->creator) continue;
         if (!m->retained.actor) { retained_memory_release(m); continue; }
-        long parent=md_task_parent(m->retained.actor);
+        pid_t stable_parent,group; int signal;
+        long parent=retained_child_identity(m,&stable_parent,&group,&signal)
+            ? stable_parent : md_task_parent(m->retained.actor);
+        if (!m->parent && parent>0) {
+            struct thread *owner=find_thread((pid_t)parent);
+            if (owner && owner->born && !owner->terminal_stop && !owner->resume_lost
+                    && !md_task_child_class(m->retained.actor,&group,&signal)
+                    && group==m->retained.actor) {
+                m->parent=owner; m->parent_exit_signal=signal;
+            }
+        }
         if (parent==getpid() || (m->dead && parent==-ENOENT)) {
             if (m->dead) { retained_memory_release(m); continue; }
             if (!m->killed) {
@@ -389,14 +414,19 @@ static void retained_retirement_progress(void) {
             }
             continue;
         }
-        struct thread *actor=NULL;
-        for (struct thread *t=threads;t;t=t->next)
-            if (t->pid && t->tgid==parent && t->entered && task_action_borrowable(t,NULL)) { actor=t; break; }
         /* Existing helper/exit owners finish before the parent/children
          * barrier. A resumed exit cannot acknowledge INTERRUPT; in particular
          * a zombie leader is not waitable until its remaining threads exit.
          * Holding those threads here would prevent the event we await. */
-        if (!actor || !retained_retirement_group_ready((pid_t)parent)) continue;
+        if (!retained_retirement_group_ready((pid_t)parent,retirement_pass)) continue;
+        struct thread *actor=find_thread((pid_t)parent);
+        if (!actor || !actor->entered || !task_action_borrowable(actor,NULL)) {
+            for (actor=threads;actor;actor=actor->next) {
+                if (statistics) ++statistics->retirement_actor_scans;
+                if (actor->pid && actor->tgid==parent && actor->entered && task_action_borrowable(actor,NULL)) break;
+            }
+        }
+        if (!actor) continue;
         int stopped=actor->kernel_stopped;
         int borrowed=md_broker_native_borrow(broker,actor->pid,&stopped);
         if (borrowed<0) continue;

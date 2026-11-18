@@ -1,4 +1,6 @@
 #define _GNU_SOURCE
+#include "../src/process_owner.h"
+#include "../src/signal_abi.h"
 #include <assert.h>
 #include <asm/ptrace.h>
 #include <elf.h>
@@ -20,6 +22,7 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <sys/ioctl.h>
+#include <sys/file.h>
 #include <sys/epoll.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
@@ -32,9 +35,18 @@
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 volatile int magic_value = 42;
+static volatile sig_atomic_t suspend_handled;
+static void suspend_handler(int signal,siginfo_t *info,void *context) {
+    uint64_t saved;
+    memcpy(&saved,&((ucontext_t *)context)->uc_sigmask,sizeof(saved));
+    if (!(saved&(UINT64_C(1)<<(signal-1))) || info->si_code!=SI_QUEUE
+            || info->si_value.sival_int!=71 || suspend_handled) _exit(92);
+    suspend_handled=1;
+}
 static int stop(pid_t child) {
     int status;
     struct { uint64_t data[18], guard[16]; } usage;
@@ -53,6 +65,71 @@ static void exited(pid_t child, int code) {
     assert(result==child);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == code);
 }
+static void syscall_suspend_test(void) {
+    const int numbers[]={MD_SIGRTMIN,MD_SIGRTMIN+1,SIGUSR1};
+    const int calls[]={SYS_rt_sigsuspend,SYS_ppoll,SYS_pselect6,SYS_epoll_pwait};
+    for (unsigned c=0;c<sizeof(calls)/sizeof(*calls);++c)
+    for (unsigned i=0;i<sizeof(numbers)/sizeof(*numbers);++i) for (unsigned continuation=0;continuation<3;++continuation) {
+        int number=numbers[i];
+        pid_t child=fork(); assert(child>=0);
+        if (!child) {
+            struct md_kernel_action action={.handler=(uintptr_t)suspend_handler,.flags=SA_SIGINFO};
+            uint64_t blocked=UINT64_C(1)<<(number-1),empty=0,actual=0;
+            assert(!syscall(SYS_rt_sigaction,number,&action,NULL,8));
+            assert(!syscall(SYS_rt_sigprocmask,SIG_BLOCK,&blocked,NULL,8));
+            int queue=calls[c]==SYS_epoll_pwait ? epoll_create1(EPOLL_CLOEXEC) : -1;
+            assert(calls[c]!=SYS_epoll_pwait || queue>=0);
+            assert(!ptrace(PTRACE_TRACEME,0,0,0));
+            assert(!syscall(SYS_tgkill,getpid(),syscall(SYS_gettid),SIGSTOP));
+            struct { const uint64_t *mask; size_t size; } select_mask={&empty,8};
+            struct epoll_event event;
+            long result=calls[c]==SYS_rt_sigsuspend ? syscall(calls[c],&empty,8)
+                : calls[c]==SYS_ppoll ? syscall(calls[c],NULL,0,NULL,&empty,8)
+                : calls[c]==SYS_pselect6 ? syscall(calls[c],0,NULL,NULL,NULL,NULL,&select_mask)
+                : syscall(calls[c],queue,&event,1,-1,&empty,8);
+            assert(result==-1 && errno==EINTR && suspend_handled==1);
+            assert(!syscall(SYS_rt_sigprocmask,SIG_SETMASK,NULL,&actual,8) && (actual&blocked));
+            _exit(0);
+        }
+        assert(WSTOPSIG(stop(child))==SIGSTOP);
+        assert(!ptrace(PTRACE_SETOPTIONS,child,0,PTRACE_O_TRACESYSGOOD|PTRACE_O_EXITKILL));
+        assert(!sigqueue(child,number,(union sigval){.sival_int=71}));
+        assert(!ptrace(PTRACE_SYSCALL,child,0,0));
+        int status,delivered=0,suspend_exits=0,injected=0; uint64_t nr=0;
+        for (;;) {
+            assert(waitpid(child,&status,0)==child);
+            if (WIFEXITED(status)) { assert(!WEXITSTATUS(status)); break; }
+            assert(WIFSTOPPED(status));
+            int signal=WSTOPSIG(status),inject=0;
+            if (signal==(SIGTRAP|0x80)) {
+                struct ptrace_syscall_info info={0};
+                assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
+                if (info.op==PTRACE_SYSCALL_INFO_ENTRY) nr=info.entry.nr;
+                else {
+                    assert(info.op==PTRACE_SYSCALL_INFO_EXIT);
+                    if (nr==(unsigned)calls[c]) {
+                        assert(++suspend_exits==1);
+                        if (continuation==1) inject=SIGURG;
+                        if (continuation==2) {
+                            assert(!ptrace(PTRACE_DETACH,child,0,0));
+                            exited(child,0); break;
+                        }
+                    }
+                }
+            } else if (signal==SIGURG) {
+                siginfo_t info; assert(!ptrace(PTRACE_GETSIGINFO,child,0,&info));
+                assert(continuation==1 && ++injected==1 && info.si_code==SI_KERNEL && !info.si_pid);
+            } else {
+                assert(signal==number && suspend_exits==1 && !delivered);
+                siginfo_t info; assert(!ptrace(PTRACE_GETSIGINFO,child,0,&info));
+                assert(info.si_code==SI_QUEUE && info.si_value.sival_int==71);
+                delivered=1; inject=signal;
+            }
+            assert(!ptrace(PTRACE_SYSCALL,child,0,inject));
+        }
+        assert(delivered==(continuation!=2) && suspend_exits==1 && injected==(continuation==1));
+    }
+}
 static long seccomp_trace_call(int number,uint64_t *visible_number) {
     uint64_t mask=UINT64_MAX;
     register long x0 __asm__("x0")=AT_FDCWD;
@@ -67,17 +144,74 @@ static long seccomp_trace_call(int number,uint64_t *visible_number) {
     *visible_number=x8;
     return x0;
 }
-static void seccomp_trace_test(void) {
+static void *seccomp_install_peer(void *argument) {
+    char byte;
+    assert(read(*(int *)argument,&byte,1)==1);
+    return NULL;
+}
+static void seccomp_install_trace(void) {
+    const int calls[]={SYS_prctl,SYS_seccomp};
+    for (unsigned which=0;which<sizeof(calls)/sizeof(*calls);++which) {
+        int number=calls[which];
+        pid_t child=fork(); assert(child>=0);
+        if (!child) {
+            assert(!ptrace(PTRACE_TRACEME,0,0,0)); raise(SIGSTOP);
+            struct sock_filter code[]={
+                BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,number,0,1),
+                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE|0x291),
+                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};
+            struct sock_fprog program={sizeof(code)/sizeof(*code),code};
+            assert(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
+            assert(!prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&program,0,0));
+            int channel[2]; assert(!pipe(channel));
+            pthread_t peer; assert(!pthread_create(&peer,NULL,seccomp_install_peer,&channel[0]));
+            struct sock_filter allow[]= {BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};
+            program=(struct sock_fprog){1,allow};
+            for (unsigned i=0;i<2;++i)
+                assert(!syscall(number,number==SYS_prctl ? PR_SET_SECCOMP : SECCOMP_SET_MODE_FILTER,
+                    number==SYS_prctl ? SECCOMP_MODE_FILTER : 0,&program,0,0));
+            assert(write(channel[1],"x",1)==1 && !pthread_join(peer,NULL));
+            _exit(0);
+        }
+        assert(WSTOPSIG(stop(child))==SIGSTOP);
+        assert(!ptrace(PTRACE_SETOPTIONS,child,0,PTRACE_O_TRACESECCOMP|PTRACE_O_TRACESYSGOOD));
+        assert(!ptrace(PTRACE_CONT,child,0,0));
+        for (unsigned i=0;i<2;++i) {
+            assert((unsigned)stop(child)>>16==PTRACE_EVENT_SECCOMP);
+            struct ptrace_syscall_info info={0};
+            assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
+            assert(info.op==PTRACE_SYSCALL_INFO_SECCOMP && info.seccomp.nr==(unsigned)number
+                && info.seccomp.ret_data==0x291);
+            assert(!ptrace(PTRACE_SYSCALL,child,0,0));
+            assert(WSTOPSIG(stop(child))==(SIGTRAP|0x80));
+            assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
+            assert(info.op==PTRACE_SYSCALL_INFO_EXIT && !info.exit.rval && !info.exit.is_error);
+            assert(!ptrace(PTRACE_CONT,child,0,0));
+        }
+        exited(child,0);
+    }
+    puts("PASS filter installation trace: one event and exit per call with live peers, both APIs and repeated site");
+}
+static void seccomp_trace_test(const char *group) {
+    if (!group || !strcmp(group,"install")) seccomp_install_trace();
+    if (group && !strcmp(group,"install")) return;
     enum { UNCHANGED, SKIP, DENIED, TRACE_AGAIN, REGISTER_ONLY, NUMBER_ONLY,
         DETACH, SYSCALL_EXIT, NO_OPTION, NO_TRACER, PC_ONLY, ARGUMENT, ARGUMENT_PC, SYSEMU_AFTER_TRACE, VARIANTS };
     volatile long *completed=mmap(NULL,sizeof(*completed),PROT_READ|PROT_WRITE,
         MAP_SHARED|MAP_ANONYMOUS,-1,0);
     assert(completed!=MAP_FAILED);
-    const int calls[]={SYS_getpid,SYS_getuid,SYS_openat,SYS_getpgid,SYS_rt_sigprocmask};
+    const int calls[]={SYS_getpid,SYS_getuid,SYS_openat,SYS_getpgid,SYS_rt_sigprocmask,-1};
+    const char *groups[]={"getpid","getuid","openat","getpgid","sigmask","skip"};
+    unsigned tested=0;
     for (unsigned which=0;which<sizeof(calls)/sizeof(*calls);++which)
     for (unsigned variant=0;variant<VARIANTS;++variant) {
+        if (group && strcmp(group,groups[which])) continue;
         int original=calls[which];
         if (original==SYS_getpgid && variant!=ARGUMENT && variant!=ARGUMENT_PC) continue;
+        if (original==-1 && variant!=UNCHANGED && variant!=SKIP
+                && variant!=NO_OPTION && variant!=NO_TRACER && variant!=SYSCALL_EXIT) continue;
+        ++tested;
         *completed=-1;
         fprintf(stderr,"seccomp trace nr=%d variant=%u\n",original,variant);
         pid_t child=fork(); assert(child>=0);
@@ -108,7 +242,9 @@ static void seccomp_trace_test(void) {
             if (variant==SKIP) assert(value==617);
             else if (variant==DENIED) assert(value==-EACCES);
             else if (variant==NO_OPTION || variant==NO_TRACER) assert(value==-ENOSYS);
+            else if (original==-1) assert(value==-ENOSYS);
             else {
+                if (value<0) fprintf(stderr,"seccomp trace result nr=%d variant=%u value=%ld\n",original,variant,value);
                 assert(value>=0);
                 if (original==SYS_rt_sigprocmask && variant!=TRACE_AGAIN && variant!=NUMBER_ONLY)
                     assert(!value);
@@ -128,11 +264,12 @@ static void seccomp_trace_test(void) {
         unsigned long cookie=0; assert(!ptrace(PTRACE_GETEVENTMSG,child,0,&cookie) && cookie==0x1234);
         struct ptrace_syscall_info info={0};
         assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
-        assert(info.op==PTRACE_SYSCALL_INFO_SECCOMP && info.seccomp.nr==(unsigned)original
+        assert(info.op==PTRACE_SYSCALL_INFO_SECCOMP && info.seccomp.nr==(uint64_t)(int64_t)original
             && info.seccomp.ret_data==cookie);
         struct user_pt_regs regs; struct iovec io={&regs,sizeof(regs)};
         assert(!ptrace(PTRACE_GETREGSET,child,NT_PRSTATUS,&io));
         assert(regs.pc==info.instruction_pointer && regs.sp==info.stack_pointer);
+        if (original==-1) assert((long)regs.regs[0]==-ENOSYS && (int)info.seccomp.args[0]==AT_FDCWD);
         int number=variant==SKIP ? -1 : variant==DENIED ? SYS_getppid
             : variant==TRACE_AGAIN || variant==NUMBER_ONLY ? SYS_getuid : original;
         if (variant==REGISTER_ONLY) regs.regs[8]=SYS_getppid;
@@ -168,12 +305,12 @@ static void seccomp_trace_test(void) {
         if (variant==SYSCALL_EXIT) {
             assert(WSTOPSIG(stop(child))==(SIGTRAP|0x80));
             assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
-            assert(info.op==PTRACE_SYSCALL_INFO_EXIT && !info.exit.is_error);
+            assert(info.op==PTRACE_SYSCALL_INFO_EXIT && info.exit.is_error==(original==-1));
             assert(!ptrace(PTRACE_CONT,child,0,0));
         }
         exited(child,0);
     }
-    assert(!munmap((void *)completed,sizeof(*completed)));
+    assert(tested && !munmap((void *)completed,sizeof(*completed)));
 }
 static void seccomp_interrupt_test(void) {
     const int calls[]={SYS_getpid,SYS_getuid,SYS_openat};
@@ -265,9 +402,26 @@ static void pidfd_copy_test(void) {
         assert(!close(ready[1]) && !close(release[0]));
         int number; assert(read(ready[0],&number,sizeof(number))==sizeof(number));
         int process=syscall(SYS_pidfd_open,child,0); assert(process>=0);
+        assert(fcntl(process,F_GETFD)==FD_CLOEXEC);
         errno=0; assert(syscall(SYS_pidfd_getfd,process,number,1)==-1 && errno==EINVAL);
+        assert(fcntl(process,F_GETFD)==FD_CLOEXEC);
         errno=0; assert(syscall(SYS_pidfd_getfd,process,-1,0)==-1 && errno==EBADF);
-        int copy=syscall(SYS_pidfd_getfd,process,number,0); assert(copy>=0);
+        assert(fcntl(process,F_GETFD)==FD_CLOEXEC);
+        int copy=syscall(SYS_pidfd_getfd,process,number,0);
+        if (copy<0) {
+            fprintf(stderr,"pidfd copy child=%d fd=%d self=%u query=%u errno=%d\n",child,number,self,query,errno);
+            char path[64],info[1024];
+            snprintf(path,sizeof(path),"/proc/self/fdinfo/%d",process);
+            int description=open(path,O_RDONLY|O_CLOEXEC);
+            ssize_t size=description<0 ? -1 : read(description,info,sizeof(info)-1);
+            if (size>=0) { info[size]=0; fprintf(stderr,"pidfd info: %s",info); }
+            else fprintf(stderr,"pidfd info failed errno=%d\n",errno);
+            if (description>=0) close(description);
+            /* Its abort path may itself need the unanswered notification. */
+            assert(!kill(child,SIGKILL));
+            int status; assert(waitpid(child,&status,0)==child && WIFSIGNALED(status));
+        }
+        assert(copy>=0);
         assert(fcntl(copy,F_GETFD)==FD_CLOEXEC && !close(process));
         assert(write(release[1],"x",1)==1);
         struct seccomp_notif notification={0};
@@ -280,6 +434,51 @@ static void pidfd_copy_test(void) {
         assert(!close(copy) && !close(ready[0]) && !close(release[1]));
     }
 }
+struct proc_thread_input { int fd; ino_t inode; pid_t leader; };
+static void *proc_thread_files(void *opaque) {
+    const struct proc_thread_input *input=opaque;
+    assert(!unshare(CLONE_FILES|CLONE_FS));
+    assert(!close(input->fd));
+    char path[128],text[1024],owner[64];
+    assert(!chdir("/etc"));
+    assert(readlink("/proc/thread-self/cwd",text,sizeof(text))==4 && !memcmp(text,"/etc",4));
+    snprintf(path,sizeof(path),"/proc/thread-self/fd/%d",input->fd);
+    errno=0; assert(readlink(path,text,sizeof(text))==-1 && errno==ENOENT);
+    for (unsigned i=0;i<3;++i) {
+        if (!i) snprintf(owner,sizeof(owner),"self");
+        else if (i==1) snprintf(owner,sizeof(owner),"%d",input->leader);
+        else snprintf(owner,sizeof(owner),"%d/task/%d",input->leader,input->leader);
+        snprintf(path,sizeof(path),"/proc/%s/fd/%d",owner,input->fd);
+        assert(readlink(path,text,sizeof(text))==1 && text[0]=='/');
+        snprintf(path,sizeof(path),"/proc/%s/fdinfo/%d",owner,input->fd);
+        int info=open(path,O_RDONLY|O_CLOEXEC); assert(info>=0);
+        ssize_t size=read(info,text,sizeof(text)-1); assert(size>0);
+        text[size]=0;
+        char expected[64]; snprintf(expected,sizeof(expected),"ino:\t%llu\n",(unsigned long long)input->inode);
+        assert(strstr(text,expected));
+        assert(!close(info));
+        snprintf(path,sizeof(path),"/proc/%s/cwd",owner);
+        assert(readlink(path,text,sizeof(text))==1 && text[0]=='/');
+    }
+    snprintf(path,sizeof(path),"/dev/fd/%d",input->fd);
+    ssize_t alias=readlink(path,text,sizeof(text));
+    if (alias!=1 || text[0]!='/')
+        fprintf(stderr,"proc thread alias %s result=%zd errno=%d target=%.*s\n",
+            path,alias,errno,alias>0 ? (int)alias : 0,text);
+    assert(alias==1 && text[0]=='/');
+    return NULL;
+}
+static void proc_thread_test(void) {
+    assert(!chdir("/"));
+    struct proc_thread_input input={.fd=open("/",O_PATH|O_DIRECTORY|O_CLOEXEC),.leader=getpid()};
+    assert(input.fd>=0);
+    struct stat st; assert(!fstat(input.fd,&st)); input.inode=st.st_ino;
+    pthread_t thread;
+    assert(!pthread_create(&thread,NULL,proc_thread_files,&input));
+    assert(!pthread_join(thread,NULL));
+    assert(fcntl(input.fd,F_GETFD)==FD_CLOEXEC && !close(input.fd));
+    char cwd[2]; assert(getcwd(cwd,sizeof(cwd)) && !strcmp(cwd,"/"));
+}
 static void proc_fd_test(void) {
     int cwd=open(".",O_PATH|O_DIRECTORY|O_CLOEXEC); assert(cwd>=0);
     int ready[2],release[2]; assert(!pipe(ready) && !pipe(release));
@@ -287,23 +486,28 @@ static void proc_fd_test(void) {
     if (!child) {
         assert(!close(ready[0]) && !close(release[1]));
         int fds[]={open("/",O_PATH|O_DIRECTORY|O_CLOEXEC),
-            open("/proc/self/status",O_RDONLY|O_CLOEXEC)};
-        assert(fds[0]>=0 && fds[1]>=0);
+            open("/proc/self/status",O_RDONLY|O_CLOEXEC),
+            open("/dev",O_PATH|O_DIRECTORY|O_CLOEXEC)};
+        assert(fds[0]>=0 && fds[1]>=0 && fds[2]>=0);
+        struct stat metadata;
+        assert(fds[0]!=fds[1] && !fstat(fds[0],&metadata) && S_ISDIR(metadata.st_mode));
         assert(write(ready[1],fds,sizeof(fds))==sizeof(fds));
         char byte; assert(read(release[0],&byte,1)==1);
         _exit(0);
     }
     assert(!close(ready[1]) && !close(release[0]));
-    int fds[2]; assert(read(ready[0],fds,sizeof(fds))==sizeof(fds));
-    for (unsigned i=0;i<2;++i) {
+    int fds[3]; assert(read(ready[0],fds,sizeof(fds))==sizeof(fds));
+    for (unsigned i=0;i<3;++i) {
         char path[80]; snprintf(path,sizeof(path),"/proc/%d/fd/%d",child,fds[i]);
         char link[128],expected[128];
-        ssize_t length=readlink(path,link,sizeof(link)-1); assert(length>0);
+        ssize_t length=readlink(path,link,sizeof(link)-1);
+        if (length<0) fprintf(stderr,"foreign proc readlink %s errno=%d\n",path,errno);
+        assert(length>0);
         link[length]=0;
         if (i==1) snprintf(expected,sizeof(expected),"/proc/%d/status",child);
-        else snprintf(expected,sizeof(expected),"/");
+        else snprintf(expected,sizeof(expected),"%s",i==2 ? "/dev" : "/");
         assert(!strcmp(link,expected));
-        int flags=(i ? O_RDONLY : O_PATH|O_DIRECTORY)|O_CLOEXEC;
+        int flags=(i==1 ? O_RDONLY : O_PATH|O_DIRECTORY)|O_CLOEXEC;
         int fd=open(path,flags);
         if (fd<0) fprintf(stderr,"foreign proc open %s flags=%x errno=%d\n",path,flags,errno);
         assert(fd>=0 && fcntl(fd,F_GETFD)==FD_CLOEXEC);
@@ -313,27 +517,27 @@ static void proc_fd_test(void) {
         assert(!access(path,R_OK));
         errno=0;
         int changed=chdir(path);
-        if (i) assert(changed==-1 && errno==ENOTDIR);
+        if (i==1) assert(changed==-1 && errno==ENOTDIR);
         else {
             char current[4096];
-            assert(!changed && getcwd(current,sizeof(current)) && !strcmp(current,"/"));
+            assert(!changed && getcwd(current,sizeof(current)) && !strcmp(current,expected));
             assert(!fchdir(cwd));
         }
-        if (!i) {
+        if (i!=1) {
             assert(S_ISDIR(st.st_mode));
-            int proc=openat(fd,"proc",O_PATH|O_DIRECTORY|O_CLOEXEC); assert(proc>=0);
+            int proc=openat(fd,i==2 ? "fd" : "proc",O_PATH|O_DIRECTORY|O_CLOEXEC); assert(proc>=0);
             assert(!close(proc));
         } else {
             char text[128]; assert(read(fd,text,sizeof(text))>0);
             assert(S_ISREG(st.st_mode));
         }
         assert(!close(fd));
-        const char *suffixes[]={"/","/.","/proc"};
+        const char *suffixes[]={"/","/.",i==2 ? "/fd/." : "/proc"};
         for (unsigned j=0;j<sizeof(suffixes)/sizeof(*suffixes);++j) {
             snprintf(path,sizeof(path),"/proc/%d/fd/%d%s",child,fds[i],suffixes[j]);
             errno=0;
             fd=open(path,O_PATH|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
-            if (i) assert(fd==-1 && errno==ENOTDIR);
+            if (i==1) assert(fd==-1 && errno==ENOTDIR);
             else {
                 assert(fd>=0 && !fstat(fd,&st) && S_ISDIR(st.st_mode));
                 assert(!close(fd));
@@ -373,13 +577,18 @@ static void service_gate_test(void) {
     }
 }
 static void pending_peek_test(void) {
-    for (unsigned shared=0;shared<2;++shared) {
+    for (unsigned logical=0;logical<2;++logical) for (unsigned shared=0;shared<2;++shared) {
         int signal=SIGRTMIN+1;
         pid_t parent=getpid(),child=fork(); assert(child>=0);
         if (!child) {
             sigset_t set; sigemptyset(&set); sigaddset(&set,signal);
+            if (logical) sigaddset(&set,SIGSYS);
             assert(!sigprocmask(SIG_BLOCK,&set,NULL));
             assert(!ptrace(PTRACE_TRACEME,0,0,0)); raise(SIGSTOP);
+            if (logical) {
+                siginfo_t info;
+                assert(sigwaitinfo(&set,&info)==SIGSYS && info.si_pid==parent && info.si_value.sival_int==77);
+            }
             for (int i=0;i<3;++i) {
                 siginfo_t info;
                 assert(sigwaitinfo(&set,&info)==signal && info.si_pid==parent
@@ -388,6 +597,12 @@ static void pending_peek_test(void) {
             _exit(0);
         }
         assert(WSTOPSIG(stop(child))==SIGSTOP);
+        if (logical) {
+            siginfo_t info={.si_signo=SIGSYS,.si_code=SI_QUEUE,.si_pid=parent,.si_uid=getuid()};
+            info.si_value.sival_int=77;
+            assert(!(shared ? syscall(SYS_rt_sigqueueinfo,child,SIGSYS,&info)
+                : syscall(SYS_rt_tgsigqueueinfo,child,child,SIGSYS,&info)));
+        }
         for (int i=0;i<3;++i) {
             siginfo_t info={.si_signo=signal,.si_code=SI_QUEUE,.si_pid=parent,.si_uid=getuid()};
             info.si_value.sival_int=11*(i+1);
@@ -397,11 +612,14 @@ static void pending_peek_test(void) {
         struct ptrace_peeksiginfo_args args={.nr=8,.flags=shared ? PTRACE_PEEKSIGINFO_SHARED : 0};
         siginfo_t values[8];
         for (unsigned repeat=0;repeat<2;++repeat) {
-            assert(ptrace(PTRACE_PEEKSIGINFO,child,&args,values)==3);
-            for (int i=0;i<3;++i) assert(values[i].si_signo==signal && values[i].si_pid==parent
-                && values[i].si_uid==getuid() && values[i].si_value.sival_int==11*(i+1));
+            assert(ptrace(PTRACE_PEEKSIGINFO,child,&args,values)==3+logical);
+            if (logical) assert(values[0].si_signo==SIGSYS && values[0].si_pid==parent
+                && values[0].si_uid==getuid() && values[0].si_value.sival_int==77);
+            for (int i=0;i<3;++i) assert(values[i+logical].si_signo==signal && values[i+logical].si_pid==parent
+                && values[i+logical].si_uid==getuid() && values[i+logical].si_value.sival_int==11*(i+1));
         }
-        args.off=1; assert(ptrace(PTRACE_PEEKSIGINFO,child,&args,values)==2 && values[0].si_value.sival_int==22);
+        args.off=1; assert(ptrace(PTRACE_PEEKSIGINFO,child,&args,values)==2+logical
+            && values[0].si_value.sival_int==(logical ? 11 : 22));
         args.off=UINT64_MAX; assert(!ptrace(PTRACE_PEEKSIGINFO,child,&args,values));
         args.off=0; args.nr=0; assert(!ptrace(PTRACE_PEEKSIGINFO,child,&args,NULL));
         args.nr=-1; errno=0; assert(ptrace(PTRACE_PEEKSIGINFO,child,&args,values)==-1 && errno==EINVAL);
@@ -677,7 +895,7 @@ static long stat_with_x7(const char *path, struct stat *st, unsigned long scratc
         : "r"(x1), "r"(x2), "r"(x3), "r"(x8) : "memory", "cc");
     return x0;
 }
-static void syscall_test(void) {
+static void syscall_test(const char *path) {
     pid_t child = fork(); assert(child >= 0);
     if (!child) {
         assert(!ptrace(PTRACE_TRACEME, 0, 0, 0)); raise(SIGSTOP);
@@ -685,8 +903,16 @@ static void syscall_test(void) {
         uint64_t pending;
         assert(!syscall(SYS_rt_sigpending,&pending,sizeof(pending)));
         assert(syscall(SYS_getpid) == getpid());
-        int fd = open("/etc/passwd", O_RDONLY); assert(fd >= 0);
+        int fd = open(path, O_RDONLY); assert(fd >= 0);
         char bytes[16]; assert(read(fd, bytes, sizeof(bytes)) > 0);
+        const unsigned locks[]={F_SETLK,F_SETLKW,F_OFD_SETLK,F_OFD_SETLKW};
+        for (unsigned i=0;i<4;++i) {
+            struct flock lock={.l_type=F_RDLCK,.l_whence=SEEK_SET,.l_len=1};
+            assert(!syscall(SYS_fcntl,fd,locks[i],&lock));
+            lock.l_type=F_UNLCK;
+            assert(!syscall(SYS_fcntl,fd,locks[i],&lock));
+        }
+        assert(!flock(fd,LOCK_SH|LOCK_NB) && !flock(fd,LOCK_UN));
         int copy=syscall(SYS_dup,fd); assert(copy>=0);
         assert(syscall(SYS_dup3,fd,copy,O_CLOEXEC)==copy);
         /* Count kernel operations, not libc's compatibility probes. */
@@ -697,7 +923,7 @@ static void syscall_test(void) {
         /* An unrelated application register cannot select adapter policy,
          * including after a notification is cancelled at a syscall-exit stop. */
         const unsigned long scratch[]={0,1,2,4,8,15,~0UL};
-        const char *paths[]={"/proc","/dev/null","/etc/passwd"};
+        const char *paths[]={"/proc","/dev/null",path};
         for (unsigned p=0;p<sizeof(paths)/sizeof(paths[0]);++p) {
             struct stat expected; assert(!stat(paths[p],&expected));
             for (unsigned i=0;i<sizeof(scratch)/sizeof(scratch[0]);++i) {
@@ -709,12 +935,26 @@ static void syscall_test(void) {
                 assert(stat_with_x7("/proc/md-absent-entry",&actual,scratch[i])==-ENOENT);
             }
         }
+        struct sock_filter rules[]={
+            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_fcntl,1,0),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_flock,0,1),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EACCES),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};
+        struct sock_fprog program={sizeof(rules)/sizeof(*rules),rules};
+        assert(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
+        assert(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
+        for (unsigned i=0;i<4;++i) {
+            errno=0;
+            assert(syscall(SYS_fcntl,-1,locks[i],NULL)==-1 && errno==EACCES);
+        }
+        errno=0; assert(flock(-1,LOCK_UN)==-1 && errno==EACCES);
         _exit(9);
     }
     stop(child);
     assert(!ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEEXIT));
     int entries = 0, exits = 0, opening = 0, exiting = 0, status;
-    int closing=0, duplicating=0, replacing=0, controlling=0, ranging=0;
+    int closing=0, duplicating=0, replacing=0, controlling=0, ranging=0, locking=0;
     for (;;) {
         assert(!ptrace(PTRACE_SYSCALL, child, 0, 0));
         assert(waitpid(child, &status, __WALL) == child);
@@ -731,14 +971,15 @@ static void syscall_test(void) {
             duplicating+=info.entry.nr==SYS_dup;
             replacing+=info.entry.nr==SYS_dup3;
             controlling+=info.entry.nr==SYS_fcntl;
+            locking+=info.entry.nr==SYS_flock;
             ranging+=info.entry.nr==SYS_close_range;
         } else { assert(info.op == PTRACE_SYSCALL_INFO_EXIT && entries==exits+1); exits++; }
     }
     assert(entries >= 6 && exits == entries - 1 && opening == 1 && exiting == 1);
-    if (closing!=2 || duplicating!=1 || replacing!=1 || controlling!=2 || ranging!=1)
+    if (closing!=2 || duplicating!=1 || replacing!=1 || controlling!=14 || ranging!=1 || locking!=3)
         fprintf(stderr,"debugger entries: close=%d dup=%d dup3=%d fcntl=%d close_range=%d total=%d/%d\n",
             closing,duplicating,replacing,controlling,ranging,entries,exits);
-    assert(closing==2 && duplicating==1 && replacing==1 && controlling==2 && ranging==1);
+    assert(closing==2 && duplicating==1 && replacing==1 && controlling==14 && ranging==1 && locking==3);
 }
 static void syscall_edit_close_test(void) {
     for (int detach=0;detach<2;++detach) {
@@ -834,7 +1075,26 @@ static void mixed_test(void) {
         char c; assert(read(release[0], &c, 1) == 1); _exit(3);
     }
     close(release[0]); stop(traced);
-    assert(!ptrace(PTRACE_CONT, traced, 0, 0));
+    for (unsigned running=0;running<2;++running) {
+        if (running) assert(!ptrace(PTRACE_CONT,traced,0,0));
+        for (unsigned i=0;i<32;++i) {
+            int status=0x1234;
+            struct rusage usage,unchanged;
+            memset(&usage,0x5a,sizeof(usage)); unchanged=usage;
+            assert(!syscall(SYS_wait4,traced,&status,WNOHANG|__WALL,&usage));
+            assert(status==0x1234 && !memcmp(&usage,&unchanged,sizeof(usage)));
+            assert(!syscall(SYS_wait4,traced,(void *)1,WNOHANG|__WALL,(void *)1));
+            siginfo_t info; memset(&info,0x5a,sizeof(info));
+            clock_t utime=info.si_utime,stime=info.si_stime;
+            assert(!syscall(SYS_waitid,P_PID,traced,&info,WEXITED|WSTOPPED|WNOHANG|__WALL,&usage));
+            assert(!info.si_signo && !info.si_errno && !info.si_code && !info.si_pid
+                && !info.si_uid && !info.si_status && info.si_utime==utime && info.si_stime==stime);
+            assert(!memcmp(&usage,&unchanged,sizeof(usage)));
+        }
+        assert(!syscall(SYS_waitid,P_PID,traced,NULL,WEXITED|WNOHANG,(void *)1));
+        errno=0;
+        assert(syscall(SYS_waitid,P_PID,traced,(void *)1,WEXITED|WNOHANG,NULL)==-1 && errno==EFAULT);
+    }
     pid_t plain = fork(); assert(plain >= 0);
     if (!plain) _exit(4);
     int status; assert(waitpid(-1, &status, 0) == plain);
@@ -912,7 +1172,10 @@ static void syscall_exec_test(void) {
     assert(execs==1 && active && nr==SYS_exit_group && entries==exits+1);
 }
 static void child_signal(int signal) { (void)signal; syscall(SYS_getpid); }
-static void syscall_signal_test(void) {
+static void syscall_signal_test(const char *group) {
+    unsigned mask=!group ? 7 : !strcmp(group,"stat") ? 1
+        : !strcmp(group,"poll") ? 2 : !strcmp(group,"epoll") ? 4 : 0;
+    assert(mask);
     pid_t child=fork(); assert(child>=0);
     if (!child) {
         struct sigaction action={.sa_handler=child_signal,.sa_flags=SA_RESTART};
@@ -924,18 +1187,29 @@ static void syscall_signal_test(void) {
         int queue=epoll_create1(EPOLL_CLOEXEC); assert(queue>=0);
         assert(!ptrace(PTRACE_TRACEME,0,0,0)); raise(SIGSTOP);
         for (unsigned i=0;i<32;++i) {
-            struct stat st;
-            assert(!syscall(SYS_newfstatat,AT_FDCWD,"/dev/null",&st,0));
-            struct timespec bound={.tv_sec=30};
-            assert(syscall(SYS_ppoll,NULL,0,&bound,NULL,8)==-1 && errno==EINTR);
-            struct epoll_event event;
-            assert(syscall(SYS_epoll_pwait,queue,&event,1,-1,NULL,8)==-1 && errno==EINTR);
+            if (mask&1) {
+                struct stat st;
+                assert(!syscall(SYS_newfstatat,AT_FDCWD,"/dev/null",&st,0));
+            }
+            if (mask&2) {
+                struct timespec bound={.tv_sec=30};
+                long polled=syscall(SYS_ppoll,NULL,0,&bound,NULL,8);
+                int error=errno;
+                if (polled!=-1 || error!=EINTR)
+                    fprintf(stderr,"syscall-signal ppoll iteration=%u result=%ld errno=%d remaining=%ld.%09ld\n",
+                        i,polled,error,(long)bound.tv_sec,bound.tv_nsec);
+                assert(polled==-1 && error==EINTR);
+            }
+            if (mask&4) {
+                struct epoll_event event;
+                assert(syscall(SYS_epoll_pwait,queue,&event,1,-1,NULL,8)==-1 && errno==EINTR);
+            }
         }
         assert(!close(queue));
         _exit(0);
     }
     stop(child);
-    assert(!ptrace(PTRACE_SETOPTIONS,child,0,PTRACE_O_TRACESYSGOOD));
+    assert(!ptrace(PTRACE_SETOPTIONS,child,0,PTRACE_O_TRACESYSGOOD|PTRACE_O_EXITKILL));
     int active=0, deliver=0, signals=0;
     uint64_t nr=0;
     for (;;) {
@@ -963,10 +1237,11 @@ static void syscall_signal_test(void) {
             assert(info.op==PTRACE_SYSCALL_INFO_EXIT && active); active=0;
         }
     }
-    if (signals!=96 || !active || nr!=SYS_exit_group)
+    int expected=32*__builtin_popcount(mask);
+    if (signals!=expected || !active || nr!=SYS_exit_group)
         fprintf(stderr,"syscall-signal completion signals=%d active=%d nr=%llu\n",
                 signals,active,(unsigned long long)nr);
-    assert(signals==96 && active && nr==SYS_exit_group);
+    assert(signals==expected && active && nr==SYS_exit_group);
 }
 static volatile sig_atomic_t wait_signal_seen,wait_signal_output=-1;
 static void wait_signal_handler(int signal) {
@@ -1414,7 +1689,7 @@ static void jit_target(void) {
     assert(!munmap(address,page));
 }
 int main(int argc, char **argv) {
-    assert(argc == 2); alarm(20);
+    assert(argc==2 || argc==3); alarm(20);
     const char *name=argv[1];
     if (!strncmp(name,"filtered-",9)) {
         struct sock_filter code[]={BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};
@@ -1423,23 +1698,27 @@ int main(int argc, char **argv) {
         assert(!prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&program));
         argv[1]+=9;
     }
+    assert(argc==2 || !strcmp(argv[1],"syscall") || !strcmp(argv[1],"syscall-signal")
+        || !strcmp(argv[1],"seccomp-trace"));
     if (!strcmp(argv[1], "attach")) attach_test(0, 0);
-    else if (!strcmp(argv[1], "seccomp-trace")) seccomp_trace_test();
+    else if (!strcmp(argv[1], "seccomp-trace")) seccomp_trace_test(argc>2 ? argv[2] : NULL);
     else if (!strcmp(argv[1], "seccomp-interrupt")) seccomp_interrupt_test();
     else if (!strcmp(argv[1], "pidfd-copy")) pidfd_copy_test();
     else if (!strcmp(argv[1], "proc-fd")) proc_fd_test();
+    else if (!strcmp(argv[1], "proc-thread")) proc_thread_test();
     else if (!strcmp(argv[1], "service-gates")) service_gate_test();
     else if (!strcmp(argv[1], "pending-peek")) pending_peek_test();
     else if (!strcmp(argv[1], "syscall-emulation")) syscall_emulation_test();
     else if (!strcmp(argv[1], "syscall-info")) syscall_info_test();
     else if (!strcmp(argv[1], "seize")) attach_test(1, 0);
     else if (!strcmp(argv[1], "trace-exit")) attach_test(1, 1);
-    else if (!strcmp(argv[1], "syscall")) syscall_test();
+    else if (!strcmp(argv[1], "syscall")) syscall_test(argc>2 ? argv[2] : "/etc/passwd");
     else if (!strcmp(argv[1], "syscall-edit-close")) syscall_edit_close_test();
     else if (!strcmp(argv[1], "credential-transition")) credential_transition_test();
     else if (!strcmp(argv[1], "exec")) exec_test();
     else if (!strcmp(argv[1], "syscall-exec")) syscall_exec_test();
-    else if (!strcmp(argv[1], "syscall-signal")) syscall_signal_test();
+    else if (!strcmp(argv[1], "syscall-signal")) syscall_signal_test(argc>2 ? argv[2] : NULL);
+    else if (!strcmp(argv[1], "syscall-suspend")) syscall_suspend_test();
     else if (!strcmp(argv[1], "mixed")) mixed_test();
     else if (!strcmp(argv[1], "wait-signal")) wait_signal_test();
     else if (!strcmp(argv[1], "kill-stopped")) kill_stopped_test();

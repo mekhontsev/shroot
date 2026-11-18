@@ -309,6 +309,18 @@ static void native_io_proofs(struct md_mount_namespace *view,struct md_fs_anchor
     assert(md_fd_origins_native(&turn,8,&native) && native.kind==S_IFREG && !native.flags
         && native.origin==file);
     assert(md_fd_origins_native(&turn,9,&native) && native.kind==S_IFDIR);
+    assert(!md_fs_anchor_native_metadata(NULL));
+    unsigned backing=file->mount->backing;
+    file->mount->backing=MD_MOUNT_INODE;
+    assert(!md_fs_anchor_native_metadata(file));
+    file->mount->backing=MD_MOUNT_NATIVE;
+    assert(md_fs_anchor_native_metadata(file));
+    unsigned policy=md_mount_policy_flags(&file->mount->policy);
+    assert(!md_mount_policy_set(&file->mount->policy,policy|MD_MOUNT_READONLY));
+    assert(!md_fs_anchor_native_metadata(file));
+    assert(!md_mount_policy_set(&file->mount->policy,policy));
+    assert(md_fs_anchor_native_metadata(file));
+    file->mount->backing=backing;
     assert(md_fd_origins_native_regular(&turn,8));
     assert(!md_fd_origins_native_regular(&turn,9));
     assert(!md_fd_origins_native_regular(&turn,10));
@@ -412,6 +424,63 @@ static void native_io_proofs(struct md_mount_namespace *view,struct md_fs_anchor
     md_fd_loan_end(loan); md_fd_loan_release(loan);
     md_fd_origins_release(files); md_fd_object_release(&typed.object); md_fs_anchor_release(file);
     puts("PASS native IO proof: regular origin, typed/unknown/directory rejection, custody, uncertainty, replacement and shared tables");
+}
+static void native_anonymous_io(void) {
+    struct md_fd_origins *files=md_fd_origins_new(); assert(files);
+    struct md_fd_order turn={0};
+    int fd=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK), sockets[2];
+    assert(fd>=0 && !socketpair(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0,sockets));
+    assert(!md_fd_origins_native_anonymous_io(&turn,getpid(),fd));
+    assert(md_fd_order_begin(files,&turn,NULL)==1 && !md_fd_order_start(&turn));
+    assert(!md_fd_origins_native_io(&turn,fd));
+    struct md_fd_origins *peer=md_fd_origins_fork(files,1); assert(peer);
+    assert(!md_fd_origins_native_anonymous_io(&turn,getpid(),fd));
+    md_fd_origins_release(peer);
+    unsigned before=descriptors();
+    allocation_budget=0;
+    assert(md_fd_origins_native_anonymous_io(&turn,getpid(),fd));
+    assert(!md_fd_origins_native_io(&turn,fd));
+    allocation_budget=-1;
+    assert(md_fd_origins_native_anonymous_io(&turn,getpid(),fd));
+    assert(md_fd_origins_native_io(&turn,fd));
+    assert(!md_fd_origins_native_anonymous_io(&turn,getpid(),sockets[0]));
+    /* Cached answers need neither another proc lookup nor allocation. */
+    allocation_budget=0;
+    assert(md_fd_origins_native_anonymous_io(&turn,-1,fd));
+    assert(!md_fd_origins_native_anonymous_io(&turn,-1,sockets[0]));
+    allocation_budget=-1;
+    assert(descriptors()==before);
+    unsigned flags=UINT_MAX;
+    assert(!md_fd_origins_object(files,fd,&flags) && !flags);
+    assert(!md_fd_origins_set_flags(files,fd,FD_CLOEXEC));
+    assert(!md_fd_origins_object(files,fd,&flags) && !flags);
+    struct md_fd_origin_update update;
+    assert(!md_fd_origins_prepare_copy(files,fd,FD_CLOEXEC,&update));
+    md_fd_origins_finish(&update,127);
+    assert(!md_fd_origins_native_io(&turn,127));
+    struct md_fd_origins *copy=md_fd_origins_fork(files,0); assert(copy);
+    struct md_fd_order copied={0};
+    assert(md_fd_order_begin(copy,&copied,NULL)==1 && !md_fd_order_start(&copied));
+    assert(md_fd_origins_native_io(&copied,fd));
+    assert(!md_fd_origins_abandon_range(copy,fd,fd));
+    assert(!md_fd_origins_native_io(&copied,fd));
+    assert(!md_fd_order_complete(&copied)); md_fd_origins_release(copy);
+    assert(md_fd_origins_close_untracked(&turn,fd));
+    assert(!md_fd_origins_native_io(&turn,fd));
+    assert(dup3(sockets[0],fd,O_CLOEXEC)==fd);
+    assert(!md_fd_origins_native_anonymous_io(&turn,getpid(),fd));
+    assert(md_fd_origins_close_untracked(&turn,fd));
+    close(fd); fd=eventfd(0,EFD_CLOEXEC); assert(fd>=0);
+    assert(md_fd_origins_native_anonymous_io(&turn,getpid(),fd));
+    md_fd_origins_exec(files);
+    assert(!md_fd_origins_native_io(&turn,fd));
+    assert(md_fd_origins_native_anonymous_io(&turn,getpid(),fd));
+    assert(!md_fd_origins_prepare_object(files,NULL,0,&update));
+    md_fd_origins_finish(&update,fd);
+    assert(!md_fd_origins_native_io(&turn,fd));
+    assert(!md_fd_order_complete(&turn)); md_fd_origins_release(files);
+    close(fd); close(sockets[0]); close(sockets[1]);
+    puts("PASS native anonymous IO: kernel proof, negative cache, allocation failure, no data pins, sharing, fork, close/reuse, dup, exec and replacement");
 }
 static void bounded_retirement(struct md_fs_anchor *anchor) {
     const unsigned ranges[][2]={{10,10},{60,63},{120,180},{120,181},{INT_MAX,INT_MAX},{UINT_MAX,UINT_MAX}};
@@ -1836,6 +1905,7 @@ void test_fd_origins(void) {
     struct md_fs_anchor *a=capture(first,open("/",O_PATH|O_CLOEXEC));
     struct md_fs_anchor *b=capture(second,open("/",O_PATH|O_CLOEXEC));
     native_io_proofs(first,a);
+    native_anonymous_io();
     provisional_custody(a);
     bounded_retirement(a);
     received_origins(a,b); vector_preparation(a,b,0); vector_preparation(a,b,1);

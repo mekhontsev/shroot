@@ -74,8 +74,10 @@ __asm__(".text\n.balign 4\n.global replay_original\nreplay_original:\n"
 enum { BREAKPOINT, SINGLESTEP, SYSCALL, SECCOMP, SYSEMU, SYSEMU_CONTEXT,
     IGNORE=1, BLOCK=2, PROTECTED=4, FILTER=8,
     REPLAY=16, EXHAUSTED=32, PENDING=64, DENY_SKIP=128, EXTERNAL=256, SHARED=512,
-    TRACE=1024, DENY_GATE=2048 };
+    TRACE=1024, DENY_GATE=2048, TRACE_SKIP=4096 };
 struct report { int changed,mask_changed,delivered,progress; };
+static int control_mode=-1;
+static unsigned control_flags;
 static void unexpected(int signal) { (void)signal; _exit(90); }
 static uint64_t bit(int signal) { return UINT64_C(1)<<(signal-1); }
 static struct user_pt_regs registers(pid_t pid) {
@@ -95,12 +97,26 @@ static int stopped(pid_t pid) {
     int status;
     /* EVENT_WAIT: the exact tracee stop; the fixture alarm bounds failure. */
     assert(waitpid(pid,&status,0)==pid);
-    if (!WIFSTOPPED(status)) fprintf(stderr,"unexpected tracee status=%#x\n",status);
+    if (!WIFSTOPPED(status)) fprintf(stderr,"unexpected tracee status=%#x mode=%d flags=%u\n",
+        status,control_mode,control_flags);
     assert(WIFSTOPPED(status));
     return WSTOPSIG(status);
 }
 static void resume(pid_t pid,int request,int signal) {
     assert(!ptrace(request,pid,NULL,(void *)(intptr_t)signal));
+}
+static void skipped_exit(pid_t pid) {
+    int signal=stopped(pid);
+    if (control_flags&TRACE_SKIP) {
+        assert(signal==SIGTRAP);
+        struct ptrace_syscall_info info={0};
+        assert(ptrace(PTRACE_GET_SYSCALL_INFO,pid,(void *)sizeof(info),&info)>0);
+        assert(info.op==PTRACE_SYSCALL_INFO_SECCOMP && (int64_t)info.seccomp.nr==-1
+            && info.seccomp.args[0]==0x1523);
+        resume(pid,PTRACE_SYSCALL,0);
+        signal=stopped(pid);
+    }
+    assert(signal==(SIGTRAP|0x80));
 }
 static void child(unsigned flags,struct report *out) {
     pid_t self=(pid_t)syscall(SYS_getpid);
@@ -126,7 +142,8 @@ static void child(unsigned flags,struct report *out) {
             BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_gettid,0,1),
             BPF_STMT(BPF_RET|BPF_K,flags&TRACE ? SECCOMP_RET_TRACE : SECCOMP_RET_KILL_PROCESS),
             BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,UINT32_MAX,0,1),
-            BPF_STMT(BPF_RET|BPF_K,flags&DENY_SKIP ? SECCOMP_RET_KILL_PROCESS : SECCOMP_RET_ALLOW),
+            BPF_STMT(BPF_RET|BPF_K,flags&TRACE_SKIP ? SECCOMP_RET_TRACE|44
+                : flags&DENY_SKIP ? SECCOMP_RET_KILL_PROCESS : SECCOMP_RET_ALLOW),
             BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getpgid,0,1),
             BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|ENOKEY),
             BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)
@@ -147,7 +164,9 @@ static void child(unsigned flags,struct report *out) {
             assert(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
         }
     }
-    assert(!syscall(SYS_kill,self,SIGSTOP));
+    long stopped_result=syscall(SYS_kill,self,SIGSTOP);
+    if (stopped_result) fprintf(stderr,"resumed kill result=%ld errno=%d\n",stopped_result,errno);
+    assert(!stopped_result);
     ++out->progress;
     assert(!sigaction(SIGTRAP,NULL,&action));
     out->changed=action.sa_handler!=(flags&IGNORE ? SIG_IGN : unexpected)
@@ -185,6 +204,7 @@ static void checkpoint(pid_t pid,struct user_pt_regs saved,int mode) {
     saved.pc=(uintptr_t)(mode==BREAKPOINT ? checkpoint_brk
         : mode==SINGLESTEP ? checkpoint_step : mode==SYSEMU_CONTEXT ? sysemu_preserved : checkpoint_syscall);
     saved.regs[8]=SYS_gettid;
+    if (control_flags&TRACE_SKIP) saved.regs[0]=0x1523;
     set_registers(pid,&saved);
     resume(pid,mode>=SYSEMU ? PTRACE_SYSEMU : mode==BREAKPOINT || mode==SECCOMP ? PTRACE_CONT
         : mode==SINGLESTEP ? PTRACE_SINGLESTEP : PTRACE_SYSCALL,0);
@@ -205,7 +225,7 @@ static void checkpoint(pid_t pid,struct user_pt_regs saved,int mode) {
     assert(!ptrace(PTRACE_SETREGSET,pid,(void *)NT_ARM_SYSTEM_CALL,&io));
     if (mode==SECCOMP) return;
     resume(pid,PTRACE_SYSCALL,0);
-    assert(stopped(pid)==(SIGTRAP|0x80));
+    skipped_exit(pid);
     assert(ptrace(PTRACE_GET_SYSCALL_INFO,pid,(void *)sizeof(info),&info)>0);
     assert(info.op==PTRACE_SYSCALL_INFO_EXIT);
 }
@@ -251,18 +271,20 @@ static void replay(pid_t pid,struct user_pt_regs saved,unsigned flags,const stru
         }
         struct user_pt_regs gate=saved;
         gate.pc=(uintptr_t)checkpoint_syscall; gate.regs[8]=SYS_gettid;
+        if (flags&TRACE_SKIP) gate.regs[0]=0x1523;
         set_registers(pid,&gate);
         resume(pid,PTRACE_SYSCALL,n);
         assert(stopped(pid)==(SIGTRAP|0x80));
         int skip=-1; struct iovec io={&skip,sizeof(skip)};
         assert(!ptrace(PTRACE_SETREGSET,pid,(void *)NT_ARM_SYSTEM_CALL,&io));
         resume(pid,PTRACE_SYSCALL,0);
-        assert(stopped(pid)==(SIGTRAP|0x80));
+        skipped_exit(pid);
     }
 }
 static double run(int mode,unsigned flags,unsigned repetitions) {
     if (mode==SECCOMP) flags|=FILTER|TRACE|DENY_SKIP;
     if (mode>=SYSEMU) flags|=FILTER|DENY_SKIP;
+    control_mode=mode; control_flags=flags;
     struct report *out=mmap(NULL,sizeof(*out),PROT_READ|PROT_WRITE,MAP_SHARED|MAP_ANONYMOUS,-1,0);
     assert(out!=MAP_FAILED);
     struct sigaction original;
@@ -1580,7 +1602,8 @@ static void chained_native_replay(int protected,int restart,int writing,int boun
     if (saved.regs[7]!=0x4321) fprintf(stderr,"chained x7=%llu injected=%d boundary=%d writing=%d\n",saved.regs[7],injected,boundary,writing);
     assert(saved.pc==(uintptr_t)replay_original_svc+(writing ? 4 : 0) && saved.regs[7]==0x4321);
     siginfo_t original={.si_signo=SIGUSR1,.si_code=SI_TKILL};
-    original.si_pid=12345; original.si_uid=54321;
+    pid_t sender=boundary==2 ? pid : 12345;
+    original.si_pid=sender; original.si_uid=54321;
     assert(!ptrace(PTRACE_SETSIGINFO,pid,NULL,&original));
     if (interposed==3) {
         /* Negative control: a userspace checkpoint leaves the original
@@ -1650,7 +1673,12 @@ static void chained_native_replay(int protected,int restart,int writing,int boun
         assert(!((unsigned)status>>16) && (signal==SIGUSR1 || (pending==2 && signal==SIGTRAP))
             && ++delivered<=(pending==2 ? 3u : 1u));
         siginfo_t info; assert(!ptrace(PTRACE_GETSIGINFO,pid,NULL,&info));
-        assert((info.si_code==SI_TKILL && signal==SIGUSR1 && info.si_pid==12345 && info.si_uid==54321)
+        if (!((info.si_code==SI_TKILL && signal==SIGUSR1 && info.si_pid==sender && info.si_uid==54321)
+                || (pending==2 && info.si_code==SI_QUEUE && info.si_pid==getpid() && info.si_uid==getuid())))
+            fprintf(stderr,"chained signal protected=%d restart=%d write=%d boundary=%d disposition=%d pending=%d injected=%d interposed=%d signal=%d code=%d sender=%d uid=%u\n",
+                protected,restart,writing,boundary,disposition,pending,injected,interposed,
+                signal,info.si_code,info.si_pid,info.si_uid);
+        assert((info.si_code==SI_TKILL && signal==SIGUSR1 && info.si_pid==sender && info.si_uid==54321)
             || (pending==2 && info.si_code==SI_QUEUE && info.si_pid==getpid() && info.si_uid==getuid()));
         resume(pid,PTRACE_CONT,signal);
     }
@@ -1665,7 +1693,7 @@ static void chained_native_replay(int protected,int restart,int writing,int boun
         assert(observed->count==(i==1 && disposition==1 ? 0 : 1));
         if (!observed->count) continue;
         assert(observed->info.si_signo==(i ? SIGTRAP : SIGUSR1) && observed->info.si_code==SI_TKILL
-            && observed->info.si_pid==12345 && observed->info.si_uid==54321);
+            && observed->info.si_pid==sender && observed->info.si_uid==54321);
         if (!(mask&bit(i ? SIGTRAP : SIGUSR1))) {
             assert(observed->pc==(uintptr_t)replay_original_svc+(!writing && effective_restart ? 0 : 4));
             assert((long)observed->x0==(writing ? 1 : effective_restart ? data[0] : -EINTR)
@@ -1960,7 +1988,35 @@ static void terminal_race(int protected,int entry) {
     assert(errno==ECHILD && reaped==2);
     md_task_checkpoints_clear(&runtime); close(channel[0]); close(channel[1]);
 }
+static void checkpoint_costs(int native_skip) {
+    const char *names[]={"brk","single-step","syscall","seccomp-trace","sysemu","sysemu-context"};
+    for (unsigned round=0;round<5;++round)
+        for (int i=0;i<6;++i) {
+            int mode=(i+round)%6;
+            if (mode==SYSCALL && !native_skip) continue;
+            printf("checkpoint round=%u mode=%s 1000_rounds_ms=%.3f\n",round,names[mode],run(mode,0,1000));
+        }
+}
 int main(int argc,char **argv) {
+    if (argc==4 && !strcmp(argv[1],"--control")) {
+        alarm(30);
+        int mode=atoi(argv[2]); unsigned flags=(unsigned)strtoul(argv[3],NULL,0);
+        assert(mode>=BREAKPOINT && mode<=SYSEMU_CONTEXT);
+        run(mode,flags,1);
+        puts("PASS checkpoint control");
+        return 0;
+    }
+    if (argc==2 && !strcmp(argv[1],"--syscall-stop-restore")) {
+        alarm(30);
+        run(SYSCALL,0,1);
+        run(SYSCALL,PROTECTED,1);
+        run(SYSCALL,BLOCK|REPLAY,1);
+        run(SYSCALL,PROTECTED|BLOCK|REPLAY,1);
+        run(SYSCALL,FILTER|TRACE_SKIP|BLOCK|REPLAY,1);
+        run(SYSCALL,PROTECTED|FILTER|TRACE_SKIP|BLOCK|REPLAY,1);
+        puts("PASS syscall stop restore: borrowed registers and signal injection retain the completed syscall boundary");
+        return 0;
+    }
     if (argc==2 && !strcmp(argv[1],"--interrupted-native")) {
         alarm(60);
         for (int protected=0;protected<2;++protected)
@@ -1970,11 +2026,20 @@ int main(int argc,char **argv) {
     setvbuf(stdout,NULL,_IOLBF,0);
     alarm(60);
     md_test_native_probe(argc,argv);
+    int controls=1,costs=1;
+    for (int i=1;i<argc;) {
+        if (!strcmp(argv[i],"--controls-only")) costs=0;
+        else if (!strcmp(argv[i],"--benchmark-only")) controls=0;
+        else { ++i; continue; }
+        memmove(argv+i,argv+i+1,(size_t)(argc-i)*sizeof(*argv)); --argc;
+    }
+    assert(controls || costs);
     int native_skip=argc!=2 || strcmp(argv[1],"--without-syscall-skip");
     if (!native_skip) {
         puts("UNAVAILABLE native syscall-skip: inherited policy denies syscall -1; production TRACE/SYSEMU controls remain enabled");
         argc=1;
     }
+    if (!controls) { assert(argc==1); checkpoint_costs(native_skip); return 0; }
     if (argc==2 && !strcmp(argv[1],"--pending-native")) {
         for (int protected=0;protected<2;++protected)
             for (int kind=0;kind<3;++kind)
@@ -2076,6 +2141,10 @@ int main(int argc,char **argv) {
             ++cases;
         }
     }
+    if (native_skip) for (unsigned protected=0;protected<2;++protected) {
+        run(SYSCALL,FILTER|TRACE_SKIP|BLOCK|REPLAY|(protected ? PROTECTED : 0),1);
+        ++cases;
+    }
     for (int mode=BREAKPOINT;mode<=SYSEMU_CONTEXT;++mode)
         for (unsigned flags=0;flags<4;++flags) {
             if (mode==SYSCALL && !native_skip) continue;
@@ -2162,12 +2231,6 @@ int main(int argc,char **argv) {
                 chained_native_replay(protected,0,writing,boundary,2,0,2,0);
     puts("PASS task injection admission: 8 controls; ENTRY/EXIT reconstruction never executes a cancelled syscall under KILL(-1)");
     printf("PASS checkpoints: %u positive/control cases, 16 strict-filter rejection controls; uid=%u\n",cases,getuid());
-    const char *names[]={"brk","single-step","syscall","seccomp-trace","sysemu","sysemu-context"};
-    for (unsigned round=0;round<5;++round)
-        for (int i=0;i<6;++i) {
-            int mode=(i+round)%6;
-            if (mode==SYSCALL && !native_skip) continue;
-            printf("checkpoint round=%u mode=%s 1000_rounds_ms=%.3f\n",round,names[mode],run(mode,0,1000));
-        }
+    if (costs) checkpoint_costs(native_skip);
     return 0;
 }

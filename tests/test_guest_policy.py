@@ -19,7 +19,8 @@ SYNC = ('tsync-cold', 'tsync-cold-fork', 'tsync-notification', 'tsync-notificati
         'tsync-continue-fcntl', 'tsync-continue-open', 'tsync-continue-stat', 'tsync-continue-pid', 'socket-tsync',
         'signal-wait-tsync', 'signal-epoll-tsync')
 NOTIFICATIONS = ('listener', 'listener-continue', 'listener-error', 'listener-close',
-                 'listener-stat', 'listener-reject', 'listener-cold', 'listener-cold-continue',
+                 'listener-stat', 'listener-stat-interrupt', 'listener-stat-restart',
+                 'listener-reject', 'listener-cold', 'listener-cold-continue',
                  'listener-interrupt', 'listener-restart', 'listener-cold-interrupt',
                  'listener-cold-restart', 'listener-addfd-send', 'listener-addfd',
                  'listener-addfd-fixed', 'listener-addfd-fixed-send',

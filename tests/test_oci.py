@@ -127,6 +127,8 @@ class Layout:
 
 
 class Images(unittest.TestCase):
+    command_timeout = 60
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='md-oci-')
         self.root = pathlib.Path(self.tmp.name)
@@ -286,23 +288,34 @@ class Images(unittest.TestCase):
         self.assertEqual((outside / 'keep').read_text(), 'keep')
 
     def test_image_helper_dies_with_its_declared_owner(self):
-        fifo = self.root / 'blocked-input'
-        try:
-            os.mkfifo(fifo)
-        except PermissionError as error:
-            self.skipTest(f'native FIFO fixture unavailable under host policy: {error}')
+        reader, writer = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+        # A valid command cannot finish while its output pipe is full. Unlike
+        # an archive FIFO, this does not rely on accepting a nonregular input.
+        while True:
+            try:
+                os.write(writer, b'x' * 4096)
+            except BlockingIOError:
+                break
+        os.set_blocking(writer, True)
         driver = '''import os,subprocess,sys
 env = dict(os.environ, SHROOT_IMAGE_OWNER_PID=str(os.getpid()))
-child = subprocess.Popen(sys.argv[1:], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+output = int(sys.argv[1])
+child = subprocess.Popen(sys.argv[2:], env=env, stdout=output)
+os.close(output)
 print(child.pid, flush=True)
 sys.stdin.read()
 '''
-        owner = subprocess.Popen([sys.executable, '-c', driver, BINARY, 'rootfs', str(fifo), str(self.destination)],
-                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-        child = int(owner.stdout.readline())
-        # pidfd_open has the generic Linux syscall number on the ARM64 fixture host.
-        pidfd = ctypes.CDLL(None, use_errno=True).syscall(434, child, 0)
+        owner = None
+        pidfd = -1
         try:
+            owner = subprocess.Popen([sys.executable, '-c', driver, str(writer), BINARY, 'format'],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     pass_fds=(writer,), text=True)
+            os.close(writer)
+            writer = -1
+            child = int(owner.stdout.readline())
+            # pidfd_open has the generic Linux syscall number on the ARM64 fixture host.
+            pidfd = ctypes.CDLL(None, use_errno=True).syscall(434, child, 0)
             self.assertGreaterEqual(pidfd, 0)
             self.assertFalse(select.select([pidfd], [], [], 0)[0])
             owner.kill()
@@ -312,8 +325,11 @@ sys.stdin.read()
             self.assertFalse(self.destination.exists())
         finally:
             if pidfd >= 0: os.close(pidfd)
-            if owner.poll() is None: owner.kill()
-            owner.communicate(timeout=10)
+            if writer >= 0: os.close(writer)
+            os.close(reader)
+            if owner is not None:
+                if owner.poll() is None: owner.kill()
+                owner.communicate(timeout=10)
 
     def test_applications_read_guest_paths_and_account_home_without_launch(self):
         entries = [('etc', 'dir', ''), ('etc/passwd', 'file', b'root:x:0:0:root:/root:/bin/sh\n'),
@@ -749,7 +765,8 @@ sys.stdin.read()
         self.run_import(layout, False)
 
     def command(self, *args, success=True):
-        result = subprocess.run([BINARY, *map(str, args)], capture_output=True, text=True, timeout=60)
+        result = subprocess.run([BINARY, *map(str, args)], capture_output=True, text=True,
+                                timeout=self.command_timeout)
         diagnostic = f'exit={result.returncode}\n{result.stdout}{result.stderr}'
         self.assertGreaterEqual(result.returncode, 0, diagnostic)
         self.assertEqual(result.returncode == 0, success, diagnostic)
@@ -846,6 +863,7 @@ sys.stdin.read()
         self.assertEqual(self.body('a'), self.body('c'))
 
     def test_pool_large_tree_cleanup_keeps_live_local_backings(self):
+        self.command_timeout = 120
         lower = [('old', 'dir', ''), ('old/body', 'file', b'old')]
         upper = [('.wh.old', 'file', b'')]
         for i in range(2048):
@@ -858,6 +876,7 @@ sys.stdin.read()
         actual = {p.name for p in (self.destination / 'objects').iterdir()}
         self.assertEqual(expected, actual)
         self.assertEqual(4097, len(actual))
+        self.assertEqual('body', os.readlink(self.body('d2047/link')))
         self.assertEqual(b'body', self.body('d2047/body').read_bytes())
 
     def test_pool_repeated_layer_retains_independent_inodes(self):

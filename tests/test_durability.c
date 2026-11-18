@@ -113,6 +113,33 @@ static void barriers(const char *path) {
     assert(!md_inode_store_open(path,0,&s)); audit(s); md_inode_store_close(s);
     puts("PASS data/namespace barriers, other writer, hardlink/rename/unlinked FD, O_DSYNC and propagated data/WAL IO failures");
 }
+static void publication_batch(const char *path) {
+    struct md_inode_store *s;
+    assert(!md_inode_store_open(path,1,&s));
+    assert(mdi_sync_batch_begin(s)==-EDEADLK);
+    for (int failed=1;failed>=0;--failed) {
+        struct md_inode_statistics stats={0}; md_inode_measure(s,&stats);
+        assert(!mdi_begin(s,1) && !mdi_sync_batch_begin(s));
+        struct mdi_node node; int fd;
+        assert(!mdi_allocate(s,S_IFREG,0600,O_RDWR,NULL,NULL,&node,&fd));
+        assert(write(fd,"durable",7)==7 && !mdi_sync(s,fd)); close(fd);
+        assert(!mdi_add_name(s,MDI_ROOT,"file",node.id));
+        assert(!mdi_allocate(s,S_IFLNK,0600,0,"file",NULL,&node,&fd));
+        assert(!mdi_add_name(s,MDI_ROOT,"link",node.id));
+        assert(stats.sync_object.calls==2 && !stats.sync_directory.calls);
+        fail_fd=failed ? s->objects : -1;
+        int r=mdi_sync_batch_end(s,0);
+        fail_fd=-1;
+        assert(r==(failed ? -EIO : 0) && !s->directory_sync_batch);
+        assert(stats.sync_directory.calls==1 && mdi_commit(s,r)==r);
+        struct stat st;
+        assert(md_inode_stat(s,MD_INODE_ROOT,"file",0,&st)==(failed ? -ENOENT : 0));
+        assert(md_inode_stat(s,MD_INODE_ROOT,"link",0,&st)==(failed ? -ENOENT : 0));
+        md_inode_measure(s,NULL);
+    }
+    md_inode_store_close(s);
+    puts("PASS publication batch: data barriers retained, one directory sync, failure rolls back names and resets the batch");
+}
 static void reserve_failures(const char *path) {
     struct md_inode_store *s;
     assert(!md_inode_store_open(path,1,&s));
@@ -287,6 +314,7 @@ int main(int argc,char **argv) {
     identity=md_identity_new(0,0);
     char path[PATH_MAX];
     snprintf(path,sizeof(path),"%s/barriers",argv[1]); barriers(path);
+    snprintf(path,sizeof(path),"%s/batch",argv[1]); publication_batch(path);
     snprintf(path,sizeof(path),"%s/reserve",argv[1]); reserve_failures(path);
     snprintf(path,sizeof(path),"%s/lost",argv[1]); recovery(path,0);
     snprintf(path,sizeof(path),"%s/durable",argv[1]); recovery(path,1);

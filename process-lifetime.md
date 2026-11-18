@@ -43,7 +43,10 @@ its remaining descendants and reports supervision failure.
 ## Cancellation
 
 `task_wait.c` owns nonblocking trace-event collection. SIGCHLD and recent TIDs
-are bounded hints, not proof of readiness. In larger trees a separate round-robin
+are bounded hints, not proof of readiness. Signal batches are consumed only by
+the shared readiness dispatcher, not speculatively before each kernel wait.
+The event-count budget bounds hint refresh and cancellation even with a
+continuously runnable trace queue. In larger trees a separate round-robin
 cursor checks one member on two of every three discovery passes. This bounds
 discovery of unnotified stops without requiring an idle probe on every pass.
 General waits collect a bounded batch before any of its tasks resumes; buffered
@@ -147,8 +150,12 @@ children, wait classes, thread-specific waits and WNOWAIT.
 After the final mm member detaches, `task_child_reap` retires the exact private
 PID and preserves real or directed SIGCHLD. Retirement acquires its memory turn
 and waits for existing helper and exit owners before stopping the real parent
-group and its direct children; unrelated processes remain runnable. A resumed
-exit, including a zombie leader awaiting its other threads, cannot acknowledge
+group and its direct children; unrelated processes remain runnable.
+Each retirement pass checks each blocked parent group once before searching for a
+borrowable continuation. Ready groups try their indexed leader first, then other
+members. Many adopted private children therefore do not multiply the same blocked
+group's thread traversal. A resumed exit, including a zombie leader awaiting its
+other threads, cannot acknowledge
 a new ptrace interrupt. Retirement must not stop those remaining threads while
 waiting for that leader's final event. Admitted broker operations also finish
 before this cross-process barrier: a filesystem continuation can require a FUSE

@@ -9,6 +9,7 @@
 #include <sys/ptrace.h>
 #include <linux/ptrace.h>
 #include <linux/seccomp.h>
+#include <limits.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
@@ -124,7 +125,7 @@ static void run(unsigned selected,int timed) {
         assert(shared->handled==((mode&(IGNORE|SUPPRESS)) ? 0 : 1));
         _exit(0);
     }
-    assert(!ptrace(PTRACE_SEIZE,pid,NULL,(void *)(PTRACE_O_TRACESYSGOOD|PTRACE_O_TRACESECCOMP)));
+    assert(!ptrace(PTRACE_SEIZE,pid,NULL,(void *)(PTRACE_O_TRACESYSGOOD|PTRACE_O_TRACESECCOMP|PTRACE_O_EXITKILL)));
     assert(!ptrace(PTRACE_INTERRUPT,pid,NULL,NULL)); stop(pid);
     assert(write(gate[1],"x",1)==1);
     for (;;) {
@@ -223,10 +224,11 @@ static void interrupted_native_frame(void) {
     uintptr_t frame=((uintptr_t)allocation+MD_SVC_POOL_SIZE-1)&~(uintptr_t)(MD_SVC_POOL_SIZE-1);
     pid_t pid=fork(); assert(pid>=0);
     if (!pid) { for (;;) pause(); }
-    assert(!ptrace(PTRACE_SEIZE,pid,NULL,NULL) && !ptrace(PTRACE_INTERRUPT,pid,NULL,NULL));
+    assert(!ptrace(PTRACE_SEIZE,pid,NULL,(void *)PTRACE_O_EXITKILL) && !ptrace(PTRACE_INTERRUPT,pid,NULL,NULL));
     assert((unsigned)stop(pid)>>16==PTRACE_EVENT_STOP);
     struct md_svc_site site={.state=MD_SVC_PAUSED,
-        .direct={.frames=frame,.svc=0x1000,.gate=0x4000,.number=SYS_read}};
+        .original=0xd4000001,.replacement=0x14000000,
+        .direct={.frames=frame,.svc=(uintptr_t)original_svc,.gate=0x4000,.number=SYS_read}};
     struct md_svc_registry registry={.frames=frame,.disabled=1,.sites=&site,.count=1,
         .native={0x2000,0x2020,0x2030}};
     const struct { unsigned state; uintptr_t pc; int done; } cases[]={
@@ -292,31 +294,56 @@ static void interrupted_native_frame(void) {
     assert(!munmap(allocation,size));
     puts("PASS native frame interrupt: prepared, running, restarted and completed effects restore exact guest context");
 }
-int main(void) {
+static int selected_case=-1;
+enum { GROUP_ALL, GROUP_FRAME, GROUP_ALIAS, GROUP_NATIVE, GROUP_KERNEL };
+static unsigned selected_group;
+static unsigned cases,executed;
+static void run_case(unsigned flags,int timed) {
+    unsigned index=cases++;
+    if (selected_case>=0 && (unsigned)selected_case!=index) return;
+    unsigned group=flags&KERNEL_CHILD ? GROUP_KERNEL : flags&NATIVE_ENTRY ? GROUP_NATIVE : GROUP_ALIAS;
+    if (selected_group && selected_group!=group) return;
+    printf("CHECK alias signal case=%u flags=%u timed=%d\n",index,flags,timed);
+    fflush(stdout);
+    run(flags,timed); ++executed;
+}
+int main(int argc,char **argv) {
+    if (argc==3 && !strcmp(argv[1],"--case")) {
+        char *end; long value=strtol(argv[2],&end,10);
+        assert(*argv[2] && !*end && value>=0 && value<=INT_MAX);
+        selected_case=(int)value;
+    } else if (argc==3 && !strcmp(argv[1],"--group")) {
+        const char *names[]={"frame","alias","native","kernel"};
+        for (unsigned i=0;i<sizeof(names)/sizeof(*names);++i)
+            if (!strcmp(argv[2],names[i])) selected_group=i+1;
+        assert(selected_group);
+    } else assert(argc==1);
     alarm(30);
-    interrupted_native_frame();
+    if (selected_case<0 && (!selected_group || selected_group==GROUP_FRAME)) interrupted_native_frame();
+    if (selected_group==GROUP_FRAME) return 0;
     shared=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_ANONYMOUS,-1,0);
     assert(shared!=MAP_FAILED);
-    unsigned cases=0;
     for (unsigned flags=0;flags<8;++flags) {
-        run(flags,0); ++cases;
-        run(flags,1); ++cases;
-        run(flags|ESCAPE,0); ++cases;
-        run(flags|IGNORE,0); ++cases;
-        run(flags|SUPPRESS,0); ++cases;
+        run_case(flags,0);
+        run_case(flags,1);
+        run_case(flags|ESCAPE,0);
+        run_case(flags|IGNORE,0);
+        run_case(flags|SUPPRESS,0);
         if (!(flags&FILTER)) {
-            run(flags|NATIVE_ENTRY,0); ++cases;
-            run(flags|NATIVE_ENTRY,1); ++cases;
-            run(flags|NATIVE_ENTRY|ESCAPE,0); ++cases;
-            run(flags|NATIVE_ENTRY|IGNORE,0); ++cases;
-            run(flags|NATIVE_ENTRY|SUPPRESS,0); ++cases;
+            run_case(flags|NATIVE_ENTRY,0);
+            run_case(flags|NATIVE_ENTRY,1);
+            run_case(flags|NATIVE_ENTRY|ESCAPE,0);
+            run_case(flags|NATIVE_ENTRY|IGNORE,0);
+            run_case(flags|NATIVE_ENTRY|SUPPRESS,0);
         }
     }
-    run(NATIVE_ENTRY|IGNORE|QUIET_RETURN,0); ++cases;
+    run_case(NATIVE_ENTRY|IGNORE|QUIET_RETURN,0);
     for (unsigned flags=0;flags<8;++flags) {
-        run(flags|KERNEL_CHILD,0); ++cases;
-        run(flags|KERNEL_CHILD,1); ++cases;
+        run_case(flags|KERNEL_CHILD,0);
+        run_case(flags|KERNEL_CHILD,1);
     }
+    const unsigned expected[]={77,0,40,21,16};
+    assert(cases==77 && executed==(selected_case<0 ? expected[selected_group] : 1));
     assert(!munmap(shared,4096));
-    printf("PASS native alias signal commit: %u cases; EINTR, restart, restart-block, altstack, filter, ignored, suppressed and longjmp\n",cases);
+    printf("PASS native alias signal commit: %u cases; EINTR, restart, restart-block, altstack, filter, ignored, suppressed and longjmp\n",executed);
 }

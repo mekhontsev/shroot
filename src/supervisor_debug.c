@@ -29,6 +29,7 @@
 #include "syscall_result.h"
 #include "task_pending.h"
 #include "task_status.h"
+#include "signal_protocol.h"
 #include <linux/audit.h>
 static int debug_host_policy_visit(void *context,const siginfo_t *info);
 
@@ -70,7 +71,14 @@ int debugger_signal_mask(pid_t pid,int writing,uint64_t *mask) {
     if (!t) return -ESRCH;
     uint64_t native=writing ? *mask : 0;
     if (writing && t->signals.host) native&=~MD_SIGNAL_SYS_BIT;
-    if (native_trace(writing ? PTRACE_SETSIGMASK : PTRACE_GETSIGMASK,pid,
+    if (t->signals.delivery.active) {
+        /* The carrier's temporary mask is not the application's mask. Keep
+         * debugger changes in the same owner as an admitted sigprocmask. */
+        if (writing) {
+            int error=md_signal_delivery_update_mask(&t->signals.delivery,pid,native&md_signal_blockable_mask());
+            if (error) return error;
+        } else native=t->signals.delivery.mask;
+    } else if (native_trace(writing ? PTRACE_SETSIGMASK : PTRACE_GETSIGMASK,pid,
             (void *)sizeof(native),&native)<0) return -errno;
     if (writing) {
         t->signals.handler_mask_known=0;
@@ -169,10 +177,21 @@ long debugger_trace(int request,pid_t pid,void *address,void *data) {
     struct thread *t=find_thread(pid);
     if (t && request==PTRACE_PEEKSIGINFO) {
         const struct ptrace_peeksiginfo_args *args=address;
-        /* Queue positions for a deferred logical SIGSYS need a merged view;
-         * never silently return an incomplete native-only queue. */
-        if (md_signal_pending_has(t->signals.pending,args->flags&PTRACE_PEEKSIGINFO_SHARED
-                ? MD_SIGNAL_SHARED : MD_SIGNAL_PRIVATE)) { errno=EOPNOTSUPP; return -1; }
+        struct md_signal_pending_value pending;
+        if (args->nr>0 && !(args->flags&~PTRACE_PEEKSIGINFO_SHARED)
+                && md_signal_pending_peek_scope(t->signals.pending,args->flags&PTRACE_PEEKSIGINFO_SHARED
+                    ? MD_SIGNAL_SHARED : MD_SIGNAL_PRIVATE,&pending)) {
+            /* One logical standard-signal slot precedes the native queue.
+             * Offsets address that same read-only view in every batch; native
+             * realtime ordering and both queues' consumption stay unchanged. */
+            struct ptrace_peeksiginfo_args native=*args;
+            siginfo_t *items=data;
+            int prefix=!native.off;
+            if (prefix) { *items++=pending.info; --native.nr; }
+            else --native.off;
+            long count=native.nr ? native_trace(request,pid,&native,items) : 0;
+            return count<0 ? count : prefix+count;
+        }
     }
     if (t && t->seccomp.trace.stage==GUEST_TRACE_STOPPED && (uintptr_t)address==NT_ARM_SYSTEM_CALL
             && (request==PTRACE_GETREGSET || request==PTRACE_SETREGSET)) {
@@ -183,7 +202,32 @@ long debugger_trace(int request,pid_t pid,void *address,void *data) {
         else memcpy(&t->seccomp.trace.number,io->iov_base,sizeof(int));
         io->iov_len=sizeof(int); return 0;
     }
-    return native_trace(request,pid,address,data);
+    long result=native_trace(request,pid,address,data);
+    if (result>=0 && t && request==PTRACE_SETREGSET && (uintptr_t)address==NT_PRSTATUS)
+        t->debug.registers_written=1;
+    return result;
+}
+
+int debugger_resume_entry(struct thread *t,int signal) {
+    if (!t->debug.registers_written) return 0;
+    t->debug.registers_written=0;
+    if (t->kernel_resume==PTRACE_SYSEMU) return 0;
+    struct ptrace_syscall_info info={0};
+    if (!tracee_request(t,PTRACE_GET_SYSCALL_INFO,(void *)sizeof(info),&info,"debugger-mutated-entry")) return 1;
+    if (info.op!=PTRACE_SYSCALL_INFO_ENTRY || (int)info.entry.nr<0) return 0;
+    struct user_pt_regs regs;
+    if (!registers(t->pid,&regs)) return 1;
+    struct seccomp_data policy=syscall_policy(&regs,&info),execution=syscall_stopped(&regs,&info);
+    if (policy.args[0]==execution.args[0]) return 0;
+    uint32_t decision;
+    CHECK(!md_seccomp_policy_eval(admission_policy(t),&policy,&decision));
+    unsigned action=decision&SECCOMP_RET_ACTION_FULL;
+    /* Policy reads orig_x0, while execution reads the tracer's x0. Conditional
+     * selectors cannot admit that new resource by examining orig_x0 alone. */
+    if ((action!=SECCOMP_RET_ALLOW && action!=SECCOMP_RET_LOG)
+            || guest_notification_route(t,&execution)==MD_INTERCEPT_NATIVE) return 0;
+    if (guest_trace_execution_begin(t,&policy,&regs)) resume(t->pid,signal);
+    return 1;
 }
 
 int debugger_attachable(pid_t caller, pid_t pid) {
@@ -233,10 +277,14 @@ int debugger_observe(pid_t owner) {
 int debugger_options(pid_t pid, unsigned long options) {
     struct thread *t=find_thread(pid);
     if (!t) return -ESRCH;
+    unsigned long previous=t->debug.options;
+    int dirty=t->trace_options_dirty;
     int changed=((t->debug.options^options)&PTRACE_O_TRACEEXIT) && !t->terminal_observation;
     t->debug.options=options;
     if (changed) t->trace_options_dirty=1;
-    return task_trace_options(t);
+    int error=task_trace_options(t);
+    if (error) { t->debug.options=previous; t->trace_options_dirty=dirty; }
+    return error;
 }
 
 void debugger_usage(pid_t pid, struct rusage *usage) {
@@ -246,10 +294,7 @@ void debugger_usage(pid_t pid, struct rusage *usage) {
 
 int debugger_listen(pid_t pid) {
     struct thread *t=find_thread(pid);
-    if (!t) return -ESRCH;
-    if (native_trace(PTRACE_LISTEN,pid,NULL,NULL)) return -errno;
-    t->listening=1; t->kernel_stopped=0;
-    return 0;
+    return t ? task_group_listen(t) : -ESRCH;
 }
 
 void debugger_wait_wake(pid_t pid) {
@@ -385,37 +430,105 @@ void debugger_wait_retry(struct thread *t) {
     debugger_wait(t->pid,&call,out->action);
 }
 
-int debug_syscall_exit(struct thread *t, const struct user_pt_regs *regs) {
+int debug_syscall_observed(struct thread *t,const struct ptrace_syscall_info *info) {
     int active=t->debug.call_active;
     t->debug.call_active=t->debug.adapter=0;
+    return active && md_debugger_syscall_observed(debugger,t->pid,info);
+}
+int debug_syscall_exit(struct thread *t, const struct user_pt_regs *regs) {
+    if (!t->debug.call_active) { t->debug.adapter=0; return 0; }
     struct user_pt_regs captured;
-    if (active && !regs) {
+    if (!regs) {
         if (!registers(t->pid,&captured)) return 1;
         regs=&captured;
     }
-    return active && md_debugger_syscall(debugger,t->pid,regs,0);
+    struct ptrace_syscall_info info={.op=PTRACE_SYSCALL_INFO_EXIT,.arch=AUDIT_ARCH_AARCH64,
+        .instruction_pointer=regs->pc,.stack_pointer=regs->sp,
+        .exit={.rval=(int64_t)regs->regs[0],.is_error=(uint64_t)regs->regs[0]>=(uint64_t)-4095}};
+    return debug_syscall_observed(t,&info);
 }
 
+struct debug_host_policy_probe {
+    struct thread *thread;
+    struct seccomp_data *call;
+    int number_known;
+};
 static int debug_host_policy_visit(void *context,const siginfo_t *info) {
-    const struct seccomp_data *call=context;
-    return info->si_signo==SIGSYS && info->si_code==SYS_SECCOMP
-        && info->si_arch==call->arch && info->si_syscall==call->nr
-        && (uintptr_t)info->si_call_addr==call->instruction_pointer;
+    struct debug_host_policy_probe *probe=context;
+    struct seccomp_data *call=probe->call;
+    if (info->si_signo!=SIGSYS || info->si_code!=SYS_SECCOMP
+            || info->si_arch!=call->arch
+            || (uintptr_t)info->si_call_addr!=call->instruction_pointer) return 0;
+    if (!probe->number_known) {
+        /* Most exits have no host denial. Only a matching queued trap needs
+         * the latched number, which a debugger may change independently of x8. */
+        int number;
+        struct iovec io={&number,sizeof(number)};
+        if (!tracee_request(probe->thread,PTRACE_GETREGSET,(void *)NT_ARM_SYSTEM_CALL,&io,
+                "debug-host-syscall")) return -ESRCH;
+        call->nr=number; probe->number_known=1;
+    }
+    return info->si_syscall==call->nr;
 }
 
-int debug_host_policy_pending(struct thread *t,const struct user_pt_regs *regs) {
+int debug_host_policy_pending(struct thread *t,struct ptrace_syscall_info *info) {
     if (!t->signals.host || !t->debug.call_active || !t->entered) return 0;
-    struct seccomp_data call=syscall_description(regs);
-    int pending=md_task_pending_scan(native_trace,t->pid,debug_host_policy_visit,&call);
+    struct seccomp_data call={.arch=info->arch,.instruction_pointer=info->instruction_pointer};
+    struct debug_host_policy_probe probe={.thread=t,.call=&call};
+    int pending=md_task_pending_scan(native_trace,t->pid,debug_host_policy_visit,&probe);
     if (pending<=0) return pending;
+    struct user_pt_regs regs;
+    if (!registers(t->pid,&regs)) return -ESRCH;
+    memcpy(call.args,regs.regs,sizeof(call.args));
+    struct seccomp_data entry;
+    int has_entry=debugger && md_debugger_syscall_entry(debugger,t->pid,&entry);
+    if (has_entry) call.args[0]=entry.args[0];
     uint32_t decision;
     CHECK(!md_seccomp_policy_eval(admission_policy(t),&call,&decision));
     unsigned action=decision&SECCOMP_RET_ACTION_FULL;
-    if (action==SECCOMP_RET_ALLOW || action==SECCOMP_RET_LOG)
-        action=host_policy_interception(&call)&SECCOMP_RET_ACTION_FULL;
+    if (action==SECCOMP_RET_KILL_THREAD || action==SECCOMP_RET_KILL_PROCESS) {
+        /* The kernel has already forced SIG_DFL and unblocked SIGSYS before
+         * this exit stop. A debugger must not see the previous logical mask
+         * and mistake fatal seccomp for a completed injected operation. */
+        signal_host_fatal(t);
+        return 0;
+    }
+    if (action==SECCOMP_RET_TRACE && has_entry) {
+        /* Publish guest TRACE while the real kernel exit is still available.
+         * A skipped call can then return at that exact boundary: injecting a
+         * signal at its exit must queue it, not replace the pending host trap. */
+        t->debug.host_completed_pc=call.instruction_pointer;
+        t->debug.host_completed_number=call.nr;
+        CHECK(guest_trace_begin(t,&call,&regs,NULL,MD_TASK_CALL_EXIT));
+        return 2;
+    }
+    if (action==SECCOMP_RET_ALLOW || action==SECCOMP_RET_LOG) {
+        decision=host_policy_interception(&call);
+        action=decision&SECCOMP_RET_ACTION_FULL;
+    }
+    if (action==SECCOMP_RET_ERRNO) {
+        /* A scalar denial is already complete at the native exit. Publish it
+         * there so debugger signal injection keeps syscall-stop semantics.
+         * Consume the exact pending host trap later without overwriting any
+         * registers the debugger changes after observing this result. */
+        long result=md_seccomp_policy_error(decision);
+        if (!set_stopped_result(t,result)) return -ESRCH;
+        info->exit.rval=result; info->exit.is_error=(uint64_t)result>=(uint64_t)-4095;
+        t->debug.host_completed_pc=call.instruction_pointer;
+        t->debug.host_completed_number=call.nr;
+        return 0;
+    }
     /* Guest TRAP and unsupported host calls retain native exit-then-signal
      * ordering. Only an owned adapter defers the debugger's result. */
-    return action==SECCOMP_RET_ERRNO || action==SECCOMP_RET_TRACE || action==SECCOMP_RET_USER_NOTIF;
+    return action==SECCOMP_RET_TRACE || action==SECCOMP_RET_USER_NOTIF;
+}
+
+int debug_host_policy_completed(struct thread *t,const siginfo_t *info) {
+    if (!t->debug.host_completed_pc || info->si_signo!=SIGSYS || info->si_code!=SYS_SECCOMP
+            || info->si_arch!=AUDIT_ARCH_AARCH64 || info->si_syscall!=t->debug.host_completed_number
+            || (uintptr_t)info->si_call_addr!=t->debug.host_completed_pc) return 0;
+    t->debug.host_completed_pc=0;
+    return 1;
 }
 
 int debugger_at_boundary(const struct thread *t) {
@@ -424,7 +537,9 @@ int debugger_at_boundary(const struct thread *t) {
     return t->phase==IDLE && !t->metadata_restart && !t->descriptors.running && !t->descriptors.order.table && !t->descriptors.fs_order.fs
         && !t->descriptors.policy_order.queue && !t->memory_op.order.queue && !t->memory_op.files.table
         && !t->signals.delivery.active && t->seccomp.trace.stage!=GUEST_TRACE_REPLAY
-        && t->seccomp.trace.stage!=GUEST_TRACE_ADMISSION;
+        && t->seccomp.trace.stage!=GUEST_TRACE_EXECUTION
+        && t->seccomp.trace.stage!=GUEST_TRACE_ADMISSION
+        && t->seccomp.trace.stage!=GUEST_TRACE_DRAIN;
 }
 
 int debugger_context_ready(struct thread *t) {
@@ -443,9 +558,8 @@ int debugger_context_ready(struct thread *t) {
 }
 
 int debugger_boundary(struct thread *t) {
-    /* A skipped TRACE call still owns its kernel exit. Publish a pending
-     * interrupt only after that exit, not halfway through the continuation. */
-    if (t->seccomp.trace.stage==GUEST_TRACE_DRAIN || !debugger_context_ready(t)) return 0;
+    if (!debugger_at_boundary(t) || !md_debugger_stop_pending(debugger,t->pid)
+            || !debugger_context_ready(t)) return 0;
     if (md_debugger_stop_pending(debugger,t->pid)) {
         struct ptrace_syscall_info info={0};
         if (!tracee_request(t,PTRACE_GET_SYSCALL_INFO,(void *)sizeof(info),&info,

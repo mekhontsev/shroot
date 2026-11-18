@@ -50,9 +50,61 @@ static void exec_access(void) {
     assert(!prctl(PR_SET_DUMPABLE,1));
     puts("PASS vfork exec: independent mm access state and unchanged parent");
 }
+static void image_links(const char *proc,pid_t process,int extended) {
+    char directory[256]; snprintf(directory,sizeof(directory),"%s/%d",proc,process);
+    int base=open(directory,O_PATH|O_DIRECTORY|O_CLOEXEC); assert(base>=0);
+    const char *links[]={"exe","cwd","root"};
+    for (unsigned i=0;i<sizeof(links)/sizeof(*links);++i) {
+        char path[256],alias[256],text[4096],copy[4096];
+        snprintf(path,sizeof(path),"%s/%d/%s",proc,process,links[i]);
+        int pin=open(path,O_PATH|O_NOFOLLOW|O_CLOEXEC); assert(pin>=0);
+        struct stat source,retained; assert(!fstat(pin,&source) && S_ISLNK(source.st_mode));
+        ssize_t size=readlinkat(pin,"",text,sizeof(text)); assert(size>0);
+        for (unsigned variant=0;variant<(extended ? 4U : 2U);++variant) {
+            unsigned relative=variant&1;
+            snprintf(alias,sizeof(alias),"%s/self/fd/%d/%s",proc,base,links[i]);
+            int at=relative ? base : AT_FDCWD;
+            const char *name=relative ? links[i] : alias;
+            struct open_how how={.flags=O_PATH|O_NOFOLLOW|O_CLOEXEC,
+                .resolve=relative ? RESOLVE_NO_SYMLINKS : 0};
+            int leaf=variant<2 ? openat(at,name,(int)how.flags)
+                : syscall(SYS_openat2,at,name,&how,sizeof(how));
+            int error=leaf<0 ? errno : fstat(leaf,&retained) ? errno : 0;
+            if (error || !S_ISLNK(retained.st_mode) || retained.st_dev!=source.st_dev || retained.st_ino!=source.st_ino)
+                fprintf(stderr,"proc link %s variant=%u error=%d mode=%o identity=%llu:%llu expected=%llu:%llu\n",
+                    path,variant,error,error ? 0 : retained.st_mode,
+                    error ? 0 : (unsigned long long)retained.st_dev,error ? 0 : (unsigned long long)retained.st_ino,
+                    (unsigned long long)source.st_dev,(unsigned long long)source.st_ino);
+            assert(!error && S_ISLNK(retained.st_mode)
+                && retained.st_dev==source.st_dev && retained.st_ino==source.st_ino);
+            assert(readlinkat(leaf,"",copy,sizeof(copy))==size && !memcmp(copy,text,(size_t)size));
+            close(leaf);
+            errno=0;
+            assert(openat(at,name,O_RDONLY|O_NOFOLLOW)==-1 && errno==ELOOP);
+            errno=0;
+            assert(openat(at,name,O_WRONLY|O_CREAT|O_EXCL,0600)==-1 && errno==EEXIST);
+        }
+        for (unsigned foreign=0;foreign<2;++foreign) {
+            if (foreign) snprintf(alias,sizeof(alias),"%s/%d/fd/%d",proc,getpid(),pin);
+            else snprintf(alias,sizeof(alias),"%s/thread-self/fd/%d",proc,pin);
+            int reopened=open(alias,O_PATH|O_CLOEXEC);
+            assert(reopened>=0 && !fstat(reopened,&retained) && S_ISLNK(retained.st_mode)
+                && retained.st_dev==source.st_dev && retained.st_ino==source.st_ino);
+            assert(fcntl(reopened,F_GETFL)==O_PATH && fcntl(reopened,F_GETFD)==FD_CLOEXEC);
+            assert(readlinkat(reopened,"",copy,sizeof(copy))==size && !memcmp(copy,text,(size_t)size));
+            errno=0; assert(open(alias,O_RDONLY)==-1 && errno==ELOOP);
+            assert(!close(reopened));
+        }
+        assert(!close(pin));
+    }
+    close(base);
+}
 static void image_metadata(const char *proc) {
+    image_links(proc,getpid(),1);
+    puts("PASS proc symlink descriptors: O_PATH reopen retains link identity, flags and target text");
     pid_t parent=getpid(), child=fork(); assert(child>=0);
     if (!child) {
+        image_links(proc,parent,1);
         const char *names[]={"cmdline","auxv"};
         for (unsigned i=0;i<sizeof(names)/sizeof(*names);++i) {
             char path[256],bytes[64];
@@ -278,6 +330,14 @@ int test_proc_exec_guest(int argc, char **argv) {
     }
     setbuf(stdout,NULL); alarm(40);
     assert(argc==4);
+    if (!strcmp(argv[2],"links")) {
+        image_links("/proc",getpid(),0);
+        pid_t parent=getpid(),child=fork(); assert(child>=0);
+        if (!child) { image_links("/proc",parent,0); _exit(0); }
+        int status; assert(waitpid(child,&status,0)==child && !status);
+        puts("PASS proc link aliases: local and foreign, descriptor-relative and intermediate magic links");
+        return 0;
+    }
     exec_access();
     if (!strcmp(argv[2],"memfd")) {
         int source=open("/proc/self/exe",O_RDONLY|O_CLOEXEC); assert(source>=0);

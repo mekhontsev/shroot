@@ -27,6 +27,7 @@ static siginfo_t original(int signal) {
 }
 static void unexpected(int signal) { (void)signal; _exit(90); }
 static void coalesced_kernel_signal(int signal,int code) {
+    fprintf(stderr,"signal delivery: coalesced signal=%d code=%d\n",signal,code);
     pid_t pid=fork(); assert(pid>=0);
     if (!pid) {
         struct sigaction action={.sa_handler=unexpected};
@@ -83,6 +84,7 @@ static void realtime_handler(int signal,siginfo_t *info,void *context) {
     ++realtime_count;
 }
 static void realtime_order(int retain_again,int number) {
+    fprintf(stderr,"signal delivery: realtime signal=%d retain=%d\n",number,retain_again);
     realtime_signal=number;
     pid_t pid=fork(); assert(pid>=0);
     if (!pid) {
@@ -133,6 +135,53 @@ static uintptr_t pc(pid_t pid) {
     struct iovec io={&regs,sizeof(regs)};
     assert(!ptrace(PTRACE_GETREGSET,pid,(void *)NT_PRSTATUS,&io));
     return regs.pc;
+}
+static void deferred_stop(int inject) {
+    fprintf(stderr,"signal delivery: deferred stop inject=%d\n",inject);
+    int channel[2]; assert(!pipe(channel));
+    pid_t pid=fork(); assert(pid>=0);
+    if (!pid) {
+        close(channel[1]);
+        uint64_t mask=UINT64_C(1)<<(SIGURG-1),inherited=0;
+        assert(!syscall(SYS_rt_sigprocmask,SIG_BLOCK,&mask,&inherited,8));
+        mask|=inherited;
+        char byte; assert(read(channel[0],&byte,1)==1);
+        assert(!syscall(SYS_tkill,syscall(SYS_gettid),SIGSTOP));
+        uint64_t observed=0;
+        assert(!syscall(SYS_rt_sigprocmask,SIG_SETMASK,NULL,&observed,8) && observed==mask);
+        _exit(0);
+    }
+    close(channel[0]);
+    assert(!ptrace(PTRACE_SEIZE,pid,NULL,(void *)PTRACE_O_EXITKILL));
+    assert(write(channel[1],"s",1)==1); close(channel[1]);
+    int status; assert(waitpid(pid,&status,0)==pid && status==((SIGSTOP<<8)|0x7f));
+    siginfo_t original; assert(!ptrace(PTRACE_GETSIGINFO,pid,NULL,&original));
+    struct md_signal_delivery q={0};
+    assert(!md_signal_delivery_defer_stop(&q,&original) && q.stopping);
+    uintptr_t stopped=pc(pid);
+    assert(!ptrace(PTRACE_INTERRUPT,pid,NULL,NULL));
+    assert(!ptrace(PTRACE_CONT,pid,NULL,NULL));
+    assert(waitpid(pid,&status,0)==pid && (unsigned)status>>16==PTRACE_EVENT_STOP);
+    assert(!md_signal_delivery_publish(&q,pid,pid) && q.active);
+    assert(!ptrace(PTRACE_CONT,pid,NULL,NULL));
+    assert(waitpid(pid,&status,0)==pid && status==((SIGURG<<8)|0x7f));
+    int deliver=0;
+    assert(md_signal_delivery_event(&q,pid,SIGURG,&deliver)==MD_SIGNAL_RESTORED);
+    assert(deliver==SIGSTOP && !q.stopping && !q.active && !md_signal_delivery_pending(&q));
+    siginfo_t restored; assert(!ptrace(PTRACE_GETSIGINFO,pid,NULL,&restored));
+    assert(restored.si_signo==SIGSTOP && restored.si_code==original.si_code
+        && restored.si_pid==original.si_pid && restored.si_uid==original.si_uid && pc(pid)==stopped);
+    assert(!ptrace(PTRACE_CONT,pid,NULL,(void *)(intptr_t)(inject ? deliver : 0)));
+    if (inject) {
+        assert(waitpid(pid,&status,0)==pid && (unsigned)status>>16==PTRACE_EVENT_STOP
+            && WSTOPSIG(status)==SIGSTOP);
+        assert(!ptrace(PTRACE_LISTEN,pid,NULL,NULL));
+        assert(!kill(pid,SIGCONT));
+    }
+    while (waitpid(pid,&status,0)==pid && WIFSTOPPED(status))
+        assert(!ptrace(PTRACE_CONT,pid,NULL,NULL));
+    assert(WIFEXITED(status) && !WEXITSTATUS(status));
+    md_signal_delivery_clear(&q);
 }
 static void child(unsigned round,int traced) {
     sigset_t set;
@@ -206,6 +255,7 @@ static void child(unsigned round,int traced) {
 }
 int main(void) {
     alarm(15);
+    deferred_stop(0); deferred_stop(1);
     coalesced_kernel_signal(SIGALRM,SI_KERNEL);
     coalesced_kernel_signal(SIGCHLD,CLD_EXITED);
     coalesced_kernel_signal(SIGIO,POLL_IN);
@@ -221,6 +271,7 @@ int main(void) {
     int native_status;
     assert(waitpid(native,&native_status,0)==native && WIFEXITED(native_status) && !WEXITSTATUS(native_status));
     for (unsigned round=0;round<9;++round) {
+        fprintf(stderr,"signal delivery: standard round=%u\n",round);
         pid_t pid=fork(); assert(pid>=0);
         if (!pid) child(round,1);
         int status;

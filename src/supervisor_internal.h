@@ -53,6 +53,8 @@ struct interception_statistics {
     uint64_t entry_local_native;
     uint64_t signal_frames[5];
     struct md_cost event_collect, event_sleep;
+    struct md_cost retained_progress, task_progress, entry_progress, pid_collect;
+    uint64_t retirement_group_scans, retirement_actor_scans;
     struct { uint64_t trace, notification, entry; } calls[512];
 };
 #define SUPERVISOR_TRACE(...) do { if (diagnostics) fprintf(stderr, __VA_ARGS__); } while (0)
@@ -98,6 +100,7 @@ extern int socket_events;
 extern struct md_namespace_broker *broker;
 extern struct md_task_registry *tasks;
 extern struct md_identity launch_identity;
+extern uid_t native_uid;
 extern int virtual_identity;
 extern struct md_admission admission;
 extern unsigned admitted_images;

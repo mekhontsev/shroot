@@ -25,6 +25,9 @@ void delegated_notification(const struct seccomp_notif *request);
 void completed_notification(pid_t pid,struct md_broker_completion *result);
 int completed_event_resume(struct thread *t);
 void metadata_restart_return(struct thread *t,long value);
+/* Retry from a consumed syscall or user boundary, preserving the pending
+ * metadata result and deferred signal instead of creating a second owner. */
+void metadata_restart_retry(struct thread *t);
 int interrupted_metadata_event(struct thread *t,int status,const struct rusage *usage,
         struct md_task_signal_stop *stop);
 int metadata_restart_event(struct thread *t,int status);

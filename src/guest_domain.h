@@ -27,13 +27,15 @@
     X(rt_sigaction) X(rt_sigprocmask) X(rt_sigreturn) X(sigaltstack) \
     X(getrandom) X(clock_gettime) X(clock_nanosleep) X(nanosleep)
 #define MD_DOMAIN_KERNEL_CONTROL_CALLS(X) \
-    X(shutdown) \
+    X(shutdown) X(flock) \
     X(sysinfo) X(sched_yield) X(sched_getaffinity) \
     X(getrusage) X(getrlimit) X(gettimeofday)
 #define MD_DOMAIN_KERNEL_CALLS(X) \
     MD_DOMAIN_WAIT_CALLS(X) MD_DOMAIN_EXECUTION_CALLS(X) MD_DOMAIN_KERNEL_CONTROL_CALLS(X)
 #define MD_DOMAIN_KERNEL_ARGUMENTS(X) \
     X(fcntl, 1, F_GETFD) X(fcntl, 1, F_GETFL) X(fcntl, 1, F_SETFL) \
+    X(fcntl, 1, F_SETLK) X(fcntl, 1, F_SETLKW) \
+    X(fcntl, 1, F_OFD_SETLK) X(fcntl, 1, F_OFD_SETLKW) \
     X(prlimit64, 0, 0) \
     X(prctl, 0, PR_SET_NAME) \
     X(prctl, 0, PR_GET_NAME) X(prctl, 0, PR_GET_SECCOMP)

@@ -58,13 +58,17 @@ int md_signal_pending_put(struct md_signal_pending *p,enum md_signal_scope scope
     ++p->wait->revision;
     return 1;
 }
-int md_signal_pending_peek(const struct md_signal_pending *p,struct md_signal_pending_value *out) {
-    if (!p || !out) return 0;
-    const struct slot *slot=p->private.occupied ? &p->private : &p->group->pending;
+int md_signal_pending_peek_scope(const struct md_signal_pending *p,enum md_signal_scope scope,
+        struct md_signal_pending_value *out) {
+    if (!p || !out || (scope!=MD_SIGNAL_PRIVATE && scope!=MD_SIGNAL_SHARED)) return 0;
+    const struct slot *slot=scope==MD_SIGNAL_PRIVATE ? &p->private : &p->group->pending;
     if (!slot->occupied) return 0;
-    *out=(struct md_signal_pending_value){.info=slot->info,.token=slot->token,
-        .scope=slot==&p->private ? MD_SIGNAL_PRIVATE : MD_SIGNAL_SHARED};
+    *out=(struct md_signal_pending_value){.info=slot->info,.token=slot->token,.scope=scope};
     return 1;
+}
+int md_signal_pending_peek(const struct md_signal_pending *p,struct md_signal_pending_value *out) {
+    return md_signal_pending_peek_scope(p,MD_SIGNAL_PRIVATE,out)
+        || md_signal_pending_peek_scope(p,MD_SIGNAL_SHARED,out);
 }
 int md_signal_pending_take(struct md_signal_pending *p,const struct md_signal_pending_value *value) {
     if (!p || !value || (value->scope!=MD_SIGNAL_PRIVATE && value->scope!=MD_SIGNAL_SHARED)) return 0;

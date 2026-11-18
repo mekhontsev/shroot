@@ -27,7 +27,7 @@ struct md_task_helper_request {
     enum md_task_helper_kind kind;
     struct md_task_mapping_request mapping;
     /* CAPTURE only: copied before acceptance, resolved in captured FS context.
-     * O_PATH captures objects; an exact own-process fdinfo path may instead be
+     * O_PATH captures objects; an exact proc fdinfo path may instead be
      * opened read-only and exported intact, preserving its live table lookup.
      * Process status/stat/limits and mount tables also permit read-only capture;
      * the kernel admits their paths with the caller's real credentials.

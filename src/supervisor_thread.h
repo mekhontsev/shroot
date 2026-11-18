@@ -76,6 +76,7 @@ struct retry_owner {
 };
 
 struct supervisor_robust_state {
+    uint64_t retirement_blocked;
     uintptr_t head;
     uintptr_t registering_head;
     uint32_t tid;
@@ -291,7 +292,8 @@ struct supervisor_seccomp_state {
     int notification_continued;
     struct {
         enum { GUEST_TRACE_NONE, GUEST_TRACE_PROMOTING, GUEST_TRACE_STOPPED,
-            GUEST_TRACE_REPLAY, GUEST_TRACE_ADMISSION, GUEST_TRACE_HOST, GUEST_TRACE_DRAIN } stage;
+            GUEST_TRACE_REPLAY, GUEST_TRACE_EXECUTION, GUEST_TRACE_ADMISSION, GUEST_TRACE_HOST, GUEST_TRACE_DISPATCH,
+            GUEST_TRACE_DRAIN } stage;
         enum md_task_call_boundary boundary;
         struct seccomp_data call;
         int number;
@@ -344,11 +346,14 @@ struct supervisor_image_state {
 };
 
 struct supervisor_debug_state {
+    int registers_written;
     int step_call;
     int birth;
     pid_t exec_old;
     int call_active;
     int adapter;
+    uintptr_t host_completed_pc;
+    int host_completed_number;
     unsigned long options;
     uint64_t wait_mask;
     struct debug_wait_output *wait_output;

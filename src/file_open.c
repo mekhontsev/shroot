@@ -172,8 +172,10 @@ int md_reopen_file(int fd, int flags, struct md_open_completion *completion) {
         return (int)pin;
     }
     if (S_ISLNK(st.st_mode)) {
-        if (!(flags&O_PATH) || !(flags&O_NOFOLLOW)) return -ELOOP;
-        return (int)C(fcntl,fd,F_DUPFD_CLOEXEC,3,0,0,0);
+        if (!(flags&O_PATH)) return -ELOOP;
+        /* Reopening a selected link does not traverse its target. NOFOLLOW
+         * belongs to pathname lookup, not to this retained-object boundary. */
+        if (flags&O_NOFOLLOW) return (int)C(fcntl,fd,F_DUPFD_CLOEXEC,3,0,0,0);
     }
     return open_pinned(fd,flags,st.st_mode);
 }

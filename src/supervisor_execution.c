@@ -148,10 +148,8 @@ int checkpoint_restricted(pid_t pid) {
     struct thread *t=find_thread(pid);
     if (!t) return 1;
     if (!t->seccomp.application_filter) return 0;
-    const struct md_svc_registry *registry=md_memory_svc(t->memory);
     /* Do not emulate checkpoints already admitted by every kernel filter.
      * Portable entry after exec alone does not establish helper admission. */
-    if (!registry) return 1;
     struct md_seccomp_gate gates[FILTER_SERVICE_GATES];
     filter_service_gates(gates);
     return !md_seccomp_policy_internal_gates(t->seccomp.policy,gates,FILTER_SERVICE_GATES);
@@ -411,9 +409,9 @@ int skip(pid_t pid) {
     return tracee_request(thread(pid), PTRACE_SETREGSET, (void *)NT_ARM_SYSTEM_CALL, &iov, "skip-syscall");
 }
 
-int cooperative_native_observe(pid_t pid,struct md_entry_native *native) {
+int cooperative_native_observe(pid_t pid,struct md_entry_native *native,int terminal) {
     unsigned state=atomic_load_explicit(&native->state,memory_order_acquire);
-    if (state==MD_NATIVE_DONE || state==MD_NATIVE_CANCELLED) return 0;
+    if (state==MD_NATIVE_DONE || state==MD_NATIVE_CANCELLED || state==MD_NATIVE_UNKNOWN) return 0;
     struct user_pt_regs regs={0};
     if (state==MD_NATIVE_RUNNING) {
         if (!registers(pid,&regs)) return -ESRCH;
@@ -422,8 +420,12 @@ int cooperative_native_observe(pid_t pid,struct md_entry_native *native) {
     /* A terminal stop may retain openat's zero-extended input register. */
     if (native->number==SYS_openat && (unsigned long)value==(unsigned)AT_FDCWD) value=-512;
     int completed=md_native_stopped(state,regs.pc,value,abi.native_begin,abi.native_call,abi.native_end,&result);
+    /* Death/exec can replace a borrowed continuation before it restores the
+     * journal's instruction range. Retire uncertainty through the same FD
+     * owner; neither replay the effect nor mutate terminal registers. */
+    if (terminal && completed==-EPROTO && state==MD_NATIVE_RUNNING) completed=MD_NATIVE_UNKNOWN;
     if (completed<0) return completed;
-    if (state==MD_NATIVE_RUNNING) {
+    if (state==MD_NATIVE_RUNNING && !terminal) {
         regs.regs[0]=result; regs.pc=abi.native_end;
         if (!set_registers(pid,&regs)) return -ESRCH;
     }
@@ -464,6 +466,10 @@ int entry_context(struct thread *t,enum md_execution_context reason) {
 
 static int entry_return_pending(const struct thread *t) {
     return signal_return_pending(t) || md_debugger_stop_pending(debugger,t->pid);
+}
+
+int task_stop_pending(const struct thread *t) {
+    return t->signals.delivery.stopping || md_debugger_stop_pending(debugger,t->pid);
 }
 
 void entry_complete(struct thread *t,long result) {
@@ -562,6 +568,9 @@ void restart_call(struct thread *t,const struct user_pt_regs *original,uint64_t 
 
 void restart_boundary(struct thread *t,const struct user_pt_regs *original,uint64_t mask,
         enum call_restart policy,enum md_task_call_boundary boundary) {
+    if (t->metadata_restart && boundary!=MD_TASK_CALL_SECCOMP) {
+        metadata_restart_retry(t); return;
+    }
     if (boundary!=MD_TASK_CALL_SECCOMP) { restart_call(t,original,mask,policy); return; }
     /* This entry already owns orig_x0. A second gate would overwrite it with
      * the result of the skipped original syscall before SA_RESTART runs. */
@@ -591,7 +600,7 @@ void entry_effect(struct thread *t,long number,const uint64_t args[6],void (*com
     CHECK(t->entry.control && !t->entry.stop.resume && !t->entry.effect);
     t->entry.effect_cancelled=0;
     t->entry.waiting=md_execution_native_context(number,args)==MD_CONTEXT_WAIT;
-    if (t->entry.waiting && md_debugger_stop_pending(debugger,t->pid)) {
+    if (t->entry.waiting && task_stop_pending(t)) {
         /* A preparation stop can consume the attach interrupt. Cancel only
          * the unstarted wait, through its owner, before publishing an effect. */
         t->entry.waiting=0; t->entry.effect_cancelled=1;
@@ -614,7 +623,7 @@ struct md_entry_native *entry_native_journal(const struct thread *t) {
 
 int entry_effect_observe(struct thread *t) {
     struct md_entry_native *native=entry_native_journal(t);
-    return native ? cooperative_native_observe(t->pid,native) : 0;
+    return native ? cooperative_native_observe(t->pid,native,0) : 0;
 }
 
 unsigned entry_effect_reconcile(struct thread *t) {
@@ -626,7 +635,7 @@ unsigned entry_effect_reconcile(struct thread *t) {
     if (state==MD_NATIVE_READY && atomic_compare_exchange_strong_explicit(
             &native->state,&state,MD_NATIVE_CANCELLED,memory_order_acq_rel,memory_order_acquire))
         state=MD_NATIVE_CANCELLED;
-    if (state==MD_NATIVE_RUNNING && t->kernel_stopped && !cooperative_native_observe(t->pid,native))
+    if (state==MD_NATIVE_RUNNING && t->kernel_stopped && !cooperative_native_observe(t->pid,native,t->terminal_stop))
         state=atomic_load_explicit(&native->state,memory_order_acquire);
     return state;
 }
@@ -757,6 +766,10 @@ static enum execution_continuation execution_complete(struct thread *t,long valu
         if (!value) {
             t->debug.replay_entry=t->debug.call_active;
             t->debug.adapter=0;
+            /* Preparation may replay the admitted syscall, not its debugger
+             * notification. Recheck the exact call at the next admission. */
+            if (t->seccomp.trace.stage==GUEST_TRACE_DISPATCH)
+                t->seccomp.trace.stage=GUEST_TRACE_ADMISSION;
         }
         return value ? EXECUTION_PREFLIGHT_RETURN : EXECUTION_PREFLIGHT_REPLAY;
     }
@@ -1408,7 +1421,9 @@ static int svc_clients_prepare(struct thread *t) {
     if (!r || (r->disabled && !r->frames_dirty && !r->clients_dirty)) return 1;
     const struct md_private_memory_access *access=md_memory_private_access(t->memory);
     int fd=access ? access->memory : -1;
+    int forked=r->frames_dirty;
     int error=md_svc_registry_prepare_fork(r,t->pid,fd);
+    if (!error && forked) filter_entry_rearm(t);
     if (!error) error=md_svc_registry_identity(r,t->pid,fd,md_memory_sole_owner(t->memory) ? t->pid : 0);
     if (!error) error=md_svc_registry_collect_clients(r,t->pid,fd,svc_client_alive,t->memory);
     if (error==-EIO || error==-EFAULT) {
@@ -1444,6 +1459,8 @@ void resume(pid_t pid, int sig) {
     struct thread *t = thread(pid);
     if (t->resume_lost) return;
     if (retained_task_held(t)) return;
+    if (t->phase==IDLE && t->seccomp.trace.stage==GUEST_TRACE_DISPATCH)
+        t->seccomp.trace.stage=GUEST_TRACE_NONE;
     if (!t->signals.host_blocked && t->phase==IDLE && t->entered && t->signals.pending) {
         struct md_signal_pending_value pending;
         if (md_signal_pending_peek(t->signals.pending,&pending)) {
@@ -1595,12 +1612,14 @@ void resume(pid_t pid, int sig) {
      * the wait's existing cancellation owner restores guest context first. */
     if (!t->interrupt_pending && !t->signals.shielded
             && (task_parked(t) || phase==ADAPTER_NATIVE || phase==NATIVE_WAIT)
-            && md_debugger_stop_pending(debugger,pid)) {
+            && task_stop_pending(t)) {
         if (!tracee_request(t,PTRACE_INTERRUPT,NULL,NULL,"debugger-wait-boundary")) return;
         t->interrupt_pending=1;
     }
+    /* A signal carrier suppresses guest debugger stepping through
+     * debugger_at_boundary(), not an operation's owned kernel completion. */
     t->kernel_resume=phase==CALL_RESTART_ENTRY ? PTRACE_SYSEMU
-        : t->signals.delivery.active && phase!=SIGNAL_NATIVE_EXIT ? PTRACE_CONT : (t->metadata_restart && phase==IDLE
+        : (t->metadata_restart && phase==IDLE
             && (t->metadata_restart->stage==METADATA_ENTRY || t->metadata_restart->stage==METADATA_WAIT))
             || t->signals.return_pending || t->machine.syscall_exit || (phase==IDLE && t->machine.retry_svc)
             || t->fs.direct==DIRECT_ADMIT || (t->descriptors.running && !t->entry.effect)
@@ -1618,6 +1637,7 @@ void resume(pid_t pid, int sig) {
             || phase==SIGNAL_NATIVE_EXIT
             || phase==RESULT_REPLAY_ENTRY || phase==RESULT_REPLAY_EXIT
             || t->seccomp.trace.stage==GUEST_TRACE_REPLAY || t->seccomp.trace.stage==GUEST_TRACE_ADMISSION
+            || t->seccomp.trace.stage==GUEST_TRACE_DRAIN
             || (debugger_at_boundary(t) && t->entered && t->image.process_image
                 && (t->debug.call_active || md_debugger_syscall_mode(debugger,pid))) ? PTRACE_SYSCALL
                 : debugger_at_boundary(t) && t->entered && md_debugger_step(debugger,pid) ? PTRACE_SINGLESTEP : PTRACE_CONT;
@@ -1694,6 +1714,7 @@ uintptr_t dispatch_input(struct thread *t,unsigned policy) {
 unsigned dispatch_policy(struct thread *t) {
     unsigned policy = md_domain_scoped(t->resources.fs) || md_mount_namespace_managed_paths(t->resources.mounts)
         || t->resources.landlock;
+    if (filter_selectors_required(t)) policy|=MD_DISPATCH_FILTER_SELECTORS;
     if (md_network_namespace_managed(t->resources.network)) policy|=MD_DISPATCH_NETWORK_SCOPED;
     if (t->execution.request.nr==SYS_socket && t->execution.request.args[0]==AF_NETLINK
             && t->execution.request.args[2]==NETLINK_KOBJECT_UEVENT && md_fs_worker_device_events(filesystem))
@@ -1776,7 +1797,7 @@ void signal_wait_restore(struct thread *t) {
 }
 
 int interrupted_operation(struct thread *t) {
-    if (t->entry.effect && t->entry.waiting && md_debugger_stop_pending(debugger,t->pid)) {
+    if (t->entry.effect && t->entry.waiting && task_stop_pending(t)) {
         /* The native journal distinguishes a completed effect from a cancelled
          * wait. Its ordinary receipt releases the owner and original frame. */
         int error=entry_effect_observe(t);
@@ -1809,7 +1830,7 @@ int interrupted_operation(struct thread *t) {
      * acknowledgement is a syscall-exit stop; under CONT it is EVENT_STOP. */
     if (t->phase==EXPORT_CANCEL) { export_start(t,context); return 1; }
     if (t->phase==PROC_CANCEL) { proc_query_start(t); return 1; }
-    int stopping=(task_parked(t) || t->phase==DEBUG_PARK_EXIT) && md_debugger_stop_pending(debugger,t->pid);
+    int stopping=(task_parked(t) || t->phase==DEBUG_PARK_EXIT) && task_stop_pending(t);
     /* A debugger wake is an interruption, never provider readiness. Reuse the
      * wait owner's cancellation/restart semantics before exposing registers. */
     if (stopping || wait_service_ready(t)) switch (t->phase) {
@@ -1896,19 +1917,26 @@ void execution_seccomp_event(struct thread *t,pid_t pid,int status,const struct 
         if (!tracee_request(t,PTRACE_GET_SYSCALL_INFO,(void *)sizeof(info),&info,"seccomp-call")) return;
         if (info.op==PTRACE_SYSCALL_INFO_SECCOMP) {
             cookie=info.seccomp.ret_data; observed=&info;
-            if (memory_observed(t,&info)) return;
+            if (t->seccomp.trace.stage!=GUEST_TRACE_EXECUTION
+                    && t->seccomp.trace.stage!=GUEST_TRACE_ADMISSION && memory_observed(t,&info)) return;
         }
     }
     if (!observed && !tracee_request(t,PTRACE_GETEVENTMSG,NULL,&cookie,"seccomp-event")) return;
+    int debug_execution=guest_trace_execution(t,&info,&regs);
+    if (debug_execution<0) return;
+    if (debug_execution) {
+        struct seccomp_data execution=syscall_stopped(&regs,&info);
+        cookie=guest_notification_route(t,&execution);
+    }
     struct md_svc_registry *registry=md_memory_svc(t->memory);
     /* Discovery and resident recovery need full context. Ordinary IO
      * outside those regions can use the existing syscall observation,
      * including its original pointers and native wait semantics. */
     int native_entry=machine_observed_entry(t,observed,&cookie);
     if (native_entry && observed) info.seccomp.ret_data=cookie;
-    int captured=native_entry==1 ? 0 : machine_context(t,observed);
+    int captured=debug_execution || (native_entry==1 ? 0 : machine_context(t,observed));
     if (captured) {
-        if (!registers(pid,&regs)) return;
+        if (!debug_execution && !registers(pid,&regs)) return;
         struct seccomp_data call=syscall_stopped(&regs,observed);
         if (!native_entry) native_entry=machine_native_entry(t,&call,&cookie);
         if (native_entry && observed) info.seccomp.ret_data=cookie;
@@ -1945,11 +1973,15 @@ void execution_seccomp_event(struct thread *t,pid_t pid,int status,const struct 
             return;
         }
     }
-    if (t->entered && t->phase==IDLE && md_seccomp_policy_may_trace(admission_policy(t))) {
+    if (t->entered && t->phase==IDLE && (t->seccomp.trace.stage==GUEST_TRACE_ADMISSION
+            || md_seccomp_policy_may_trace(admission_policy(t)))) {
         if (!captured && !registers(pid,&regs)) return;
         captured=1;
         struct seccomp_data call=syscall_policy(&regs,observed);
-        if (guest_trace_recheck(t,&call)) cookie=guest_notification_route(t,&call);
+        if (guest_trace_recheck(t,&call)) {
+            struct seccomp_data execution=syscall_stopped(&regs,observed);
+            cookie=guest_notification_route(t,&execution);
+        }
         else if (guest_trace_begin(t,&call,&regs,NULL,MD_TASK_CALL_SECCOMP)) return;
     }
     if (t->entered && t->phase==IDLE && md_seccomp_policy_may_notify(admission_policy(t))) {
@@ -1957,7 +1989,8 @@ void execution_seccomp_event(struct thread *t,pid_t pid,int status,const struct 
         captured=1;
         struct seccomp_data call=syscall_policy(&regs,observed);
         if (t->seccomp.notification_continued) {
-            t->seccomp.notification_continued=0; cookie=guest_notification_route(t,&call);
+            struct seccomp_data execution=syscall_stopped(&regs,observed);
+            t->seccomp.notification_continued=0; cookie=guest_notification_route(t,&execution);
         } else if (guest_notification_begin(t,&call,&regs,NULL,NULL)) return;
     }
     if (observed && captured && regs.pc==observed->instruction_pointer)
@@ -2077,6 +2110,10 @@ void execution_seccomp_event(struct thread *t,pid_t pid,int status,const struct 
         t->phase = EXECUTING; fd_begin(t,&request,&regs,0); return;
     }
     if (cookie == MD_INTERCEPT_OBSERVE) {
+        if (!t->ready || t->phase!=IDLE)
+            fprintf(stderr,"guest-runtime: unexpected observation pid=%d ready=%d phase=%d pc=%#llx nr=%d savedPc=%#llx savedNr=%d install=%d\n",
+                pid,t->ready,t->phase,regs.pc,request.nr,t->execution.registers.pc,
+                t->execution.request.nr,t->seccomp.install!=NULL);
         CHECK(t->ready && t->phase == IDLE);
         t->seccomp.length = describe_filter(pid,&request);
         execution_retain(t,&request,&regs); t->phase = OBSERVING;
@@ -2158,21 +2195,22 @@ void execution_syscall_event(struct thread *t,pid_t pid,int status,const struct 
     if (interrupted_operation(t)) return;
     if (((t->phase==DEBUG_WAIT_ENTRY) || (t->phase==DEBUG_WAIT_EXIT) || (t->phase==DEBUG_PARK_ENTRY) || (t->phase==DEBUG_PARK_EXIT)) && debug_wait_exit(t,pid)) return;
     if (t->phase==IDLE) {
-        struct ptrace_syscall_info info;
+        struct ptrace_syscall_info info={0};
         struct user_pt_regs regs;
-        if (!registers(pid,&regs)) return;
         if (!tracee_request(t,PTRACE_GET_SYSCALL_INFO,(void *)sizeof(info),&info,"syscall-exit")) return;
-        if (guest_trace_syscall(t,&info,&regs)) return;
+        int replay=t->seccomp.trace.stage==GUEST_TRACE_REPLAY && info.op==PTRACE_SYSCALL_INFO_ENTRY;
+        if (replay && !registers(pid,&regs)) return;
+        if (guest_trace_syscall(t,&info,replay ? &regs : NULL)) return;
         if (info.op==PTRACE_SYSCALL_INFO_ENTRY) {
             if (t->debug.replay_entry) { t->debug.replay_entry=0; resume(pid,0); return; }
             t->debug.call_active=md_debugger_syscall_mode(debugger,pid);
-            if (t->entered && t->image.process_image && md_debugger_syscall(debugger,pid,&regs,1)) return;
-        } else {
-            int pending=debug_host_policy_pending(t,&regs);
+            if (t->entered && t->image.process_image && md_debugger_syscall_observed(debugger,pid,&info)) return;
+        } else if (info.op==PTRACE_SYSCALL_INFO_EXIT) {
+            int pending=debug_host_policy_pending(t,&info);
             if (pending<0) { CHECK(pending==-ESRCH); t->resume_lost=1; return; }
-            if (pending) { resume(pid,0); return; }
-            if (debug_syscall_exit(t,&regs)) return;
-        }
+            if (pending) { if (pending==1) resume(pid,0); return; }
+            if (debug_syscall_observed(t,&info)) return;
+        } else if (debug_syscall_exit(t,NULL)) return;
         resume(pid,0); return;
     }
     if (t->phase == WATCH_CANCEL) {
@@ -2193,6 +2231,10 @@ void execution_syscall_event(struct thread *t,pid_t pid,int status,const struct 
     }
     if (t->phase==CALL_RESTART_EXIT) {
         SUPERVISOR_TRACE("PROBE call-restart-exit pid=%d nr=%d\n",pid,t->execution.request.nr);
+        if (t->metadata_restart) {
+            md_memory_stack_return(t->memory,t->execution.stack); t->execution.stack=0;
+            metadata_restart_retry(t); return;
+        }
         /* Give signal delivery the original syscall context, including
          * the kernel's orig_x0. Kernel SA_RESTART handling, not a guessed
          * userspace action table, decides whether to restart it.

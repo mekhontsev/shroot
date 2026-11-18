@@ -107,13 +107,7 @@ static enum md_entry_outcome finish(struct md_entry_client *client,struct md_ent
 static enum md_entry_outcome resume_kernel(struct md_entry_client *client,struct md_entry_call *call) {
     struct md_entry_channel *c=continuation(client,call);
     if (!c) return finish(client,call,MD_ENTRY_UNKNOWN);
-    unsigned pending=MD_ENTRY_FD_REQUEST;
-    if (atomic_compare_exchange_strong_explicit(&c->state,&pending,MD_ENTRY_IDLE,
-            memory_order_acq_rel,memory_order_acquire)) {
-        /* This unadmitted sequence can be reused. Unlike ordinary pathless
-         * calls, withdrawal must invalidate any capture published for it. */
-        c->input.sequence=0;
-        --c->sequence;
+    if (md_entry_withdraw_fd(c)) {
         return finish(client,call,MD_ENTRY_COMPLETED);
     }
     return progress(client,call);

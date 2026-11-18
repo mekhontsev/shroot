@@ -184,7 +184,7 @@ static int component(struct path_walk *w,struct md_mount_namespace *view,
         if (mount->sysfs && (r=md_sysfs_refresh(mount->sysfs))) return r;
         const struct md_control_actor actor={.identity=w->fs->store->identity,.wakeup=w->fs->wakeup,
             .pid=w->fs->actor ? w->fs->actor->tid : 0};
-        return point_native(next,md_provider_tree_lookup(mount->provider,current->fd,name,&actor,w->pending));
+        return point_native(next,md_provider_tree_lookup(mount->provider,current->fd,&current->identity,name,&actor,w->pending));
     }
     if (mount && mount->cgroup) {
         struct stat st;
@@ -398,7 +398,11 @@ static int walk_path(struct md_filesystem *fs, int base, const struct md_fs_anch
             else if (mount && mount->backing==MD_MOUNT_DEVPTS)
                 r=point_native(&next,md_devpts_step(mount->devpts,current.fd,name));
             else {
-                r=(resolve&MD_VIEW_TASK_PATH) ? md_view_task_path(fs,current.fd,name,todo,resolve,0) : 0;
+                /* A provider owns its lower descriptors too. Their host proc
+                 * paths must not bypass its visibility or lookup policy. */
+                int native=!mount || (mount->backing==MD_MOUNT_NATIVE && !mount->provider);
+                r=native && (resolve&MD_VIEW_TASK_PATH)
+                    ? md_view_task_path(fs,current.fd,name,todo,resolve,0) : 0;
                 if (r==-EREMOTE && md_view_nosymfollow(mount)) r=-EOPNOTSUPP;
                 if (!r) r=component(&walk,view,mount,&current,name,todo,0,&next);
             }

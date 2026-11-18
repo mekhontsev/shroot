@@ -9,6 +9,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +18,8 @@
 #include <sys/file.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -61,12 +65,32 @@ static unsigned descriptors(void) {
     while ((entry=readdir(directory))) if (entry->d_name[0]!='.') ++count;
     assert(!closedir(directory)); return count;
 }
-static void pinned_lookup(const char *path) {
+static void lookup_filter(void) {
+    struct sock_filter code[]={
+        BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+        BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getppid,0,1),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EACCES),
+        BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_recvmsg,0,1),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EACCES),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};
+    struct sock_fprog program={sizeof(code)/sizeof(*code),code};
+    assert(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
+    assert(!prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&program));
+    assert(syscall(SYS_getppid)==-1 && errno==EACCES);
+}
+static void pinned_lookup(const char *path,int filtered) {
     struct md_inode_store *s;
     int directory,original=setup(path,&s,&directory);
     struct md_identity root=md_identity_new(0,0); s->identity=&root;
+    /* Admit a lazy executor's FD transport on a different inode. The measured
+     * file remains untouched, including its first metadata-only lookup. */
+    int probe=openat(directory,"probe",O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600); assert(probe>=0);
+    close(probe);
+    probe=openat(directory,"probe",O_PATH|O_NOFOLLOW|O_CLOEXEC); assert(probe>=0);
+    close(probe); assert(!unlinkat(directory,"probe",0));
     int watch=md_inode_watch_create(s,IN_NONBLOCK); assert(watch>=0);
     assert(md_inode_watch_add(s,watch,directory,IN_OPEN|IN_CLOSE)>0);
+    if (filtered) lookup_filter();
     unsigned before=descriptors();
     struct md_open_completion completion;
     for (unsigned i=0;i<64;++i) {
@@ -77,7 +101,10 @@ static void pinned_lookup(const char *path) {
         assert(md_inode_plan_open(s,-1,"work/file",O_WRONLY,0,0,&completion,1,NULL)==-EROFS);
         s->readonly=0;
     }
-    assert(descriptors()==before && md_inode_watch_bytes(s,watch)==0);
+    unsigned after=descriptors();
+    size_t queued=md_inode_watch_bytes(s,watch);
+    if (after!=before || queued) fprintf(stderr,"pinned lookup descriptors=%u/%u watch-bytes=%zu\n",after,before,queued);
+    assert(after==before && queued==0);
     struct mdi_location location;
     struct mdi_path_pin pin;
     assert(!mdi_begin(s,0));
@@ -94,6 +121,17 @@ static void pinned_lookup(const char *path) {
     close(data); close(pin.fd); close(replacement);
     close(watch); close(original); close(directory); md_inode_store_close(s); md_identity_release(&root);
     puts("PASS pinned lookup: one retained identity through replacement/unlink, fresh metadata, no speculative OPEN or error-path FD leaks");
+}
+static void filtered_lookup(const char *path) {
+    fflush(NULL);
+    pid_t child=fork(); assert(child>=0);
+    if (!child) {
+        pinned_lookup(path,1);
+        fflush(NULL); _exit(0);
+    }
+    int status; assert(waitpid(child,&status,0)==child);
+    assert(WIFEXITED(status) && !WEXITSTATUS(status));
+    puts("PASS filtered pinned lookup: policy preserved without speculative data opens");
 }
 static int promote(struct md_inode_store *s,int directory,int file) {
     struct stat st; assert(!fstat(file,&st));
@@ -380,7 +418,8 @@ static void overlay_sync_batch(const char *path) {
 int main(int argc,char **argv) {
     assert(argc==2 && argv[1][0]=='/' && !mkdir(argv[1],0700));
     char path[PATH_MAX];
-    snprintf(path,sizeof(path),"%s/pinned",argv[1]); pinned_lookup(path);
+    snprintf(path,sizeof(path),"%s/pinned",argv[1]); pinned_lookup(path,0);
+    snprintf(path,sizeof(path),"%s/filtered-pinned",argv[1]); filtered_lookup(path);
     snprintf(path,sizeof(path),"%s/success",argv[1]); success(path);
     snprintf(path,sizeof(path),"%s/overlay-sync",argv[1]); overlay_sync_batch(path);
     const int points[]={MD_PUBLICATION_INTENT,MD_PUBLICATION_MOVED,MD_PUBLICATION_STAGED,MD_PUBLICATION_CATALOGUED};

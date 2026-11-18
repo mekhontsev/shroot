@@ -619,8 +619,8 @@ static int helper_begin(struct md_task_helpers *manager, pid_t owner, pid_t grou
             || request->directory_limit>65536)) return -EINVAL;
     if (request->kind==MD_TASK_HELPER_CAPTURE) {
         struct md_proc_path proc=md_proc_path_for(path,owner,group);
-        int fdinfo=proc.kind==MD_PROC_FDINFO && !*proc.tail && request->flags==O_CLOEXEC;
         enum md_proc_kind kind=proc.kind==MD_PROC_FOREIGN ? proc.foreign_kind : proc.kind;
+        int fdinfo=kind==MD_PROC_FDINFO && !*proc.tail && request->flags==O_CLOEXEC;
         int mounts=(kind==MD_PROC_MOUNTS || kind==MD_PROC_MOUNTINFO)
             && !*proc.tail && request->flags==O_CLOEXEC;
         int process=(kind==MD_PROC_STATUS || kind==MD_PROC_STAT || kind==MD_PROC_LIMITS

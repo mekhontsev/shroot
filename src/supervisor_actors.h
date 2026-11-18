@@ -64,6 +64,11 @@ void task_continuation_discard(struct thread *t);
 void task_continuations_progress(void);
 int task_checkpoint_borrow(struct thread *actor,int *owned);
 int selector_has(struct thread *t,unsigned kind,int number);
+/* Admit one missing selector at a time before publishing a typed descriptor.
+ * The caller retains its table turn and invokes this again on completion.
+ * 0: ready, 1: continuation owns progress, negative: admission failed. */
+int selector_prepare(struct thread *,unsigned required,int number,
+        enum md_task_call_boundary,const struct user_pt_regs *,void (*complete)(struct thread *,long));
 int task_parked(const struct thread *t);
 int task_continuation_available(const struct thread *t);
 int task_completion_available(pid_t pid);
@@ -79,6 +84,7 @@ int broker_retire(const struct md_broker_retirement *request);
 void task_call_resume(struct thread *t,struct md_task_call *call,int signal);
 struct md_task_call *task_call_continuation(struct thread *t);
 void task_group_stop(struct thread *t);
+int task_group_listen(struct thread *t);
 int task_call_signal(struct thread *t,struct md_task_call *call,int status);
 int task_action_event(pid_t pid,int status,const struct rusage *usage);
 int fd_loans_ready(struct thread *t);

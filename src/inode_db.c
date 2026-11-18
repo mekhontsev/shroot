@@ -547,6 +547,9 @@ int mdi_fstat_origin(struct md_inode_store *s, int fd, struct mdi_node *node, st
     if (fstat(fd, st)) return -errno;
     if (s->statistics) s->statistics->link_count_queries++;
     int r = descriptor_node(s, st, node);
+    /* The pipe is the data endpoint. Named FIFO metadata, including times,
+     * belongs to its backing inode just as it does for path-based stat. */
+    if (!r && S_ISFIFO(st->st_mode) && node->kind==S_IFIFO) return mdi_stat(s,node,st);
     if (r==-EXDEV && native_leaf && S_ISREG(st->st_mode) && st->st_nlink<=1) {
         /* The retained pin proves membership, not metadata. A catalogue entry
          * above takes precedence after hardlink/OCI/COW promotion. */

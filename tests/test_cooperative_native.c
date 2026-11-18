@@ -33,7 +33,8 @@ static void string_operands(void) {
         {SYS_removexattr,17},{SYS_lremovexattr,17},
         {SYS_fgetxattr,16},{SYS_fsetxattr,16},{SYS_fremovexattr,16},
         {SYS_flistxattr,0},{SYS_fstat,0},{SYS_fstatfs,0},{SYS_fchmod,0},
-        {SYS_fchown,0},{SYS_getdents64,0},{SYS_getuid,0},{SYS_close,0},{-1,0}
+        {SYS_fchown,0},{SYS_fsync,0},{SYS_fdatasync,0},{SYS_syncfs,0},
+        {SYS_getdents64,0},{SYS_getuid,0},{SYS_close,0},{-1,0}
     };
     for (unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i) {
         assert(md_fs_syscall_strings(cases[i].number)==cases[i].strings);
@@ -58,6 +59,18 @@ static void string_operands(void) {
         }
     }
     puts("PASS string operands: caller capture and executor decoding share exact argument selectors");
+    for (unsigned i=0;i<3;++i) {
+        const int numbers[]={SYS_fsync,SYS_fdatasync,SYS_syncfs};
+        const unsigned modes[]={MD_INODE_SYNC_FILE,MD_INODE_SYNC_DATA,MD_INODE_SYNC_FILESYSTEM};
+        uint64_t args[]={41,0,0,0,0,0};
+        struct md_fs_syscall decoded;
+        struct md_fs_request request;
+        assert(md_fs_syscall_descriptor_effect(numbers[i],args[1]));
+        assert(md_entry_route(numbers[i])==MD_ENTRY_WORKER);
+        assert(md_fs_syscall_decode(&decoded,&request,numbers[i],args,4096)==1);
+        assert(request.operation==MD_FS_SYNC && request.mode==modes[i] && request.directory[0]==41);
+        assert(decoded.operands==1 && !decoded.path[0] && decoded.copy==MD_FS_COPY_NONE);
+    }
 }
 
 static void open_admission(void) {
@@ -280,12 +293,56 @@ static void retirement(void) {
         channel.sequence=1; atomic_store(&channel.state,MD_ENTRY_RETIRING); barrier();
         channel.sequence=2; channel.call.number=SYS_close; channel.call.args[0]=i;
         unsigned state=i%2 ? MD_ENTRY_REQUEST : MD_ENTRY_FD_REQUEST;
-        atomic_store_explicit(&channel.state,state,memory_order_seq_cst); barrier();
+        md_entry_publish_request(&channel,state); barrier();
         assert(atomic_load(&channel.state)==state && channel.sequence==2);
         assert(channel.call.number==SYS_close && channel.call.args[0]==i);
     }
     assert(!pthread_join(peer,NULL) && !pthread_barrier_destroy(&phase));
     puts("PASS native retirement: synchronous receipt, idle owner and 1000 next-request publication races");
+}
+static void withdrawal(void) {
+    for (unsigned order=0;order<3;++order) {
+        channel.sequence=1; channel.call.reserved=MD_ENTRY_SYSCALL;
+        atomic_store(&channel.state,MD_ENTRY_RETIRING);
+        if (order==0) assert(!md_entry_native_retire(&channel,1,MD_ENTRY_COMPLETED,42));
+        ++channel.sequence; channel.input.sequence=channel.sequence;
+        md_entry_publish_request(&channel,MD_ENTRY_FD_REQUEST);
+        assert(atomic_load(&channel.state)==(order ? MD_ENTRY_FD_RETIRING : MD_ENTRY_FD_REQUEST));
+        if (order==1) assert(!md_entry_native_retire(&channel,1,MD_ENTRY_COMPLETED,42));
+        assert(md_entry_withdraw_fd(&channel));
+        assert(channel.sequence==1 && !channel.input.sequence);
+        assert(atomic_load(&channel.state)==(order==2 ? MD_ENTRY_RETIRING : MD_ENTRY_IDLE));
+        if (order==2) assert(!md_entry_native_retire(&channel,1,MD_ENTRY_COMPLETED,42));
+        assert(atomic_load(&channel.state)==MD_ENTRY_IDLE && channel.receipt==1);
+    }
+    /* First requests and requests following a non-native reply have no debt. */
+    for (unsigned sequence=1;sequence<=2;++sequence) {
+        channel.sequence=sequence; channel.input.sequence=sequence;
+        atomic_store(&channel.state,MD_ENTRY_IDLE);
+        md_entry_publish_request(&channel,MD_ENTRY_FD_REQUEST);
+        assert(md_entry_withdraw_fd(&channel));
+        assert(atomic_load(&channel.state)==MD_ENTRY_IDLE && channel.sequence==sequence-1);
+    }
+    for (unsigned state=MD_ENTRY_IDLE;state<=MD_ENTRY_FD_RETIRING;++state) {
+        if (md_entry_fd_pending(state)) continue;
+        atomic_store(&channel.state,state); channel.sequence=2; channel.input.sequence=2;
+        assert(!md_entry_withdraw_fd(&channel));
+        assert(atomic_load(&channel.state)==state && channel.sequence==2 && channel.input.sequence==2);
+    }
+    pthread_t peer; assert(!pthread_barrier_init(&phase,NULL,2));
+    assert(!pthread_create(&peer,NULL,retire,NULL));
+    for (unsigned i=0;i<1000;++i) {
+        channel.sequence=1; atomic_store(&channel.state,MD_ENTRY_RETIRING); barrier();
+        for (unsigned attempt=0;attempt<3;++attempt) {
+            ++channel.sequence; channel.input.sequence=channel.sequence;
+            md_entry_publish_request(&channel,MD_ENTRY_FD_REQUEST);
+            assert(md_entry_withdraw_fd(&channel));
+            assert(channel.sequence==1 && !channel.input.sequence);
+        }
+        barrier(); assert(atomic_load(&channel.state)==MD_ENTRY_IDLE && channel.receipt==1);
+    }
+    assert(!pthread_join(peer,NULL) && !pthread_barrier_destroy(&phase));
+    puts("PASS descriptor withdrawal: all retirement orders, admitted states and 1000 repeated-withdrawal races");
 }
 static void *publish(void *unused) {
     (void)unused;
@@ -302,7 +359,7 @@ static void *publish(void *unused) {
     return NULL;
 }
 static void park_handoff(void) {
-    for (unsigned state=MD_ENTRY_IDLE;state<=MD_ENTRY_PARKED;++state)
+    for (unsigned state=MD_ENTRY_IDLE;state<=MD_ENTRY_FD_RETIRING;++state)
         assert(md_entry_peer_runnable(state)==(state==MD_ENTRY_IDLE || state==MD_ENTRY_RESPONSE
             || state==MD_ENTRY_NATIVE || state==MD_ENTRY_RETIRING));
     assert(!pthread_barrier_init(&phase,NULL,2));
@@ -343,6 +400,7 @@ int main(void) {
     assert(md_native_stopped(MD_NATIVE_RUNNING,99,0,100,104,120,&result)==-EPROTO);
     assert(md_native_stopped(MD_NATIVE_RUNNING,121,0,100,104,120,&result)==-EPROTO);
     retirement();
+    withdrawal();
     printf("PASS native journal: %u exact instruction stops, real FD effects, cancellation and restart classification\n",count);
     return 0;
 }

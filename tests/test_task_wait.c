@@ -47,6 +47,34 @@ pid_t __wrap_wait4(pid_t selected, int *status, int options, struct rusage *usag
 }
 static void done(void) { assert(taken == queued); taken = queued = 0; }
 
+static void drained_bursts(void) {
+    struct md_task_wait w={.members=388,.directed=388};
+    int status;
+    expect(-1,100,0); expect(-1,101,0); expect(-1,0,0);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==100 && w.drained && w.batch);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==101);
+    assert(!md_task_wait_ready(&w,&status,NULL,0)); done();
+    md_task_wait_hint(&w,100);
+    expect(-1,100,0); expect(-1,101,0); expect(-1,0,0);
+    assert(md_task_wait_ready(&w,&status,NULL,1)==100 && w.drained && w.batch);
+    assert(md_task_wait_ready(&w,&status,NULL,1)==101); done();
+    md_task_wait_hint(&w,100);
+    for (unsigned i=0;i<32;++i) expect(-1,200+i,0);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==200 && !w.drained && !w.batch);
+    for (unsigned i=1;i<32;++i) assert(md_task_wait_ready(&w,&status,NULL,0)==200+(pid_t)i);
+    done();
+    expect(231,231,0);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==231 && !w.batch); done();
+    w.directed=388;
+    expect(-1,231,0); expect(-1,230,0); expect(-1,0,0);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==231 && w.batch);
+    assert(md_task_wait_take(&w,&status,NULL)==230); done();
+    md_task_wait_hint(&w,231);
+    expect(-1,231,0); expect(-1,0,0);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==231 && !w.batch && w.drained); done();
+    md_task_wait_hint(&w,231); expect(231,231,0);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==231); done();
+}
 static void runnable_discovery(unsigned population) {
     struct md_task_wait w={0};
     struct md_task_wait_member *members=calloc(population,sizeof(*members));
@@ -103,6 +131,7 @@ static void fair_discovery(unsigned population,unsigned hot) {
 }
 
 int main(void) {
+    drained_bursts();
     int status;
     struct md_task_wait w = {0};
     expect(-1,10,0);

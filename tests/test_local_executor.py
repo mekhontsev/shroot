@@ -78,6 +78,13 @@ class LocalCommands(unittest.TestCase):
         self.assertFalse(self.executor.active)
         self.assertEqual(self.executor.execute('printf recovered')['output'], 'recovered')
 
+    def test_parent_exit_reaps_descendants_holding_output(self):
+        for status in (0, 7):
+            with self.subTest(status=status):
+                result = self.executor.execute(f'sleep 60 & printf done; exit {status}', 10)
+                self.assertEqual(result, dict(exitCode=status, output='done'))
+                self.assertFalse(self.executor.active)
+
     def test_close_cancels_owned_tree_but_not_an_unrelated_child(self):
         unrelated = subprocess.Popen(['sleep', '60'], start_new_session=True)
         self.addCleanup(unrelated.wait)
@@ -106,6 +113,12 @@ class LocalCommands(unittest.TestCase):
             raise ValueError('observer failed')
         with self.assertRaisesRegex(ValueError, 'observer failed'):
             self.executor.execute('printf "ready\\n"; sleep 60', on_line=failure)
+        self.assertFalse(self.executor.active)
+
+    def test_completion_setup_failure_reaps_child(self):
+        with mock.patch('executors.local.os.pipe2', side_effect=OSError('pipe failed')):
+            with self.assertRaisesRegex(OSError, 'pipe failed'):
+                self.executor.execute('sleep 60')
         self.assertFalse(self.executor.active)
 
     def test_native_signal_uses_the_shared_shell_receipt_status(self):

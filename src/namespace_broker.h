@@ -62,7 +62,7 @@ void md_broker_control_query(struct md_namespace_broker *,md_control_query);
 struct md_entry_native;
 /* Only the supervisor reads/changes stopped registers. The worker retains
  * resource ownership until the native journal has an authoritative result. */
-void md_broker_native_observer(struct md_namespace_broker *,int (*)(pid_t,struct md_entry_native *));
+void md_broker_native_observer(struct md_namespace_broker *,int (*)(pid_t,struct md_entry_native *,int terminal));
 struct md_fd_order;
 struct md_fd_loan;
 /* Failed publication transfers an exact provisional slot to the existing

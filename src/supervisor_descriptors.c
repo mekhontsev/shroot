@@ -633,8 +633,7 @@ int fd_duplicate_prepared(struct thread *t,const struct seccomp_data *call,unsig
 int fd_native_classify(struct thread *t,const struct seccomp_data *call,unsigned cookie) {
     if (call->arch!=AUDIT_ARCH_AARCH64 || !md_descriptor_native_candidate(call->nr,(unsigned)call->args[1])
             || t->descriptors.job || t->descriptors.running || t->descriptors.order.table || t->descriptors.fs_order.fs
-            || t->debug.options || t->debug.call_active || t->debug.step_call
-            || md_debugger_traced(debugger,t->pid)) return 0;
+            || t->debug.call_active || t->debug.step_call || (debugger && md_debugger_step(debugger,t->pid))) return 0;
     unsigned long nr=call->nr;
     int poll=nr==SYS_ppoll || nr==SYS_pselect6;
     int epoll=nr==SYS_epoll_pwait || nr==SYS_epoll_pwait2;
@@ -665,7 +664,8 @@ int fd_native_classify(struct thread *t,const struct seccomp_data *call,unsigned
             && !t->machine.syscall_exit && !t->machine.retry_svc;
         md_fd_object_release(object);
     } else native=poll ? md_fd_origins_native_poll(&turn) : md_fd_origins_exclusive(&turn)
-        && md_fd_origins_native_io(&turn,(int)call->args[0]);
+        && (md_fd_origins_native_io(&turn,(int)call->args[0])
+            || md_fd_origins_native_anonymous_io(&turn,t->pid,(int)call->args[0]));
     if (!native && nr==SYS_ppoll) {
         /* Common short vectors need no adapter round trip merely because an
          * unrelated FD has a provider. As in the full poll path, classification

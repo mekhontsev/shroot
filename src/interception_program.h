@@ -94,7 +94,8 @@ static inline void md_interception_program_build(const struct md_interception_ab
     uintptr_t task=abi->task_return,abort_task=abi->task_abort_return;
     uintptr_t admit=abi->buffer_admit,native=abi->native_return;
 #define COUNT(name) + 1
-        enum { transport_instructions = 2 * (2 MD_GATE_TRANSPORT_CALLS(COUNT)) };
+        enum { transport_instructions = 2 * (2 MD_GATE_TRANSPORT_CALLS(COUNT)
+            MD_GATE_FILE_EFFECT_CALLS(COUNT)) };
 #undef COUNT
 #define COUNT_QUERY(name,value) + 5
         enum { query_instructions = 0 MD_DESCRIPTOR_SERVICE_QUERIES(COUNT_QUERY) };
@@ -265,6 +266,9 @@ static inline void md_interception_program_build(const struct md_interception_ab
              * original call enters its adapter after guest policy admission;
              * admitted service gates do not repeat the guest program. */
             MD_GATE_TRANSPORT_CALLS(NATIVE)
+            /* The filesystem owner has already selected the native effect.
+             * Reentering the supervisor cannot add another policy decision. */
+            MD_GATE_FILE_EFFECT_CALLS(NATIVE)
             /* Only the admitted raw gate can wake the native control owner;
              * application signal sends still pass through the signal owner. */
             NATIVE(rt_tgsigqueueinfo)

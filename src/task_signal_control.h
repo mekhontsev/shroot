@@ -18,6 +18,7 @@ struct md_task_signal_control {
     uintptr_t call,returned;
     struct md_task_copy copy;
     struct md_task_call native;
+    int restoring, restore_ready;
 };
 /* Signal action exchange. Returns 1 complete, 0 resumed,
  * negative infrastructure failure; syscall errors are in result. */

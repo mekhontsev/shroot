@@ -21,7 +21,7 @@ BUILD = None
 
 class LibraryTest(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="shroot-library-", dir=BUILD)
+        self.temporary = tempfile.TemporaryDirectory(prefix="shroot-library-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.library = self.root / "library"

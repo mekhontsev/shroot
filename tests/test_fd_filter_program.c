@@ -104,7 +104,7 @@ static void routing_contract(void) {
 }
 static unsigned evaluate_program(const struct sock_filter *code,unsigned count,
         const struct seccomp_data *d,unsigned *reads) {
-    unsigned a=0;
+    unsigned a=0,x=0;
     for (unsigned pc=0,steps=0;pc<count && steps++<count;++pc) {
         const struct sock_filter *i=&code[pc];
         switch (i->code) {
@@ -115,6 +115,8 @@ static unsigned evaluate_program(const struct sock_filter *code,unsigned count,
             memcpy(&a,(const char *)d+i->k,sizeof(a)); break;
         case BPF_ALU|BPF_AND|BPF_K: a&=i->k; break;
         case BPF_ALU|BPF_OR|BPF_K: a|=i->k; break;
+        case BPF_LDX|BPF_IMM: x=i->k; break;
+        case BPF_MISC|BPF_TXA: a=x; break;
         case BPF_JMP|BPF_JEQ|BPF_K: pc+=a==i->k ? i->jt : i->jf; break;
         case BPF_JMP|BPF_JGT|BPF_K: pc+=a>i->k ? i->jt : i->jf; break;
         case BPF_JMP|BPF_JSET|BPF_K: pc+=a&i->k ? i->jt : i->jf; break;
@@ -131,6 +133,22 @@ static unsigned evaluate_reads(const struct md_fd_filter_program *p,const struct
 }
 static unsigned evaluate(const struct md_fd_filter_program *p,const struct seccomp_data *d) {
     return evaluate_reads(p,d,NULL);
+}
+static void instruction_accounting(void) {
+    struct md_fd_filter_program p={.count=6,.code={
+        BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+        BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,UINT32_C(0x80000000),1,2),
+        BPF_STMT(BPF_JMP|BPF_JA,2),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EPERM),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE)}};
+    assert(md_fd_filter_instructions(&p)==14);
+    p.code[1].k=0;
+    assert(md_fd_filter_instructions(&p)==13);
+    p.code[1].jt=0;
+    assert(md_fd_filter_instructions(&p)==12);
+    p.code[1].code=BPF_JMP|BPF_JSET|BPF_K;
+    assert(md_fd_filter_instructions(&p)==13);
 }
 static int pid_sensitive(const struct seccomp_data *d) {
     switch (d->nr) {
@@ -298,8 +316,8 @@ void test_fd_filter_program(void) {
             assert(!md_fd_filter_build(kind,190,&gates,&separate));
             assert(!md_fd_filter_build(kind,190,g,&built));
             assert(built.count<separate.count);
-            if (p==1) assert((unsigned)(separate.count-built.count)==12u*(kind==MD_FD_SELECTOR_PROC ? 3
-                : kind==MD_FD_SELECTOR_POLL ? 1 : 2));
+            /* Every action now uses the same gate matcher. */
+            if (p==1) assert((unsigned)(separate.count-built.count)==12);
             for (unsigned nr=0;nr<512;++nr) for (unsigned i=0;i<MD_FD_FILTER_GATES;++i)
                 for (unsigned adjacent=0;adjacent<2;++adjacent) {
                     struct seccomp_data d={.nr=(int)nr,.instruction_pointer=addresses[i]+4*adjacent,
@@ -311,5 +329,6 @@ void test_fd_filter_program(void) {
                 }
         }
     puts("PASS FD filter decisions: classes, aliases, argument positions, grouped/absent/duplicate gates and native waits");
+    instruction_accounting();
     routing_contract();
 }

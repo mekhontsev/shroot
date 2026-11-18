@@ -72,6 +72,7 @@ pid_t md_task_wait_take(struct md_task_wait *w, int *status, struct rusage *usag
 }
 static pid_t collect(struct md_task_wait *w,int *status,struct rusage *usage,unsigned limit) {
     w->pending_first=0;
+    w->batch=0;
     w->count=w->directed=0;
     w->fair_phase=0;
     while (w->pending_count<limit) {
@@ -80,7 +81,7 @@ static pid_t collect(struct md_task_wait *w,int *status,struct rusage *usage,uns
         pid_t pid=wait4(-1,&w->pending[i].status,__WALL|WNOHANG,
             usage ? &w->pending[i].usage : NULL);
         if (pid<=0) {
-            if (!pid) w->drained=1;
+            if (!pid) { w->drained=1; w->batch=w->pending_count>1; }
             if (!w->pending_count) return pid;
             break;
         }
@@ -96,6 +97,12 @@ pid_t md_task_wait_ready(struct md_task_wait *w, int *status, struct rusage *usa
      * Collect before resuming anyone: a hot child cannot take the list head
      * again while an older stop is waiting. Untracked births are retained too. */
     if (w->members>1 && w->members<=4) return collect(w,status,usage,4);
+    /* A completely drained burst proves that collection reached every ready
+     * child before any resumed. Reuse batching while that remains productive;
+     * a full batch restores round-robin discovery, and a sparse one restores
+     * directed hints. No sleeping task is inferred ready from this preference. */
+    if (w->members>4 && w->batch)
+        return collect(w,status,usage,sizeof(w->pending)/sizeof(*w->pending));
     struct queried queried={0};
     /* A hot child cannot indefinitely postpone stops whose SIGCHLD coalesced.
      * This is an event budget, not a timer or a readiness assumption. */

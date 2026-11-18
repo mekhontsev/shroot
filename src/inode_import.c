@@ -222,6 +222,8 @@ int md_inode_import_tree(struct md_inode_store *s, int source_fd,
     if (!r) { int empty = mdi_empty(s, &node); if (empty != 1) r = empty < 0 ? empty : -ENOTEMPTY; }
     if (!r) r = mdi_sql(s, "CREATE TEMP TABLE imported(device INTEGER,inode INTEGER,object TEXT,snapshot BLOB,"
         "PRIMARY KEY(device,inode)) WITHOUT ROWID");
+    int batching=0;
+    if (!r) { r=mdi_sync_batch_begin(s); batching=!r; }
     struct import_frame *stack = NULL;
     int fd = -1;
     if (!r && (fd = openat(source_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)) < 0) r = -errno;
@@ -268,6 +270,7 @@ int md_inode_import_tree(struct md_inode_store *s, int source_fd,
     }
     while (stack) pop(&stack);
     if (!r) r = mdi_sql(s, "DROP TABLE temp.imported");
+    if (batching) r=mdi_sync_batch_end(s,r);
     s->sync_requested=1;
     r = mdi_commit(s, r);
     if (!r) *out = i->result;

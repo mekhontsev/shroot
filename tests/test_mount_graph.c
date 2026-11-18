@@ -797,6 +797,199 @@ int test_mount_graph_child(int argc, char **argv) {
     }
     assert(descriptors()==before); close(fd); return 0;
 }
+static int provider_visible(const char *path) { return strcmp(path,"/hidden")!=0; }
+struct provider_context { unsigned retained,released; };
+static void *provider_retain(void *context) {
+    ++((struct provider_context *)context)->retained; return context;
+}
+static void provider_release(void *context) { ++((struct provider_context *)context)->released; }
+static void provider_contexts(int parent,int upper,int lower) {
+    for (unsigned retained=0;retained<2;++retained) {
+        struct provider_context context={0};
+        const struct md_provider_tree_ops ops={.retain=retained ? provider_retain : NULL,
+            .release=provider_release};
+        unsigned before=descriptors();
+        errno=0;
+        assert(!md_provider_tree_new(parent,INT_MAX,NULL,0,&ops,&context) && errno==EBADF);
+        assert(!context.retained && !context.released && descriptors()==before);
+        errno=0;
+        assert(!md_provider_tree_import_context(upper,INT_MAX,&ops,&context) && errno==EBADF);
+        assert(!context.retained && !context.released && descriptors()==before);
+        struct md_provider_tree *copy=md_provider_tree_import_context(upper,lower,&ops,&context);
+        assert(copy && context.retained==retained && !context.released);
+        struct stat root; char path[PATH_MAX];
+        assert(!fstat(lower,&root));
+        assert(!md_provider_tree_path(copy,lower,&root,path,sizeof(path)) && !strcmp(path,"/"));
+        md_provider_tree_release(copy);
+        assert(context.retained==retained && context.released==1 && descriptors()==before);
+    }
+    puts("PASS provider context ownership: creation/import failures, retained and transferred contexts, imported root identity");
+}
+static void provider_paths(const char *base) {
+    unsigned before=descriptors(); char lower_path[PATH_MAX],moved[PATH_MAX];
+    path(lower_path,base,"provider-lower"); path(moved,base,"provider-moved");
+    assert(!mkdir(lower_path,0700));
+    int parent=open(base,O_PATH|O_DIRECTORY|O_CLOEXEC),lower=open(lower_path,O_PATH|O_DIRECTORY|O_CLOEXEC);
+    assert(parent>=0 && lower>=0 && !mkdirat(lower,"opaque",0700));
+    int fd=openat(lower,"value",O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(fd>=0); close(fd);
+    fd=openat(lower,"hidden",O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(fd>=0); close(fd);
+    const char *opaque[]={"/opaque"};
+    const struct md_provider_tree_ops ops={.lower_visible=provider_visible};
+    struct md_provider_tree *tree=md_provider_tree_new(parent,lower,opaque,1,&ops,NULL); assert(tree);
+    int upper=md_provider_tree_root(tree);
+    provider_contexts(parent,upper,lower);
+    fd=openat(upper,"value",O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(fd>=0); close(fd);
+    assert(!rename(lower_path,moved) && !mkdir(lower_path,0700));
+    for (unsigned host=0;host<2;++host) {
+        int copy=openat(host ? lower : upper,".",O_PATH|O_DIRECTORY|O_CLOEXEC);
+        struct stat root; char path[PATH_MAX];
+        assert(copy>=0 && !fstat(copy,&root));
+        assert(!md_provider_tree_path(tree,copy,&root,path,sizeof(path)) && !strcmp(path,"/"));
+        assert(md_provider_tree_path(tree,copy,&root,path,1)==-ENAMETOOLONG);
+        int found=md_provider_tree_lookup(tree,copy,&root,"value",NULL,NULL);
+        struct stat expected,actual;
+        assert(found>=0 && !fstat(found,&actual) && !fstatat(upper,"value",&expected,0));
+        assert(actual.st_dev==expected.st_dev && actual.st_ino==expected.st_ino);
+        close(found);
+        close(copy);
+    }
+    fd=open(lower_path,O_PATH|O_DIRECTORY|O_CLOEXEC); assert(fd>=0);
+    struct stat replacement; char selected[PATH_MAX]; assert(!fstat(fd,&replacement));
+    assert(md_provider_tree_path(tree,fd,&replacement,selected,sizeof(selected))==-EXDEV);
+    close(fd);
+    assert(!mkdirat(lower,"before",0700));
+    fd=openat(lower,"before",O_PATH|O_DIRECTORY|O_CLOEXEC); assert(fd>=0);
+    int child=openat(fd,"value",O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(child>=0); close(child);
+    assert(!fstat(fd,&replacement));
+    assert(!md_provider_tree_path(tree,fd,&replacement,selected,sizeof(selected)) && !strcmp(selected,"/before"));
+    assert(!renameat(lower,"before",lower,"after"));
+    assert(!md_provider_tree_path(tree,fd,&replacement,selected,sizeof(selected)) && !strcmp(selected,"/after"));
+    child=md_provider_tree_lookup(tree,fd,&replacement,"value",NULL,NULL);
+    struct stat actual,expected;
+    assert(child>=0 && !fstat(child,&actual) && !fstatat(lower,"after/value",&expected,0));
+    assert(actual.st_dev==expected.st_dev && actual.st_ino==expected.st_ino);
+    close(child);
+    close(fd);
+    const char *names[]={".","..","value","hidden","opaque","absent","bad/name"};
+    for (unsigned host=0;host<2;++host) for (unsigned n=0;n<sizeof(names)/sizeof(*names);++n) {
+        char resolved[PATH_MAX];
+        assert(!md_provider_tree_path(tree,host ? lower : upper,NULL,resolved,sizeof(resolved)));
+        assert(!strcmp(resolved,"/"));
+        int actual=md_provider_tree_step_path(tree,resolved,names[n],host);
+        int expected=host ? (n<3 ? openat(lower,n==1 ? "." : names[n],O_PATH|O_NOFOLLOW|O_CLOEXEC)
+            : n==6 ? -EINVAL : -ENOENT) : md_provider_tree_lookup(tree,upper,NULL,names[n],NULL,NULL);
+        if (expected<0) assert(actual==expected);
+        else {
+            struct stat a,b;
+            assert(actual>=0 && !fstat(actual,&a) && !fstat(expected,&b));
+            assert(a.st_dev==b.st_dev && a.st_ino==b.st_ino && a.st_mode==b.st_mode);
+            close(actual); close(expected);
+        }
+        assert(!strcmp(resolved,"/"));
+    }
+    md_provider_tree_release(tree); close(lower); close(parent);
+    assert(descriptors()==before);
+    puts("PASS provider lookup: operation-local paths, upper/host selection, hidden and opaque nodes, moved root");
+}
+static int projection_visible(const char *path) { return strcmp(path,"/sys/kernel")!=0; }
+static void provider_delegation(const char *base) {
+    unsigned before=descriptors(); char directory[PATH_MAX];
+    path(directory,base,"provider-delegation"); assert(!mkdir(directory,0700));
+    struct md_filesystem fs=filesystem(directory,1);
+    struct md_fs_storage_cache storage={0}; fs.storage=&storage;
+    assert(!md_inode_mkdir(fs.store,-1,"/projection",0755));
+    int parent=open(directory,O_PATH|O_DIRECTORY|O_CLOEXEC);
+    int lower=open("/proc",O_PATH|O_DIRECTORY|O_CLOEXEC); assert(parent>=0 && lower>=0);
+    const struct md_provider_tree_ops ops={.lower_visible=projection_visible};
+    struct md_provider_tree *tree=md_provider_tree_new(parent,lower,NULL,0,&ops,NULL); assert(tree);
+    assert(!md_fs_provider_mount(&fs,tree,"/projection"));
+    char delegated[PATH_MAX]={0};
+    struct md_inode_boundary boundary={.path=delegated,.capacity=sizeof(delegated)};
+    fs.store->boundary=&boundary;
+    struct md_view_location selected={.fd=-1,.parent=-1};
+    assert(md_view_walk(&fs,-1,NULL,"/projection/sys/kernel",1,0,MD_VIEW_TASK_PATH,&selected)==-ENOENT);
+    assert(!md_view_walk(&fs,-1,NULL,"/projection/sys",1,0,MD_VIEW_TASK_PATH,&selected));
+    struct stat metadata; assert(!fstat(selected.fd,&metadata) && S_ISDIR(metadata.st_mode));
+    struct md_fs_anchor *origin=NULL;
+    assert(!md_view_anchor_duplicate(&fs,selected.view,selected.mount,selected.fd,&origin));
+    struct md_view_location child={.fd=-1,.parent=-1};
+    assert(md_view_walk(&fs,selected.fd,origin,"kernel",1,0,MD_VIEW_TASK_PATH,&child)==-ENOENT);
+    assert(!md_view_walk(&fs,selected.fd,origin,".",1,0,MD_VIEW_TASK_PATH,&child));
+    md_view_location_close(&child); md_fs_anchor_release(origin);
+    md_view_location_close(&selected);
+    assert(md_view_walk(&fs,lower,NULL,"sys/kernel",1,0,MD_VIEW_TASK_PATH,&selected)==-EREMOTE);
+    assert(!strcmp(delegated,"/proc/sys/kernel"));
+    fs.store->boundary=NULL;
+    md_provider_tree_release(tree); close(lower); close(parent);
+    md_fs_storage_close(&storage); close_filesystem(&fs);
+    assert(descriptors()==before);
+    puts("PASS provider custody: projected proc paths retain visibility, unowned native proc paths delegate");
+}
+static void batch_attachments(const char *base) {
+    unsigned before=descriptors(); char directory[PATH_MAX];
+    path(directory,base,"batch-attachments"); assert(!mkdir(directory,0700));
+    struct md_filesystem fs=filesystem(directory,1),foreign=filesystem(directory,0);
+    struct md_fs_storage_cache storage={0}; fs.storage=&storage;
+    struct md_fs_statistics statistics={0}; fs.statistics=&statistics;
+    const char *names[]={"/batch0","/batch1"};
+    const char *leaves[]={"/batch0/parent","/batch1/value"};
+    struct md_view_location targets[2]={{.fd=-1,.parent=-1},{.fd=-1,.parent=-1}};
+    struct md_mount_source sources[2];
+    struct md_mount_attachment items[2];
+    for (unsigned i=0;i<2;++i) {
+        assert(!md_inode_mkdir(fs.store,-1,names[i],0755));
+        assert(!md_view_walk(&fs,-1,NULL,names[i],1,0,MD_VIEW_MOUNT_TARGET,&targets[i]));
+        sources[i]=(struct md_mount_source){.fd=fs.mounts->tree->mounts[i].source,
+            .backing=MD_MOUNT_NATIVE,.policy=i ? MD_MOUNT_READONLY : 0};
+        items[i]=(struct md_mount_attachment){&sources[i],&targets[i]};
+    }
+    struct md_mount_graph_parcel parcel={0};
+    assert(!md_mount_graph_export(fs.mounts,fs.store->lifetime->root,&parcel));
+    assert(!md_mount_graph_import(&parcel,&foreign.mounts));
+    struct md_mount_attachment invalid[2]={items[0],items[1]};
+    invalid[1].target=NULL;
+    assert(md_view_attach_sources(&fs,invalid,2,NULL)==-EOPNOTSUPP);
+    struct md_view_location other=targets[1]; other.mount=&fs.mounts->tree->mounts[0];
+    invalid[1].target=&other;
+    assert(md_view_attach_sources(&fs,invalid,2,NULL)==-EOPNOTSUPP);
+    fs.mounts->base.links.shared=md_mount_group_new(NULL); assert(fs.mounts->base.links.shared);
+    assert(md_view_attach_sources(&fs,items,2,NULL)==-EOPNOTSUPP);
+    md_mount_group_release(fs.mounts->base.links.shared); fs.mounts->base.links.shared=NULL;
+    assert(fs.mounts->tree->count==3);
+    unsigned held=descriptors(),failures=0; int complete=0;
+    struct md_view_mount *out[2]={0};
+    for (int n=0;n<96;++n) {
+        uint64_t calls=statistics.mount_attach.calls;
+        fail_allocation=n;
+        int error=md_view_attach_sources(&fs,items,2,out);
+        fail_allocation=-1;
+        if (!error) {
+            assert(statistics.mount_attach.calls==calls+1);
+            complete=1; break;
+        }
+        assert(error==-ENOMEM && !out[0] && !out[1]);
+        assert(fs.mounts->tree->count==3 && !md_mount_graph_sync(foreign.mounts));
+        assert(foreign.mounts->tree->count==3);
+        for (unsigned i=0;i<2;++i) {
+            struct md_fs_result result=open_file(&fs,leaves[i],O_RDONLY,NULL,NULL);
+            assert(result.error==-ENOENT && result.fd<0);
+        }
+        assert(descriptors()==held); ++failures;
+    }
+    assert(complete && failures>1 && fs.mounts->tree->count==5);
+    assert(out[0]==&fs.mounts->tree->mounts[3] && out[1]==&fs.mounts->tree->mounts[4]);
+    assert(!md_mount_graph_sync(foreign.mounts) && foreign.mounts->tree->count==5);
+    struct md_filesystem *views[]={&fs,&foreign};
+    for (unsigned i=0;i<2;++i) {
+        contents(views[i],leaves[0],NULL,"native"); contents(views[i],leaves[1],NULL,"value");
+        struct md_fs_result result=open_file(views[i],leaves[1],O_RDWR,NULL,NULL);
+        assert(result.error==-EROFS && result.fd<0);
+    }
+    for (unsigned i=0;i<2;++i) md_view_location_close(&targets[i]);
+    md_fs_storage_close(&storage); close_filesystem(&foreign); close_filesystem(&fs);
+    assert(descriptors()==before);
+    puts("PASS mount batch: single publication, foreign visibility, readonly policy and complete allocation rollback");
+}
 static void host_projections(const char *base) {
     unsigned before=descriptors(); char directory[PATH_MAX];
     path(directory,base,"host-views"); assert(!mkdir(directory,0700));
@@ -1320,7 +1513,8 @@ void test_mount_graph(const char *base) {
     path(model,base,"graph-model"); path(peers,base,"graph-peers");
     assert(!mkdir(model,0700) && !mkdir(peers,0700));
     models(model); deep_mount_paths(base); sizes(base); unordered(base); indexed_updates(base); updates(base); private_publication(base);
-    retirement(base,0); retirement(base,1); processes(peers); host_projections(base);
+    retirement(base,0); retirement(base,1); processes(peers); provider_paths(base); provider_delegation(base);
+    batch_attachments(base); host_projections(base);
     initial_pivot(base); removed_points(base); branch_reconciliation(base); subtree_ancestry(base);
     unlinked_propagation(base); propagation_stack(base); propagation(base); alarm(0);
 }

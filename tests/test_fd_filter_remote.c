@@ -75,7 +75,8 @@ static void child(int start,int reader,int ep,struct shared *shared,int denied,i
         BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getpgid,0,1),
         BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|ENOKEY),
         BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_seccomp,0,1),
-        BPF_STMT(BPF_RET|BPF_K,denied>0 ? SECCOMP_RET_ERRNO|EPERM : SECCOMP_RET_TRACE|MD_INTERCEPT_TASK),
+        BPF_STMT(BPF_RET|BPF_K,denied>0 ? SECCOMP_RET_ERRNO|(denied==2 ? ENOMEM : EPERM)
+            : SECCOMP_RET_TRACE|MD_INTERCEPT_TASK),
         BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)
     };
     struct sock_fprog program={sizeof(code)/sizeof(*code),code};
@@ -111,6 +112,16 @@ static void install_at(pid_t pid,int fd,struct shared *shared,const struct user_
     if (retry_thread) {
         assert(ready==1 && call.task.result==-EPERM && !md_task_filter_retry_thread(&call));
         do { ready=md_task_filter_event(&call,stop(pid)); } while (!ready);
+    }
+    if (expected==-ENOMEM) {
+        unsigned count=shared->image.code.count;
+        assert(ready==1 && call.task.result==-ENOMEM);
+        assert(!md_task_filter_retry_all(&call,&shared->image,MD_FD_SELECTOR_PROC,&gates));
+        assert(shared->image.code.count<count && shared->image.program.len==shared->image.code.count);
+        assert(call.task.arguments.number==SYS_seccomp
+            && call.task.arguments.value[1]==SECCOMP_FILTER_FLAG_TSYNC && !call.thread_only);
+        do { ready=md_task_filter_event(&call,stop(pid)); } while (!ready);
+        assert(md_task_filter_retry_all(&call,&shared->image,MD_FD_SELECTOR_PROC,&gates)==-ENOMEM);
     }
     assert(ready==1 && call.task.result==expected);
     struct ptrace_syscall_info info={0};
@@ -152,7 +163,7 @@ static int run(int denied,int reading,int protected) {
     assert(!md_task_quiesce_borrow(barrier,pid,&boundary) && boundary.kind==MD_TASK_QUIESCE_SYNTHETIC);
     struct user_pt_regs saved=get(pid);
     assert((unsigned)status>>16==PTRACE_EVENT_STOP);
-    if (denied>=0) install(pid,data[0],shared,&saved,denied ? -EPERM : 0);
+    if (denied>=0) install(pid,data[0],shared,&saved,denied==2 ? -ENOMEM : denied ? -EPERM : 0);
     assert(write(data[1],"q",1)==1);
     assert(!md_task_quiesce_return(barrier,pid) && !md_task_quiesce_release(barrier));
     assert(!md_task_quiesce_take(barrier,&status,NULL));
@@ -404,7 +415,7 @@ static int call_event(struct md_task_call *call,struct call_events *events) {
     }
     return md_task_call_event(call,status);
 }
-static void task_context(int protected,int interrupted,int boundary) {
+static void task_context(int protected,int interrupted,int boundary,int collected) {
     struct shared *shared=mmap(NULL,sizeof(*shared),PROT_READ|PROT_WRITE,MAP_SHARED|MAP_ANONYMOUS,-1,0);
     assert(shared!=MAP_FAILED);
     int start[2],data[2]; assert(!pipe2(start,O_CLOEXEC) && !pipe2(data,O_CLOEXEC));
@@ -469,9 +480,10 @@ static void task_context(int protected,int interrupted,int boundary) {
     int ready;
     struct call_events events={.writer=interrupted>=3 ? data[1] : -1,.number=args.number,
         .interrupted=boundary!=MD_TASK_CALL_USER && interrupted>=3};
-    do { ready=call_event(&call,&events); } while (!ready);
-    if (ready!=1) fprintf(stderr,"task context interrupted=%d stage=%u error=%d result=%ld\n",
-        interrupted,call.stage,ready,call.result);
+    do { ready=collected ? md_task_call_collect(&call,stop(pid)) : call_event(&call,&events); } while (!ready);
+    if (ready!=1 || call.result!=(interrupted==5 ? 0 : 1))
+        fprintf(stderr,"task context protected=%d interrupted=%d boundary=%d collected=%d stage=%u error=%d result=%ld\n",
+            protected,interrupted,boundary,collected,call.stage,ready,call.result);
     assert(ready==1 && call.result==(interrupted==5 ? 0 : 1));
     if (interrupted>=3) assert(events.interrupted);
     if (interrupted==5) assert(call.active_number==SYS_restart_syscall);
@@ -480,8 +492,14 @@ static void task_context(int protected,int interrupted,int boundary) {
     else assert(shared->signal_event.events==EPOLLIN && shared->signal_event.data.u64==0xfdeede);
     args=(struct md_task_call_arguments){.number=SYS_getpid};
     assert(!md_task_call_again(&call,&args));
-    do { ready=call_event(&call,&events); } while (!ready);
+    do { ready=collected ? md_task_call_collect(&call,stop(pid)) : call_event(&call,&events); } while (!ready);
     assert(ready==1 && call.result==pid);
+    if (collected) {
+        assert(md_task_call_resume(&call,0)==-EINVAL);
+        assert(!md_task_call_finish(&call));
+        do { ready=md_task_call_event(&call,stop(pid)); } while (!ready);
+        assert(ready==1 && call.result==pid && md_task_call_finish(&call)==1);
+    }
     assert(!interrupted || events.foreign_interrupts);
     assert(events.group_stops==(interrupted>=2));
     struct user_pt_regs restored=get(pid); assert(!memcmp(&restored,&saved,sizeof(saved)));
@@ -629,7 +647,7 @@ static void killed_injection(int protected,int boundary,int interruptible,int bl
 }
 static volatile sig_atomic_t notification_signal_seen;
 static void notification_signal(int signal) { notification_signal_seen=signal; }
-static void notification_injection(int protected,int interrupt,int retire) {
+static void notification_injection(int protected,int interrupt,int retire,int collected) {
     int start[2],sockets[2]; assert(!pipe(start));
     assert(!socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,sockets));
     pid_t pid=fork(); assert(pid>=0);
@@ -694,9 +712,23 @@ static void notification_injection(int protected,int interrupt,int retire) {
     }
     if (retire) assert(!md_task_call_retire_entry(&call));
     int ready;
-    do { ready=md_task_call_event(&call,stop(pid)); } while (!ready);
+    do {
+        status=stop(pid);
+        ready=collected ? md_task_call_collect(&call,status) : md_task_call_event(&call,status);
+    } while (!ready);
+    if (ready!=1 || call.result!=(interrupt ? -512 : -ENOKEY))
+        fprintf(stderr,"notification injection protected=%d interrupt=%d retire=%d collected=%d stage=%u status=%#x ready=%d result=%ld\n",
+            protected,interrupt,retire,collected,call.stage,status,ready,call.result);
     assert(ready==1 && call.result==(interrupt ? -512 : -ENOKEY));
     assert(ioctl(listener,SECCOMP_IOCTL_NOTIF_ID_VALID,&request.id)==-1 && errno==ENOENT);
+    if (collected) {
+        args=(struct md_task_call_arguments){.number=SYS_gettid};
+        assert(!md_task_call_again(&call,&args));
+        do { ready=md_task_call_collect(&call,stop(pid)); } while (!ready);
+        assert(ready==1 && call.result==pid && !md_task_call_finish(&call));
+        do { ready=md_task_call_event(&call,stop(pid)); } while (!ready);
+        assert(ready==1 && call.result==pid);
+    }
     struct user_pt_regs restored=get(pid); assert(!memcmp(&restored,&saved,sizeof(saved)));
     uint64_t mask;
     assert(!ptrace(PTRACE_GETSIGMASK,pid,(void *)sizeof(mask),&mask) && mask==call.mask);
@@ -717,10 +749,12 @@ static void notification_injection(int protected,int interrupt,int retire) {
 int main(void) {
     alarm(30);
     for (int protected=0;protected<2;++protected) {
-        notification_injection(protected,0,0);
-        notification_injection(protected,0,1);
-        notification_injection(protected,SIGUSR1,0);
-        notification_injection(protected,SIGSYS,0);
+        notification_injection(protected,0,0,0);
+        notification_injection(protected,0,1,0);
+        notification_injection(protected,SIGUSR1,0,0);
+        notification_injection(protected,SIGSYS,0,0);
+        notification_injection(protected,0,0,1);
+        notification_injection(protected,0,1,1);
     }
     puts("PASS task-context notification: seccomp replacement admission and exact original-call restoration");
     for (int protected=0;protected<2;++protected)
@@ -734,7 +768,8 @@ int main(void) {
         /* Linux restarts pipe reads, but epoll returns EINTR after the native
          * ptrace interrupt itself. Admission must preserve both outcomes. */
         assert(baseline==(reading ? 0 : EINTR));
-        assert(run(0,reading,protected)==baseline && run(1,reading,protected)==baseline);
+        assert(run(0,reading,protected)==baseline && run(1,reading,protected)==baseline
+            && run(2,reading,protected)==baseline);
     }
     for (int protected=0;protected<2;++protected) for (int divergent=0;divergent<2;++divergent)
         group(divergent,protected);
@@ -748,10 +783,15 @@ int main(void) {
     for (int protected=0;protected<2;++protected)
         for (int interrupted=0;interrupted<2;++interrupted) restart_exit(protected,interrupted);
     for (int protected=0;protected<2;++protected)
-        for (int interrupted=0;interrupted<6;++interrupted) task_context(protected,interrupted,MD_TASK_CALL_USER);
+        for (int interrupted=0;interrupted<6;++interrupted) task_context(protected,interrupted,MD_TASK_CALL_USER,0);
     for (int protected=0;protected<2;++protected)
-        for (int interrupted=3;interrupted<6;++interrupted) task_context(protected,interrupted,MD_TASK_CALL_ENTRY);
+        for (int interrupted=3;interrupted<6;++interrupted) task_context(protected,interrupted,MD_TASK_CALL_ENTRY,0);
+    for (int protected=0;protected<2;++protected)
+        for (int boundary=MD_TASK_CALL_USER;boundary<=MD_TASK_CALL_ENTRY;++boundary)
+            task_context(protected,0,boundary,1);
+    puts("PASS task-context sequence: collected native results share custody until exact register/mask restoration");
     puts("PASS remote FD filter: protected tasks, native interrupt/restart, signal masks and seccomp policy");
+    puts("PASS compact selector retry: smaller program, preserved TSYNC, bounded native refusal and exact continuation");
     puts("PASS group FD filter: TSYNC reaches every sibling; incompatible filter leaves both unchanged");
     puts("PASS FD filter continuation: replaced source, original seccomp PC and exact-once write at entry/seccomp/exit");
     puts("PASS cancelled entry: task borrowing preserves skipped syscall and emulated result before/after seccomp");

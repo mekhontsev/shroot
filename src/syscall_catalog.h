@@ -29,6 +29,11 @@
     X(fsetxattr) X(fremovexattr) X(fchmod) X(fchown) \
     X(setxattrat) X(getxattrat) X(listxattrat) X(removexattrat)
 #define MD_FILE_CALLS(X) MD_FS_NOTIFICATION_CALLS(X) MD_FILE_TASK_CALLS(X)
+/* Native effects after the filesystem owner has selected the target and
+ * checked its policy. They change neither descriptor slots nor task state. */
+#define MD_GATE_FILE_EFFECT_CALLS(X) \
+    X(fchmod) X(fchmodat) X(fchmodat2) X(fchown) X(fchownat) X(utimensat) \
+    X(fsync) X(fdatasync) X(syncfs)
 #define MD_SOCKET_CALLS(X) X(bind) X(connect) X(sendto) X(sendmsg) X(sendmmsg) \
     X(getsockname) X(getpeername) X(accept) X(accept4) X(recvfrom) X(recvmsg) \
     X(listen) X(socketpair) X(getsockopt)
@@ -42,6 +47,7 @@
     MD_FS_METADATA_CALLS(X) X(openat) X(fsopen) X(getdents64)
 #define MD_ENTRY_WORKER_CALLS(X) \
     MD_FS_METADATA_CALLS(X) X(getdents64) \
+    X(fsync) X(fdatasync) X(syncfs) \
     X(mkdirat) X(unlinkat) X(renameat) X(renameat2) X(linkat) X(symlinkat) \
     X(fchmodat) X(fchmodat2) X(fchownat) X(fchmod) X(fchown) X(utimensat) \
     X(setxattr) X(lsetxattr) X(fsetxattr) X(removexattr) X(lremovexattr) X(fremovexattr)

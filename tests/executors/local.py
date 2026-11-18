@@ -98,18 +98,38 @@ class LocalExecutor:
                     on_line(pending)
                     pending = ''
 
+        # EOF alone does not imply command lifetime: a failed command can leave
+        # descendants holding stdout. Observe its exact child exit independently.
+        completed = ()
+
+        def reap():
+            process.wait()
+            os.write(completed[1], b'x')
+
+        reaper = threading.Thread(target=reap)
         try:
+            completed = os.pipe2(os.O_CLOEXEC)
+            reaper.start()
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
+                selector.register(completed[0], selectors.EVENT_READ)
                 while True:
                     remaining = deadline - time.monotonic()
-                    # EVENT_WAIT: pipe readiness/EOF, bounded by this command's deadline.
-                    if remaining <= 0 or not selector.select(remaining):
+                    # EVENT_WAIT: child exit or output, bounded by the command deadline.
+                    events = selector.select(max(0, remaining))
+                    if remaining <= 0 or not events:
                         raise TimeoutError('Fixture command timed out: ' + shlex.join(argv)
                                            + '\n' + ''.join(output)[-8192:])
-                    chunk = os.read(process.stdout.fileno(), 65536)
-                    accept(decoder.decode(chunk, final=not chunk), final=not chunk)
-                    if not chunk:
+                    eof = False
+                    for key, _ in events:
+                        if key.fd == completed[0]:
+                            selector.unregister(completed[0])
+                            self._signal(process, signal.SIGKILL)
+                        else:
+                            chunk = os.read(process.stdout.fileno(), 65536)
+                            accept(decoder.decode(chunk, final=not chunk), final=not chunk)
+                            eof = not chunk
+                    if eof:
                         break
             status = process.wait(timeout=max(0, deadline - time.monotonic()))
             # Match the shell/app receipt contract, including native SIGSYS probes.
@@ -122,6 +142,10 @@ class LocalExecutor:
                 process.wait()
                 self.active.discard(process)
                 self.lock.notify_all()
+            if reaper.ident is not None:
+                reaper.join()
+            for fd in completed:
+                os.close(fd)
             process.stdout.close()
 
     @staticmethod

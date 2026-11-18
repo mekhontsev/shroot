@@ -1186,12 +1186,24 @@ static int capture_proc_object(struct md_fs_buffer_request *r,unsigned index) {
     if (!capture->path || (capture->flags&O_NOFOLLOW)) return 0;
     struct md_proc_path path=md_proc_path_for(capture->path,r->context.task.tid,r->context.task.tgid);
     enum md_proc_kind kind=path.kind==MD_PROC_FOREIGN ? path.foreign_kind : path.kind;
+    if (r->request.operation==MD_FS_FDINFO && index==1) {
+        /* Native fdinfo identity needs the actual target pin, not a provider's
+         * path anchor. Keep typed metadata alongside that independent capture. */
+        if (r->service->control_capture && r->service->control_query) {
+            int found=r->service->control_capture(r->actor,capture->path,&r->control_input);
+            if (found<0) return found;
+            if (found) {
+                found=r->service->control_query(r->control_input,r->request.operation,&r->request.control);
+                if (found<0) return found;
+            }
+        }
+        return 0;
+    }
     if (kind==MD_PROC_FD && path.tail && !*path.tail) {
         int found=capture_native_path(r,index,&path);
         if (found) return found;
     }
-    if (kind==MD_PROC_FD && !*path.tail
-            && (r->request.operation==MD_FS_PATH || r->request.operation==MD_FS_REOPEN)
+    if (kind==MD_PROC_FD && !*path.tail && (capture->flags&O_PATH)
             && r->service->control_capture) {
         struct md_fd_object *object=NULL;
         int found=r->service->control_capture(r->actor,capture->path,&object);
@@ -1199,8 +1211,11 @@ static int capture_proc_object(struct md_fs_buffer_request *r,unsigned index) {
         r->input[index]=md_fs_anchor_retain(md_fs_anchor_from_object(object));
         md_fd_object_release(object);
         if (!r->input[index]) return 0;
-        /* The provider's placement, not its anonymous carrier, names a typed
-         * file. Capture authorizes the foreign owner before retaining it. */
+        if ((capture->flags&O_DIRECTORY) && md_fs_anchor_kind(r->input[index])!=S_IFDIR)
+            return -ENOTDIR;
+        /* Capture authorizes the owner and selects its retained object. A
+         * directory's mount/provider is as essential as a typed file's name;
+         * reopening its native carrier would discard that namespace. */
         r->request.origin[index]=r->input[index];
         r->request.directory[index]=md_fs_anchor_fd(r->input[index]);
         r->capture_mask&=~(1U<<index);

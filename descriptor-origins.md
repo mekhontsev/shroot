@@ -24,6 +24,16 @@ using the proof for native execution; shared-table reuse cannot borrow that
 shortcut. Base and channel ingress share the same classifier and release the
 table turn before IO. It never captures or retains the application's data OFD.
 
+Unannotated anonymous kernel descriptors can acquire an IO-only classification
+under exclusive table custody. A temporary O_PATH pin verifies their native
+anonymous-inode identity and type; absent provenance alone is insufficient.
+Positive and negative classifications reuse the sparse table without retaining
+data descriptors, fabricating filesystem authority or guessing FD flags. Close,
+replacement and uncertain mutations retire them; exec discards them regardless
+of CLOEXEC, and descriptor copies rediscover them. Fork copies the classification
+with its actual table snapshot. Debugger event options do not forbid this native
+continuation; active syscall and single-step observation retain their owner.
+
 The owner is small; buckets and entries are allocated only for explicit
 annotations. A prepared update reserves memory and retains its origin before a
 kernel mutation. Publication after success needs no allocation; cancellation

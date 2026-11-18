@@ -279,7 +279,10 @@ static void *native_waiter(void *arg) {
     struct native_shared *s=arg;
     __atomic_store_n(&s->waiter,(pid_t)syscall(SYS_gettid),__ATOMIC_RELEASE);
     struct timespec deadline={.tv_sec=10};
-    assert(!syscall(SYS_futex,&s->word,FUTEX_WAIT,owner|FUTEX_WAITERS,&deadline,NULL,0));
+    long result=syscall(SYS_futex,&s->word,FUTEX_WAIT,owner|FUTEX_WAITERS,&deadline,NULL,0);
+    if (result) fprintf(stderr,"robust waiter result=%ld errno=%d word=%#x owner=%#x\n",
+        result,errno,__atomic_load_n(&s->word,__ATOMIC_ACQUIRE),owner);
+    assert(!result);
     assert(__atomic_load_n(&s->word,__ATOMIC_ACQUIRE)==(FUTEX_OWNER_DIED|FUTEX_WAITERS));
     return NULL;
 }
@@ -293,7 +296,11 @@ static void await_syscall(pid_t group,pid_t tid,long number,unsigned long argume
             char path[96]; snprintf(path,sizeof(path),"/proc/%d/task/%d/syscall",group,tid);
             FILE *f=fopen(path,"r"); assert(f);
             int fields=fscanf(f,"%ld %lx",&nr,&at); fclose(f);
-            if (fields==2 && nr==number && at==argument) return;
+            /* A ptrace interrupt can resume this exact timed futex through
+             * restart_block. ARM64 retains its arguments in /proc; the word
+             * identity still proves which wait entered the kernel. */
+            if (fields==2 && at==argument && (nr==number
+                    || (number==SYS_futex && nr==SYS_restart_syscall))) return;
         }
         assert(!clock_gettime(CLOCK_MONOTONIC,&now));
         if (now.tv_sec-begin.tv_sec>=5)

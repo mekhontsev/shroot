@@ -28,7 +28,7 @@ int md_seccomp_capture_prepare(struct md_seccomp_capture *c,struct md_intercepti
         int length=md_seccomp_policy_route(next.policy,delegated,count,cookie,image->code,BPF_MAXINSNS,notification);
         if (length<0) error=length;
         else {
-            if (notification && notification->entry_image)
+            if (notification && (notification->entry_image || notification->internal_gate_count))
                 error=md_seccomp_policy_bind_entry(next.policy,notification->entry_image,
                     notification->gates,notification->internal_gate_count);
             next.program=peer_base+span.offset;

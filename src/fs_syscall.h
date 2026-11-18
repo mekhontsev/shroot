@@ -5,6 +5,7 @@
 #include "fs_syscall_strings.h"
 #include "linux_abi.h"
 #include "statx_abi.h"
+#include "inode_store.h"
 #include <time.h>
 
 /* Scalar syscall decoding has no transport or task-memory ownership. Both
@@ -16,6 +17,10 @@ struct md_fs_syscall {
     enum md_fs_copy_kind copy;
     unsigned operands;
 };
+static inline int md_fs_syscall_descriptor_effect(long nr,uint64_t path) {
+    return nr==SYS_fchmod || nr==SYS_fchown || (nr==SYS_utimensat && !path)
+        || nr==SYS_fsync || nr==SYS_fdatasync || nr==SYS_syncfs;
+}
 static inline int md_fs_syscall_decode(struct md_fs_syscall *s,struct md_fs_request *q,
         long nr,const uint64_t *a,size_t capacity) {
     *s=(struct md_fs_syscall){.operands=1};
@@ -59,6 +64,11 @@ static inline int md_fs_syscall_decode(struct md_fs_syscall *s,struct md_fs_requ
     }
     case SYS_fstat:
         q->operation=MD_FS_FSTAT; s->copy=MD_FS_COPY_STAT; s->output=a[1]; return 1;
+    case SYS_fsync: case SYS_fdatasync: case SYS_syncfs:
+        q->operation=MD_FS_SYNC;
+        q->mode=nr==SYS_syncfs ? MD_INODE_SYNC_FILESYSTEM
+            : nr==SYS_fdatasync ? MD_INODE_SYNC_DATA : MD_INODE_SYNC_FILE;
+        return 1;
     case SYS_statfs: case SYS_fstatfs:
         q->operation=MD_FS_STATFS;
         if (nr==SYS_statfs) q->directory[0]=AT_FDCWD;

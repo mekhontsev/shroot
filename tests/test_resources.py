@@ -392,6 +392,8 @@ def main():
     def check_exec_custody():
         check("native processor controls", executable("resource_guest") + " processor-state",
               "PASS processor state:")
+        check("native proc link aliases", executable("resource_guest") + " proc-exec links " + root + "/native",
+              "PASS proc link aliases:")
         for entry in (0, 1):
             check(f"guest processor controls entry={entry}", guest_run
                   + f" --env SHROOT_MACHINE_ENTRY={entry} --store " + root
@@ -769,12 +771,14 @@ def main():
                   "PASS pending continuations")
             check("task event selection", executable("task_wait"),
                   "PASS task event selection")
-            check("live task event collection", executable("task_wait_live"),
+            check("live task event collection", executable("task_wait_live") + " --live",
                   "PASS live wait collection")
             check("sparse task event collection", executable("task_wait_live") + " --idle",
                   "PASS live wait collection")
             check("small task event collection", executable("task_wait_live") + " --small",
                   "PASS live wait collection")
+            check("collected task cancellation", executable("task_wait_live") + " --cancel",
+                  "PASS collected cancellation")
             for workload in ("", "descriptors", "birth"):
                 check("native event fairness " + workload, executable("event_fairness") + " " + workload,
                       "PASS worker completions under continuous ptrace stops")
@@ -974,7 +978,7 @@ def main():
             if args.case == "open-job":
                 return
         if args.case == "ofd-order":
-            check("active OFD ordering", executable("test_task_resources"),
+            check("active OFD ordering", executable("test_task_resources") + " --case ownership",
                   "PASS resource ownership", patterns=("PASS exact OFD ordering", "PASS conservative inode ordering"))
             return
         if args.case == "rpc":
@@ -1069,7 +1073,8 @@ def main():
                   "PASS private mapping task kernel feasibility")
             return
         if args.case in ("all", "cgroup"):
-            check("resource ownership model", executable("test_task_resources"))
+            check("resource ownership model", executable("test_task_resources")
+                  + (" --case ownership" if args.case == "cgroup" else ""))
         if args.case == "cgroup":
             check("cgroup fixture directories", "mkdir -p " + root + "/source/bin " + root + "/source/tmp")
             check("cgroup fixture image", "cp " + executable("resource_guest") + " " + root + "/source/bin/test")

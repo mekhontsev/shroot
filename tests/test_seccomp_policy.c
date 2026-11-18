@@ -209,6 +209,13 @@ static void capture(void) {
     assert(md_seccomp_capture_prepare(&blocked, pool, base, NULL, &source, calls, 2, 201, NULL) == -EAGAIN);
     assert(!md_buffer_release(&pin));
     md_seccomp_policy_release(committed); committed = NULL;
+    struct md_seccomp_gate gate={0x1000,0x2000,-1,SECCOMP_RET_ALLOW};
+    struct md_seccomp_route route={.gates=&gate,.gate_count=1,.internal_gate_count=1,.entry_first=1};
+    assert(!md_seccomp_capture_prepare(&c,pool,base,NULL,&source,calls,2,201,&route));
+    assert(md_seccomp_capture_complete(&c,0,0,&committed)==1);
+    assert(md_seccomp_policy_internal_gates(committed,&gate,1));
+    assert(!md_seccomp_policy_entry_image(committed) && !md_seccomp_policy_entry_compatible(committed,17));
+    md_seccomp_policy_release(committed); committed=NULL;
     const struct { unsigned flags; long result; int published; } results[] = {
         {0, -EINVAL, 0}, {SECCOMP_FILTER_FLAG_TSYNC, 123, 0},
         {SECCOMP_FILTER_FLAG_NEW_LISTENER, 0, 1}, {SECCOMP_FILTER_FLAG_NEW_LISTENER, 5, 1},
@@ -656,6 +663,62 @@ static void gate_ranges(void) {
     }
     puts("PASS owned gate ranges: 64-bit boundaries, syscall scope, dynamic results and native ALLOW cache");
 }
+static void repeated_allow_prefix(void) {
+    struct sock_filter source[]={
+        BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+        BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getuid,1,0),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW),
+        BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,args)),
+        BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,7,0,1),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EACCES),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRAP|9)};
+    struct sock_filter code[2][512];
+    struct sock_fprog previous={sizeof(source)/sizeof(*source),source};
+    for (unsigned level=0;level<4;++level) {
+        struct md_seccomp_policy *policy=NULL;
+        assert(!md_seccomp_policy_capture(NULL,&previous,&policy));
+        uint64_t address=UINT64_C(0x123456780000)+(uint64_t)level*0x10000;
+        struct md_seccomp_gate gate={address,address+0x1000,-1,SECCOMP_RET_TRACE|201};
+        struct md_seccomp_route route={.gates=&gate,.gate_count=1,.entry_first=1};
+        int count=md_seccomp_policy_route(policy,NULL,0,201,code[level%2],512,&route);
+        assert(count>0);
+        if (level) assert(count==previous.len+6);
+        struct sock_fprog routed={count,code[level%2]};
+        const uint64_t sites[]={address-4,address,address+4,address+0x1000,UINT64_C(0x123456780004)};
+        for (unsigned nr=0;nr<=512;++nr) for (unsigned arch=0;arch<2;++arch)
+        for (unsigned arg=0;arg<2;++arg) for (unsigned pc=0;pc<sizeof(sites)/sizeof(*sites);++pc) {
+            struct seccomp_data call={.nr=nr,.arch=arch ? AUDIT_ARCH_AARCH64 : AUDIT_ARCH_ARM,
+                .instruction_pointer=sites[pc],.args={arg ? 7 : 0}};
+            uint32_t value,expected;
+            assert(!md_seccomp_program_eval(&previous,&call,&expected));
+            if ((!arch || nr==SYS_getuid || nr==512) && sites[pc]>=gate.first && sites[pc]<gate.end)
+                expected=gate.decision;
+            assert(!md_seccomp_program_eval(&routed,&call,&value) && value==expected);
+        }
+        uint32_t result;
+        assert(!md_seccomp_program_constant(&routed,SYS_read,AUDIT_ARCH_AARCH64,&result)
+            && result==SECCOMP_RET_ALLOW);
+        md_seccomp_policy_release(policy);
+        previous=routed;
+    }
+    /* New delegated numbers must not use an earlier, broader ALLOW prefix. */
+    struct md_seccomp_policy *policy=NULL;
+    assert(!md_seccomp_policy_capture(NULL,&previous,&policy));
+    struct md_seccomp_gate gate={0x1000,0x2000,-1,SECCOMP_RET_TRACE|201};
+    struct md_seccomp_route route={.gates=&gate,.gate_count=1,.entry_first=1,.delegation_pc=0x1004};
+    const uint32_t calls[]={SYS_read};
+    int count=md_seccomp_policy_route(policy,calls,1,201,code[0],512,&route); assert(count>0);
+    struct sock_fprog routed={count,code[0]};
+    for (unsigned owned=0;owned<2;++owned) {
+        struct seccomp_data call={.nr=SYS_read,.arch=AUDIT_ARCH_AARCH64,
+            .instruction_pointer=owned ? 0x1004 : 0x3004};
+        uint32_t result;
+        assert(!md_seccomp_program_eval(&routed,&call,&result));
+        assert(result==(owned ? gate.decision : SECCOMP_RET_ALLOW));
+    }
+    md_seccomp_policy_release(policy);
+    puts("PASS repeated routing: one proven ALLOW prefix, original argument/IP decisions and new delegations");
+}
 static void views(void) {
     struct sock_filter code[]={
         BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
@@ -827,6 +890,7 @@ int main(void) {
     kernel_gates();
     admitted_gates();
     gate_ranges();
+    repeated_allow_prefix();
     views();
     owned_admission();
     actions();

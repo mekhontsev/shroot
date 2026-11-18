@@ -3,6 +3,7 @@
 #include "fd_selector.h"
 #include "descriptor_inode.h"
 #include "operation_result.h"
+#include "task_descriptor.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -11,7 +12,10 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 enum { BUCKETS=61 };
 struct md_fd_loan {
@@ -32,6 +36,8 @@ struct md_fd_origin_entry {
     int fd;
     unsigned flags;
     int uncertain;
+    /* IO-only observations carry no object or descriptor-flag authority. */
+    int native_io;
 };
 struct md_fd_origins {
     atomic_uint refs;
@@ -211,17 +217,59 @@ int md_fd_origins_native_io(const struct md_fd_order *turn,int fd) {
     struct md_fd_origin_entry *e=t->buckets ? *slot(t,fd) : NULL;
     /* Anonymous-pipe ownership supplies metadata only. Byte transfer, EOF,
      * blocking and restart semantics belong entirely to its native OFD. */
-    int native=e && !e->uncertain && !e->loan && !e->channel && md_descriptor_inode_is(e->object);
+    int native=e && !e->uncertain && !e->loan && !e->channel
+        && (e->native_io>0 || md_descriptor_inode_is(e->object));
     pthread_mutex_unlock(&t->lock);
+    return native;
+}
+int md_fd_origins_native_anonymous_io(const struct md_fd_order *turn,pid_t actor,int fd) {
+    if (fd<0 || !md_fd_origins_exclusive(turn)) return 0;
+    struct md_fd_origins *t=turn->table;
+    pthread_mutex_lock(&t->lock);
+    struct md_fd_origin_entry *e=t->buckets ? *slot(t,fd) : NULL;
+    int found=!!e,native=e && e->native_io>0;
+    pthread_mutex_unlock(&t->lock);
+    if (found) return native;
+    /* Unknown provenance alone is not proof: watch sockets and typed carriers
+     * must retain discovery. An O_PATH probe never retains the data OFD. */
+    int pin=md_task_descriptor_pin(actor,fd);
+    if (pin<0) return 0;
+    struct stat st;
+    int observed=!fstat(pin,&st);
+    native=0;
+    if (observed && !(st.st_mode&S_IFMT)) {
+        char path[64],name[32];
+        static const char prefix[]="anon_inode:";
+        snprintf(path,sizeof(path),"/proc/self/fd/%d",pin);
+        ssize_t size=readlink(path,name,sizeof(name));
+        native=size>=(ssize_t)sizeof(prefix)-1 && !memcmp(name,prefix,sizeof(prefix)-1);
+    }
+    close(pin);
+    if (!observed) return 0;
+    e=calloc(1,sizeof(*e));
+    if (!e) return native;
+    e->fd=fd; e->native_io=native ? 1 : -1;
+    pthread_mutex_lock(&t->lock);
+    if (!t->buckets) t->buckets=calloc(BUCKETS,sizeof(*t->buckets));
+    if (t->buckets && !*slot(t,fd)) {
+        struct md_fd_origin_entry **p=slot(t,fd);
+        e->next=*p; *p=e; e=NULL;
+    }
+    pthread_mutex_unlock(&t->lock);
+    free(e);
     return native;
 }
 int md_fd_origins_close_untracked(const struct md_fd_order *turn,int number) {
     if (!md_fd_origins_exclusive(turn)) return 0;
     struct md_fd_origins *t=turn->table;
     pthread_mutex_lock(&t->lock);
-    int empty=number<0 || !t->buckets || !*slot(t,number);
+    struct md_fd_origin_entry **p=t->buckets && number>=0 ? slot(t,number) : NULL;
+    struct md_fd_origin_entry *hint=p && *p && (*p)->native_io ? *p : NULL;
+    if (hint) *p=hint->next;
+    int empty=number<0 || !p || !*p || hint;
     if (empty) changed(t);
-    pthread_mutex_unlock(&t->lock); return empty;
+    pthread_mutex_unlock(&t->lock);
+    free(hint); return empty;
 }
 int md_fd_origins_native_poll(const struct md_fd_order *turn) {
     if (!turn || !turn->table || md_fd_order_state(turn)!=MD_RESOURCE_ORDER_RUNNING) return 0;
@@ -249,7 +297,7 @@ struct md_fd_object *md_fd_origins_object(struct md_fd_origins *t, int fd, unsig
     pthread_mutex_lock(&t->lock);
     struct md_fd_origin_entry *entry=t->buckets ? *slot(t,fd) : NULL;
     struct md_fd_object *origin=entry ? md_fd_object_retain(entry->object) : NULL;
-    if (entry && flags) *flags=entry->flags;
+    if (entry && !entry->native_io && flags) *flags=entry->flags;
     pthread_mutex_unlock(&t->lock); return origin;
 }
 struct md_fs_anchor *md_fd_origins_get(struct md_fd_origins *t, int fd, unsigned *flags) {
@@ -559,7 +607,8 @@ static void remove_entries(struct md_fd_origins *t,unsigned first,unsigned last,
         struct md_fd_origin_entry **p=&t->buckets[i];
         while (*p) {
             struct md_fd_origin_entry *e=*p;
-            int selected=exec ? !e->uncertain && !!(e->flags & FD_CLOEXEC) : (unsigned)e->fd>=first && (unsigned)e->fd<=last;
+            int selected=exec ? e->native_io || (!e->uncertain && !!(e->flags & FD_CLOEXEC))
+                : (unsigned)e->fd>=first && (unsigned)e->fd<=last;
             if (selected && action==RETIRE_UNCERTAIN && (e->channel || e->loan)) { e->uncertain=1; p=&e->next; continue; }
             if (selected && action!=RETIRE_CLOEXEC) {
                 entry_unlink(t,e); *p=e->next; e->next=retired; retired=e;

@@ -40,9 +40,9 @@ long md_fd_filter_arm(enum md_fd_selector_kind kind, int fd) {
     return fd<0 ? -EINVAL : arm(kind,fd);
 }
 long md_fd_filter_prepare_sandbox(void) {
-    /* Prepare descriptor and readiness selectors for future typed FDs before an
-     * application can deny seccomp. Its ERRNO/TRAP/KILL decisions still win.
-     * Unsandboxed workloads keep the selective per-number path. */
+    /* A thread-local policy can split a live group's kernel filter chain.
+     * Prepare future typed FDs before that split; ordinary single-threaded
+     * and synchronized policy installation retain selective activation. */
     for (unsigned kind=0;kind<MD_FD_SELECTOR_KINDS;++kind) if (MD_FD_SANDBOX_SELECTORS&(1U<<kind)) {
         long result=arm((enum md_fd_selector_kind)kind,-1);
         if (result) return result;

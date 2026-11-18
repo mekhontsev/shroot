@@ -5,6 +5,13 @@
 #include <string.h>
 #include <sys/syscall.h>
 
+static int restore(struct md_task_signal_control *c,int ready) {
+    if (!c->native.stage) return ready;
+    int result=md_task_call_finish(&c->native);
+    if (result==1) return ready;
+    if (!result) { c->restoring=1; c->restore_ready=ready; }
+    return result;
+}
 static int advance(struct md_task_signal_control *c,int ready) {
     struct md_signal_operation *op=&c->operation;
     for (;;) {
@@ -19,6 +26,8 @@ static int advance(struct md_task_signal_control *c,int ready) {
                 ready=md_signal_operation_copy_done(op,copied);
                 continue;
             }
+            int restored=restore(c,1);
+            if (restored!=1) { c->restore_ready=0; return restored; }
             c->copy=(struct md_task_copy){0};
             int result=md_task_copy_begin(&c->copy,c->trace,c->pid,c->boundary,&c->original,
                 c->call,c->returned,copy->address,copy->data,copy->size,copy->writing,
@@ -36,7 +45,7 @@ static int advance(struct md_task_signal_control *c,int ready) {
             /* A retained operation consumes the admitted entry exactly once. */
             if (!result) result=md_task_call_retire_entry(&c->native);
             return result;
-        } else return ready;
+        } else return restore(c,ready);
     }
 }
 static int initialize(struct md_task_signal_control *c,long (*trace)(int,pid_t,void *,void *),
@@ -100,13 +109,19 @@ int md_task_signal_wait_entry_begin(struct md_task_signal_control *c,
         actions,blocked,action,wait,scratch,peer,capacity));
 }
 int md_task_signal_control_event(struct md_task_signal_control *c,int status) {
+    if (c->restoring) {
+        int result=md_task_call_event(&c->native,status);
+        if (result!=1) return result;
+        c->restoring=0; c->boundary=c->native.boundary;
+        return advance(c,c->restore_ready);
+    }
     if (c->operation.copying) {
         int result=md_task_copy_event(&c->copy,status);
         if (result!=1) return result;
         return advance(c,md_signal_operation_copy_done(&c->operation,c->copy.result));
     }
     if (c->operation.invoking) {
-        int result=md_task_call_event(&c->native,status);
+        int result=md_task_call_collect(&c->native,status);
         if (result!=1) return result;
         c->boundary=c->native.boundary;
         return advance(c,md_signal_operation_effect_done(&c->operation,c->native.result));
@@ -138,5 +153,6 @@ void md_task_signal_control_dispose(struct md_task_signal_control *c) {
     md_signal_operation_dispose(&c->operation);
 }
 struct md_task_call *md_task_signal_control_call(struct md_task_signal_control *c) {
+    if (c->restoring) return &c->native;
     return c->operation.copying ? &c->copy.call : c->operation.invoking ? &c->native : NULL;
 }

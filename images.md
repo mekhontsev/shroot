@@ -139,6 +139,9 @@ the original pass/entry order of metadata application without recursion.
 Directory metadata is accumulated across layers and applied before publication, so final
 restrictive modes do not block later-layer extraction into the private staging
 tree. Import runs no image scripts.
+Each layer coalesces backing-directory synchronization before its transaction
+commits. File data retains individual barriers; a failed final directory barrier
+rolls back the layer's names. Rootfs and backup imports use the same owner.
 
 Import requires exactly one ownership policy. `--preserve-ownership` retains
 archive UID/GID and permission bits in logical inode metadata, including set-ID

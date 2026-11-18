@@ -203,6 +203,14 @@ int md_view_backing_path(struct md_filesystem *, int fd, const struct md_view_mo
  * mount authorization; failure keeps the source and destination unchanged. */
 int md_view_attach_source(struct md_filesystem *, const struct md_mount_source *,
         const struct md_view_location *target, struct md_view_mount **);
+struct md_mount_attachment {
+    const struct md_mount_source *source;
+    const struct md_view_location *target;
+};
+/* Atomically publish independent targets below one non-shared parent. Single
+ * attachments also support detached and shared/propagated placement. */
+int md_view_attach_sources(struct md_filesystem *,const struct md_mount_attachment *,
+        unsigned count,struct md_view_mount **);
 int md_view_mount_collect(struct md_filesystem *);
 int md_view_mount_collect_detached(struct md_filesystem *);
 /* Cold topology boundaries reconcile targets removed in another namespace.

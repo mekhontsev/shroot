@@ -17,8 +17,11 @@ def main():
     build = args.build.resolve()
     with tempfile.TemporaryDirectory(prefix='shroot-native-suite-') as temporary:
         root = Path(temporary)
+        metadata = root / 'metadata'
+        metadata.mkdir()
         archive = root / 'rootfs.tar.gz'
-        archive_fixture(build, archive)
+        archive_fixture(build, archive, binaries=[
+            (build / 'libshroot_guest_resource_guest.so', 'bin/resource-guest')])
         layout = root / 'layout'
         write_layout([archive], layout)
         for profile in ('native', 'linux-5.15'):
@@ -27,6 +30,13 @@ def main():
                               kernel_profile=profile, executor='local')
                 try:
                     store = suite.prepare('fixture', layout)
+                    if profile == 'native' and not entry:
+                        output = suite.command([str(build / 'libshroot_guest_resource_guest.so'),
+                                                'native-metadata', str(metadata)])
+                        assert 'PASS native metadata:' in output
+                    output = suite.command(suite.run(store, '--bind-create', str(metadata), '/native-metadata',
+                        '--', '/bin/resource-guest', 'native-metadata', '/native-metadata'))
+                    assert 'PASS native metadata:' in output
                     suite.command(suite.guest(store, '--', '/bin/client-guest', 'exit42'), expected=42)
                     output = suite.command(suite.run(store, '--env', "LIBSHROOT_TEST=retained ' value",
                         '--', '/bin/client-guest', "spaces ' ; $(false)"))

@@ -16,10 +16,14 @@ def main():
     FixtureExecutor.add_argument(parser)
     parser.add_argument('--copy-fault', action='store_true',
                         help='Run invalid-pointer controls and isolated copy costs only')
+    parser.add_argument('--mode', choices=('all', 'controls', 'benchmark'), default='all')
     args = parser.parse_args()
-    suite = Suite(Path('build/signal-checkpoints'), args.build.resolve(), executor=args.executor)
+    if args.copy_fault and args.mode != 'all':
+        parser.error('--copy-fault cannot be combined with --mode')
+    mode = 'copy-fault' if args.copy_fault else args.mode
+    suite = Suite(Path('build/signal-checkpoints') / mode, args.build.resolve(), executor=args.executor)
     try:
-        suite.report['suiteMode'] = 'copy-fault' if args.copy_fault else 'checkpoints'
+        suite.report['suiteMode'] = mode
         suite.report['kernel'] = suite.command(['uname', '-r'], quiet=True).strip()
         binary = suite.base + '/signal-checkpoint'
         source = args.build / 'libshroot_guest_test_signal_checkpoint.so'
@@ -30,6 +34,8 @@ def main():
         native_skip = args.copy_fault or probe_native_capability(
             suite.observe, suite.report, binary, 'syscall-skip')
         options = ['--copy-fault'] if args.copy_fault else [] if native_skip else ['--without-syscall-skip']
+        if args.mode != 'all':
+            options.append('--' + args.mode + '-only')
         with observe_suite_cpu(suite) as cpu:
             suite.report['cpu'] = cpu
             output = suite.command([binary, *options], timeout=80)
@@ -54,30 +60,34 @@ def main():
             suite.report['limitations'] = [line for line in output.splitlines() if line.startswith('LIMIT ')]
             suite.report['passed'] = True
             return
-        assert 'PASS checkpoints:' in output and f'uid={suite.executor.uid}' in output
-        assert 'PASS checkpoint group stops:' in output
-        assert 'PASS terminal stop replacement:' in output
-        assert 'PASS birth stop replacement:' in output
-        assert 'PASS SYSEMU strict policy:' in output
-        assert 'PASS SYSEMU native admission:' in output
-        assert 'PASS SYSEMU pending signals:' in output
-        assert 'PASS SYSEMU interrupted IO:' in output
-        assert 'PASS SYSEMU signal replay:' in output
-        assert 'PASS SYSEMU register copy:' in output
-        assert 'PASS native entry replay:' in output
-        assert 'PASS chained replay:' in output
-        assert 'PASS chained task injection:' in output
-        assert 'PASS chained intervening stops:' in output
-        assert 'PASS chained process pending:' in output
-        assert 'PASS retained job control:' in output
-        assert 'LIMIT service copy fault:' in output
-        assert 'LIMIT checkpoint during replay:' in output
-        assert 'LIMIT regenerated job control:' in output
-        assert 'PASS task injection admission:' in output
-        assert 'PASS unified checkpoint owner:' in output
-        assert 'PASS checkpoint borrowing:' in output
-        assert 'PASS scalar checkpoint:' in output
+        if args.mode != 'benchmark':
+            assert 'PASS checkpoints:' in output and f'uid={suite.executor.uid}' in output
+            assert 'PASS checkpoint group stops:' in output
+            assert 'PASS terminal stop replacement:' in output
+            assert 'PASS birth stop replacement:' in output
+            assert 'PASS SYSEMU strict policy:' in output
+            assert 'PASS SYSEMU native admission:' in output
+            assert 'PASS SYSEMU pending signals:' in output
+            assert 'PASS SYSEMU interrupted IO:' in output
+            assert 'PASS SYSEMU signal replay:' in output
+            assert 'PASS SYSEMU register copy:' in output
+            assert 'PASS native entry replay:' in output
+            assert 'PASS chained replay:' in output
+            assert 'PASS chained task injection:' in output
+            assert 'PASS chained intervening stops:' in output
+            assert 'PASS chained process pending:' in output
+            assert 'PASS retained job control:' in output
+            assert 'LIMIT service copy fault:' in output
+            assert 'LIMIT checkpoint during replay:' in output
+            assert 'LIMIT regenerated job control:' in output
+            assert 'PASS task injection admission:' in output
+            assert 'PASS unified checkpoint owner:' in output
+            assert 'PASS checkpoint borrowing:' in output
+            assert 'PASS scalar checkpoint:' in output
         suite.report['limitations'] = [line for line in output.splitlines() if line.startswith('LIMIT ')]
+        if args.mode == 'controls':
+            suite.report['passed'] = True
+            return
         expected_modes = {'brk', 'single-step', 'seccomp-trace', 'sysemu', 'sysemu-context'}
         if native_skip:
             expected_modes.add('syscall')

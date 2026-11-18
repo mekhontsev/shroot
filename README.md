@@ -90,14 +90,15 @@ signals, sandbox filters and performance controls.
 
 ## Recursive Execution
 
-Shroot can run inside a Shroot environment. Each instance uses ordinary Linux
-interfaces to supervise its own guest; neither the inner nor the outer runtime
-needs to recognize the other. Each level owns its supervisor and environment store.
+On Android, an ordinary Termux UID runs Alpine in Shroot. Alpine builds Shroot
+with musl and uses it to launch Debian. The full native functional suite runs
+from Debian: its glibc build starts a third guest for debugger and signal tests,
+and a fourth for fork/exec/wait tests in all four Base/lazy SVC combinations of
+the two innermost runtimes.
 
-Tests cover two and three levels on Android, including mixed Base/lazy entry,
-fork/exec/wait, exit status, arguments, environment and file metadata. See
-[recursive test coverage](tests/README.md#nested-runtime) for the current scope.
-Recursion does not grant additional host privileges or create a new host UID.
+Each level has its own supervisor and store. No nesting mode or extra host
+privileges are needed. Deep test runs use longer time limits; see
+[recursive test coverage](tests/README.md#nested-runtime).
 
 ## Storage And Integration
 

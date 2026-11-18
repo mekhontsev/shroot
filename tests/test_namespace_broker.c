@@ -627,7 +627,14 @@ static void stopped_queued_entry(const char *store,int status,int admission) {
     /* Event capture itself parks the admitted caller under the broker lock.
      * A separate park first would allow the worker to retire before capture. */
     assert(atomic_load(&channel.state)==MD_ENTRY_RUNNING && fcntl(fd,F_GETFD)==FD_CLOEXEC);
-    assert(md_broker_hold_event(broker,pid,status,NULL)==1);
+    int terminal=!WIFSTOPPED(status) || (unsigned)status>>16==PTRACE_EVENT_EXIT;
+    assert(md_broker_hold_event(broker,pid,terminal ? (SIGCHLD<<8)|0x7f : status,NULL)==1);
+    if (terminal) {
+        /* SIGKILL can replace a stopped boundary before the worker releases
+         * its resources. Keep one event lease and publish only the terminal. */
+        struct rusage usage={.ru_utime={.tv_sec=17}};
+        assert(md_broker_hold_event(broker,pid,status,&usage)==1);
+    }
     assert(md_broker_pending_events(broker));
     /* Publishing policy cannot release a kernel stop owned by retirement. */
     assert(!md_broker_task(broker,pid,MD_BROKER_COOPERATIVE,0,0,NULL,0));
@@ -639,6 +646,10 @@ static void stopped_queued_entry(const char *store,int status,int admission) {
         struct pollfd ready={.fd=md_fs_worker_fd(worker),.events=POLLIN};
         assert(poll(&ready,1,5000)==1);
         assert(!md_fs_worker_dispatch(worker));
+        if (terminal) {
+            struct rusage usage={.ru_utime={.tv_sec=23}};
+            assert(md_broker_hold_event(broker,pid,status,&usage)==1);
+        }
         int stopped=0;
         int borrowed=md_broker_native_borrow(broker,pid,&stopped);
         assert(borrowed==admission);
@@ -649,7 +660,9 @@ static void stopped_queued_entry(const char *store,int status,int admission) {
             assert(md_broker_pending_events(broker));
             md_broker_native_return(broker,pid);
         }
-        observed=md_broker_take_event(broker,&returned,NULL);
+        struct rusage usage={0};
+        observed=md_broker_take_event(broker,&returned,&usage);
+        if (observed && terminal) assert(usage.ru_utime.tv_sec==23);
     }
     assert(observed==pid && returned==status && !md_broker_pending_events(broker));
     assert(!md_broker_task_active(broker,pid));

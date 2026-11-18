@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/magic.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -73,10 +74,12 @@ void md_test_provider_directory(const char *path) {
     }
     touch(lower,"hidden");
     int fd=openat(upper,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(fd>=0);
+    char directory[PATH_MAX];
+    assert(!md_provider_tree_path(tree,fd,NULL,directory,sizeof(directory)));
     touch(upper,"private-only");
-    assert(md_provider_tree_host_step(tree,fd,"private-only")==-ENOENT);
-    assert(md_provider_tree_host_step(tree,fd,"hidden")==-ENOENT);
-    int selected=md_provider_tree_host_step(tree,fd,"item-0000"); assert(selected>=0);
+    assert(md_provider_tree_step_path(tree,directory,"private-only",1)==-ENOENT);
+    assert(md_provider_tree_step_path(tree,directory,"hidden",1)==-ENOENT);
+    int selected=md_provider_tree_step_path(tree,directory,"item-0000",1); assert(selected>=0);
     struct stat native,actual_node;
     assert(!fstatat(lower,"item-0000",&native,0) && !fstat(selected,&actual_node));
     assert(native.st_dev==actual_node.st_dev && native.st_ino==actual_node.st_ino && !close(selected));

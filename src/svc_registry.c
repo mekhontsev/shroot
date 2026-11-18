@@ -162,13 +162,23 @@ int md_svc_registry_direct(struct md_svc_registry *r,pid_t pid,int memory_fd,uin
     return extend(r,pid,memory_fd,svc,number,NULL);
 }
 int md_svc_registry_suspend(struct md_svc_registry *r,pid_t pid,uintptr_t svc) {
-    struct md_svc_site *s=head(r,svc);
-    if (!s) return 0;
+    if (!r) return 0;
+    int known=0;
+    for (unsigned i=0;i<r->count;++i)
+        known|=r->sites[i].direct.svc==svc && r->sites[i].direct.gate;
+    if (!known) return 0;
     uint32_t current;
     int error=md_svc_registry_read(pid,svc,&current,4);
-    if (!error && current==s->replacement)
-        error=md_svc_registry_write(pid,svc,&s->original,4);
-    return error;
+    if (error) return error;
+    /* A fork's COW text can precede its parent's pause or chain extension.
+     * Recovery recognizes every owned replacement, not only the current head;
+     * unrelated application text must never be overwritten. */
+    for (unsigned i=0;i<r->count;++i) {
+        const struct md_svc_site *s=&r->sites[i];
+        if (s->direct.svc==svc && s->direct.gate && current==s->replacement)
+            return md_svc_registry_write(pid,svc,&s->original,4);
+    }
+    return 0;
 }
 uintptr_t md_svc_registry_replay(const struct md_svc_registry *r,uintptr_t pc) {
     if (r && !r->disabled) {
@@ -380,6 +390,10 @@ int md_svc_registry_prepare_fork(struct md_svc_registry *r,pid_t pid,int memory_
             slots&=slots-1;
         }
     }
+    /* The newborn owns private memory and resumes outside the entry frame.
+     * Other threads' inherited claims are gone; its own policy can now decide
+     * whether an inherited temporary pause still applies. */
+    if (r->pause_reasons) r->entry_fence_drained=1;
     r->frames_dirty=0;
     return 0;
 }

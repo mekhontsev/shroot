@@ -501,16 +501,9 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
         else out->fd=fd;
         break;
     }
-    case MD_FS_CHMOD: {
-        struct stat st;
-        if (fstat(a->fd,&st)) r=-errno;
-        else if (S_ISLNK(st.st_mode)) r=-EOPNOTSUPP;
-        else {
-            char path[64]; snprintf(path,sizeof(path),"/proc/self/fd/%d",a->fd);
-            if (fchmodat(AT_FDCWD,path,q->mode,0)) r=-errno;
-        }
+    case MD_FS_CHMOD:
+        r=(int)md_host_chmod_fd(a->fd,q->mode);
         break;
-    }
     case MD_FS_CHOWN:
         if (fchownat(a->fd,"",q->attributes.uid,q->attributes.gid,AT_EMPTY_PATH|AT_SYMLINK_NOFOLLOW)) r=-errno;
         break;

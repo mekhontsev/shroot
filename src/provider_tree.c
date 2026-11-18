@@ -28,6 +28,7 @@ struct directory_checkpoint {
 struct md_provider_tree {
     atomic_uint references;
     int upper,lower;
+    struct { dev_t device; ino_t inode; } roots[2];
     char **opaque;
     unsigned opaque_count;
     const struct md_provider_tree_ops *ops;
@@ -51,6 +52,15 @@ static int below(const char *path,const char *root) {
     size_t length=strlen(root);
     return !strncmp(path,root,length) && (!path[length] || path[length]=='/');
 }
+static int capture_roots(struct md_provider_tree *tree) {
+    const int roots[]={tree->upper,tree->lower};
+    for (unsigned i=0;i<2;++i) if (roots[i]>=0) {
+        struct stat st;
+        if (fstat(roots[i],&st)) return -errno;
+        tree->roots[i].device=st.st_dev; tree->roots[i].inode=st.st_ino;
+    }
+    return 0;
+}
 struct md_provider_tree *md_provider_tree_new(int parent,int lower,const char *const *opaque,
         unsigned count,const struct md_provider_tree_ops *ops,void *context) {
     if (count>32 || (count && !opaque)) { errno=EINVAL; return NULL; }
@@ -62,6 +72,8 @@ struct md_provider_tree *md_provider_tree_new(int parent,int lower,const char *c
     if (lower>=0) { tree->lower=fcntl(lower,F_DUPFD_CLOEXEC,3); if (tree->lower<0) goto failed; }
     tree->upper=md_temporary_directory_new(parent);
     if (tree->upper<0) { errno=-tree->upper; tree->upper=-1; goto failed; }
+    error=capture_roots(tree);
+    if (error) { errno=-error; goto failed; }
     tree->opaque=calloc(count ? count : 1,sizeof(*tree->opaque));
     if (!tree->opaque) goto failed;
     for (unsigned i=0;i<count;++i) {
@@ -88,13 +100,15 @@ struct md_provider_tree *md_provider_tree_import_context(int upper,int lower,con
     if (!tree) return NULL;
     error=pthread_mutex_init(&tree->directory_lock,NULL);
     if (error) { free(tree); errno=error; return NULL; }
-    atomic_init(&tree->references,1); tree->upper=tree->lower=-1; tree->ops=ops;
-    tree->context=ops && ops->retain ? ops->retain(context) : context;
+    atomic_init(&tree->references,1); tree->upper=tree->lower=-1;
     tree->upper=fcntl(upper,F_DUPFD_CLOEXEC,3);
     if (tree->upper>=0 && lower>=0) tree->lower=fcntl(lower,F_DUPFD_CLOEXEC,3);
     if (tree->upper<0 || (lower>=0 && tree->lower<0)) {
         error=errno; md_provider_tree_release(tree); errno=error; return NULL;
     }
+    error=capture_roots(tree);
+    if (error) { md_provider_tree_release(tree); errno=-error; return NULL; }
+    tree->ops=ops; tree->context=ops && ops->retain ? ops->retain(context) : context;
     return tree;
 }
 int md_provider_tree_matches(const struct md_provider_tree *tree,const struct md_provider_tree_ops *ops) {
@@ -136,24 +150,30 @@ unsigned long md_provider_tree_filesystem(struct md_provider_tree *tree) { retur
 int md_provider_tree_filesystem_at(struct md_provider_tree *tree,int fd,unsigned long *type) {
     *type=md_provider_tree_filesystem(tree);
     if (!*type || tree->lower<0) return 0;
-    struct stat selected,root;
-    if (fstat(fd,&selected) || fstat(tree->upper,&root)) return -errno;
-    if (selected.st_dev==root.st_dev) return 0;
-    if (fstat(tree->lower,&root)) return -errno;
+    struct stat selected;
+    if (fstat(fd,&selected)) return -errno;
     /* A read-through projection does not own host submounts such as devpts
      * below /dev. Its private carriers and lower root retain the view type. */
-    if (selected.st_dev!=root.st_dev) *type=0;
+    if (selected.st_dev!=tree->roots[0].device && selected.st_dev!=tree->roots[1].device) *type=0;
     return 0;
 }
 int md_provider_tree_readonly(struct md_provider_tree *tree,int fd) {
     if (tree->ops && tree->ops->readonly_node) return tree->ops->readonly_node(tree->context,fd);
     return tree->ops && tree->ops->readonly ? 1 : md_provider_tree_private(tree,fd);
 }
-int md_provider_tree_path(struct md_provider_tree *tree,int fd,char *out,size_t size) {
+int md_provider_tree_path(struct md_provider_tree *tree,int fd,const struct stat *metadata,char *out,size_t size) {
     if (tree->ops && tree->ops->path) return tree->ops->path(tree->context,fd,out,size);
+    const int roots[]={tree->upper,tree->lower};
+    /* Pinned root identities survive rename and cannot be recycled while the
+     * tree owns them. Reuse the walk's metadata, never a cached dentry path. */
+    for (unsigned i=0;i<2;++i) if (roots[i]>=0 && (fd==roots[i]
+            || (metadata && S_ISDIR(metadata->st_mode)
+                && metadata->st_dev==tree->roots[i].device && metadata->st_ino==tree->roots[i].inode))) {
+        if (size<2) return -ENAMETOOLONG;
+        memcpy(out,"/",2); return 0;
+    }
     char path[PATH_MAX],root[PATH_MAX]; int error=fdpath(fd,path,sizeof(path));
     if (error) return error;
-    int roots[]={tree->upper,tree->lower};
     for (unsigned i=0;i<2;++i) {
         if (roots[i]<0) continue;
         error=fdpath(roots[i],root,sizeof(root)); if (error) return error;
@@ -176,17 +196,15 @@ static int lower_visible(struct md_provider_tree *tree,const char *path) {
 static int internal(const char *directory,const char *name) {
     return !strcmp(directory,"/") && !strcmp(name,MD_TEMPORARY_DIRECTORY_MARKER);
 }
-static int step(struct md_provider_tree *tree,int directory,const char *name,int host) {
+static int step(struct md_provider_tree *tree,char path[PATH_MAX],const char *name,int host) {
     if (tree->ops && tree->ops->lookup) return -EOPNOTSUPP;
-    char path[PATH_MAX]; int error=md_provider_tree_path(tree,directory,path,sizeof(path));
-    if (error) return error;
     if (internal(path,name)) return -ENOENT;
     if (!strcmp(name,"..")) {
         char *slash=strrchr(path,'/'); if (slash==path) path[1]=0; else *slash=0;
     } else if (strcmp(name,".")) {
         if (!*name || strchr(name,'/')) return -EINVAL;
         size_t length=strlen(path),n=strlen(name);
-        if (length+n+2>sizeof(path)) return -ENAMETOOLONG;
+        if (length+n+2>PATH_MAX) return -ENAMETOOLONG;
         if (length>1) path[length++]='/';
         memcpy(path+length,name,n+1);
     }
@@ -199,17 +217,20 @@ static int step(struct md_provider_tree *tree,int directory,const char *name,int
     int fd=openat(tree->lower,relative(path),O_PATH|O_NOFOLLOW|O_CLOEXEC);
     return fd<0 ? -errno : fd;
 }
-int md_provider_tree_step(struct md_provider_tree *tree,int directory,const char *name) {
-    return step(tree,directory,name,0);
+int md_provider_tree_step_path(struct md_provider_tree *tree,const char *directory,const char *name,int host) {
+    char path[PATH_MAX];
+    size_t length=strnlen(directory,sizeof(path));
+    if (length==sizeof(path)) return -ENAMETOOLONG;
+    if (directory[0]!='/') return -EINVAL;
+    memcpy(path,directory,length+1);
+    return step(tree,path,name,host);
 }
-int md_provider_tree_host_step(struct md_provider_tree *tree,int directory,const char *name) {
-    return step(tree,directory,name,1);
-}
-int md_provider_tree_lookup(struct md_provider_tree *tree,int directory,const char *name,
+int md_provider_tree_lookup(struct md_provider_tree *tree,int directory,const struct stat *metadata,const char *name,
         const struct md_control_actor *actor,struct md_provider_lookup **pending) {
     if (tree->ops && tree->ops->lookup)
         return pending ? tree->ops->lookup(tree->context,directory,name,actor,pending) : -EOPNOTSUPP;
-    return md_provider_tree_step(tree,directory,name);
+    char path[PATH_MAX]; int error=md_provider_tree_path(tree,directory,metadata,path,sizeof(path));
+    return error ? error : step(tree,path,name,0);
 }
 static int directory_identity(int fd,struct directory_identity *out) {
     *out=(struct directory_identity){0};
@@ -242,7 +263,7 @@ static int directory_open(int root,const char *path,int retained) {
     return fd;
 }
 static ssize_t read_entries(struct md_provider_tree *tree,int fd,void *out,size_t capacity,int host) {
-    char path[PATH_MAX]; int error=md_provider_tree_path(tree,fd,path,sizeof(path));
+    char path[PATH_MAX]; int error=md_provider_tree_path(tree,fd,NULL,path,sizeof(path));
     if (error) return error;
     off_t position=lseek(fd,0,SEEK_CUR); if (position<0) return -errno;
     int upper=host ? -1 : directory_open(tree->upper,path,fd);

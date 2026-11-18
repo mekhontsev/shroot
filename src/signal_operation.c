@@ -30,8 +30,9 @@ static int invoke(struct md_signal_operation *c,const struct md_task_call_argume
     return 0;
 }
 enum { WAIT_SET, WAIT_TIMEOUT, WAIT_PROBE, WAIT_NATIVE, WAIT_OUTPUT, WAIT_RECORD, WAIT_COPY, WAIT_DONE,
-    WAIT_ALLOCATE, WAIT_PARK_COPY, WAIT_PARKED, WAIT_FETCH, WAIT_PRIORITY };
-enum { FD_INPUT, FD_CAPTURE, FD_ADMISSION, FD_FLAGS, FD_EFFECT, FD_COMPLETE, FD_VECTOR_DONE };
+    WAIT_ALLOCATE, WAIT_PARK_COPY, WAIT_PARKED, WAIT_FETCH, WAIT_PRIORITY, WAIT_IMMEDIATE };
+enum { FD_INPUT, FD_CAPTURE, FD_ADMISSION, FD_FLAGS, FD_EFFECT, FD_COMPLETE, FD_VECTOR_DONE,
+    FD_READ_PROBE, FD_READ_READY };
 static int descriptor_progress(struct md_signal_operation *c) {
     const struct seccomp_data *r=&c->request;
     if (c->descriptor_stage==FD_INPUT) {
@@ -41,9 +42,12 @@ static int descriptor_progress(struct md_signal_operation *c) {
             return transfer(c,r->args[1],&c->wait_set,sizeof(c->wait_set),0);
         }
     }
-    if (c->descriptor_stage==FD_COMPLETE && c->descriptor==2) {
+    if ((c->descriptor_stage==FD_COMPLETE || c->descriptor_stage==FD_READ_READY) && c->descriptor==2) {
         if (c->descriptor_result<0 || c->passthrough) return finished(c,c->descriptor_result);
+        int ready=c->descriptor_stage==FD_READ_READY;
         c->descriptor_nonblock=!!(c->descriptor_result&O_NONBLOCK);
+        if (!ready && c->stage==WAIT_IMMEDIATE && c->descriptor_nonblock) return finished(c,-EAGAIN);
+        c->stage=ready ? WAIT_OUTPUT : WAIT_PROBE;
         c->descriptor_stage=FD_VECTOR_DONE;
         if (r->nr==SYS_readv) {
             if (r->args[2]>1024) return finished(c,-EINVAL);
@@ -67,7 +71,7 @@ static int descriptor_progress(struct md_signal_operation *c) {
         }
         c->descriptor_available=total;
         if (total<sizeof(c->record)) return finished(c,-EINVAL);
-        c->waiting=1; c->stage=WAIT_PROBE;
+        c->waiting=1;
         return md_signal_operation_continue(c);
     }
     if (c->descriptor_stage==FD_CAPTURE) {
@@ -86,6 +90,11 @@ static int wait_probe(struct md_signal_operation *c,uint64_t set) {
     struct md_task_call_arguments args={.number=SYS_rt_sigtimedwait,
         .value={c->peer+offsetof(struct md_signal_wait_exchange,set),c->peer+offsetof(struct md_signal_wait_exchange,info),
             c->peer+offsetof(struct md_signal_wait_exchange,timeout),sizeof(uint64_t)}};
+    return invoke(c,&args);
+}
+static int descriptor_flags(struct md_signal_operation *c) {
+    c->descriptor_stage=FD_EFFECT;
+    const struct md_task_call_arguments args={.number=SYS_fcntl,.value={c->request.args[0],F_GETFL}};
     return invoke(c,&args);
 }
 static int mask_progress(struct md_signal_operation *c) {
@@ -140,6 +149,14 @@ static int wait_progress(struct md_signal_operation *c) {
             if (!(c->wait_set&MD_SIGNAL_SYS_BIT) || !pending) {
                 if (pending && !*c->blocked) {
                     c->wait_interrupt=1;
+                    return wait_probe(c,c->wait_set);
+                }
+                /* A zero-time probe cannot park. Keep its existing scratch
+                 * and memory turn, including the tail of a partial FD read. */
+                int immediate=c->descriptor==2 ? c->descriptor_nonblock || c->descriptor_copied
+                    : r->args[2] && !c->wait_timeout.tv_sec && !c->wait_timeout.tv_nsec;
+                if (immediate) {
+                    c->stage=WAIT_IMMEDIATE;
                     return wait_probe(c,c->wait_set);
                 }
                 c->stage=WAIT_NATIVE;
@@ -315,14 +332,27 @@ int md_signal_operation_descriptor_admit(struct md_signal_operation *c,struct md
         c->passthrough=1; c->descriptor_result=0; c->descriptor_stage=FD_COMPLETE;
         return MD_SIGNAL_FD_RELEASE;
     }
+    if (c->descriptor==2) {
+        const struct seccomp_data *r=&c->request;
+        uint64_t mask=md_signal_fd_mask(file);
+        /* A ready scalar read does not depend on O_NONBLOCK. Probe while the
+         * exact descriptor is admitted; query flags only if it could sleep.
+         * Vectors and logical queues retain their input/priority preparation. */
+        if (r->nr==SYS_read && r->args[2]>=sizeof(c->record) && r->args[2]<=SSIZE_MAX
+                && r->args[1]<=UINTPTR_MAX-r->args[2] && !(mask&MD_SIGNAL_SYS_BIT)
+                && (*c->blocked || (!md_signal_pending_has(c->pending_owner,MD_SIGNAL_PRIVATE)
+                    && !md_signal_pending_has(c->pending_owner,MD_SIGNAL_SHARED)))) {
+            c->descriptor_stage=FD_READ_PROBE;
+            return wait_probe(c,mask);
+        }
+        return descriptor_flags(c);
+    }
     c->descriptor_stage=c->descriptor==1 && (int)c->request.args[0]>=0 ? FD_FLAGS : FD_EFFECT;
     memcpy(c->scratch,&c->wait_set,sizeof(c->wait_set));
     const struct seccomp_data *r=&c->request;
     struct md_task_call_arguments args=c->descriptor_stage==FD_FLAGS
         ? (struct md_task_call_arguments){.number=SYS_fcntl,.value={r->args[0],F_GETFD}}
-        : c->descriptor==1
-        ? (struct md_task_call_arguments){.number=SYS_signalfd4,.value={r->args[0],c->peer,8,r->args[3]}}
-        : (struct md_task_call_arguments){.number=SYS_fcntl,.value={r->args[0],F_GETFL}};
+        : (struct md_task_call_arguments){.number=SYS_signalfd4,.value={r->args[0],c->peer,8,r->args[3]}};
     return invoke(c,&args);
 }
 int md_signal_operation_wake(struct md_signal_operation *c) {
@@ -347,6 +377,19 @@ int md_signal_operation_effect_done(struct md_signal_operation *c,long value) {
     c->invoking=0;
     c->effect_result=value;
     if (c->descriptor && !c->waiting) {
+        if (c->descriptor_stage==FD_READ_PROBE) {
+            if (value==-EAGAIN) {
+                c->stage=WAIT_IMMEDIATE;
+                return descriptor_flags(c);
+            }
+            c->descriptor_result=value<0 ? value : 0;
+            c->descriptor_stage=value>0 ? FD_READ_READY : FD_COMPLETE;
+            if (value>0) {
+                c->wait_result=value;
+                c->wait_info=((struct md_signal_wait_exchange *)c->scratch)->info;
+            }
+            return MD_SIGNAL_FD_RELEASE;
+        }
         if (c->descriptor_stage==FD_FLAGS && value>=0) {
             c->descriptor_flags=(int)value;
             c->descriptor_stage=FD_EFFECT;
@@ -374,6 +417,7 @@ int md_signal_operation_effect_done(struct md_signal_operation *c,long value) {
             c->wait_interrupt=0;
             if (value==-EAGAIN) return finished(c,-EINTR);
         }
+        if (c->stage==WAIT_IMMEDIATE && value<=0) return finished(c,value);
         if (value==-EAGAIN) {
             struct md_signal_pending_value current;
             if (!md_signal_pending_peek(c->pending_owner,&current)

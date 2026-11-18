@@ -258,8 +258,12 @@ struct md_proc_path md_proc_path_for(const char *path,int tid,int tgid) {
             else { out.kind=MD_PROC_NS_DIRECTORY; p=component(p); }
         }
         else return out;
-        if (foreign) { out.foreign_kind=out.kind; out.kind = MD_PROC_FOREIGN; }
     } else return out;
+    /* A thread group need not share CLONE_FILES or CLONE_FS. A leader's proc
+     * alias selects that task, not the calling thread's descriptor/cwd table. */
+    if (out.process!=tid && (out.kind==MD_PROC_FD || out.kind==MD_PROC_FDINFO
+            || out.kind==MD_PROC_CWD || out.kind==MD_PROC_ROOT)) foreign=1;
+    if (foreign) { out.foreign_kind=out.kind; out.kind=MD_PROC_FOREIGN; }
     out.anchor_length = (size_t)(p - path);
     out.tail = p;
     return out;

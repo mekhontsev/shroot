@@ -26,6 +26,7 @@
 #include "signal_delivery.h"
 #include "signal_pending.h"
 #include "supervisor_actors.h"
+#include "supervisor_debug.h"
 #include "supervisor_domain.h"
 #include "supervisor_execution.h"
 #include "supervisor_fs.h"
@@ -71,24 +72,18 @@ struct thread *policy_installer;
 static int policy_barrier_ready;
 
 void filter_service_gates(struct md_seccomp_gate gates[FILTER_SERVICE_GATES]) {
-    gates[0]=(struct md_seccomp_gate){abi.adapter_native_return,abi.adapter_native_return,-1,
-        SECCOMP_RET_TRACE|MD_INTERCEPT_TASK};
-    gates[1]=(struct md_seccomp_gate){abi.buffer_admit,abi.buffer_admit,SYS_gettid,
-        SECCOMP_RET_TRACE|MD_INTERCEPT_TASK};
-    gates[2]=(struct md_seccomp_gate){abi.task_return,abi.task_return,-1,SECCOMP_RET_TRACE|MD_INTERCEPT_TASK};
-    /* These carriers already have owners in the original interception filter.
-     * Keep their cookies/listener, including without a resident SVC image. */
-    gates[3]=(struct md_seccomp_gate){abi.capture_gate,abi.capture_gate,SYS_openat,SECCOMP_RET_ALLOW};
-    gates[4]=(struct md_seccomp_gate){abi.watch_return,abi.watch_return,-1,SECCOMP_RET_ALLOW};
-    gates[5]=(struct md_seccomp_gate){abi.code_begin,abi.code_end,-1,SECCOMP_RET_ALLOW};
+    /* The base filter already owns every bootstrap carrier and its cookie or
+     * listener. A later guest filter only admits this service code; duplicating
+     * its dispatch would add permanent instructions to every policy layer. */
+    gates[0]=(struct md_seccomp_gate){abi.code_begin,abi.code_end,-1,SECCOMP_RET_ALLOW};
 }
 
 static struct md_seccomp_route filter_service_route(const struct md_seccomp_gate *gates,size_t count,uint64_t image) {
     /* Size fallback removes resident ranges, never admission before guest BPF:
      * an implicit BPF exit cannot be intercepted by a return epilogue. */
-    return (struct md_seccomp_route){.delegation_pc=abi.task_return,.notify_cookie=MD_INTERCEPT_NOTIFY,
+    return (struct md_seccomp_route){.notify_cookie=MD_INTERCEPT_NOTIFY,
         .gates=gates,.gate_count=count,.entry_first=1,.entry_image=image,
-        .internal_gate_count=image ? FILTER_SERVICE_GATES : 0};
+        .internal_gate_count=FILTER_SERVICE_GATES};
 }
 
 struct md_seccomp_policy *admission_policy(const struct thread *t) {
@@ -115,15 +110,22 @@ static uint32_t guest_trace_decision(struct thread *t,const struct seccomp_data 
 
 static int guest_trace_stop(struct thread *t,const struct user_pt_regs *regs,
         enum md_task_call_boundary boundary) {
-    SUPERVISOR_TRACE("PROBE guest-trace-stop pid=%d nr=%d pc=%llx cookie=%u boundary=%u\n",
-        t->pid,t->seccomp.trace.call.nr,(unsigned long long)regs->pc,t->seccomp.trace.data,boundary);
+    SUPERVISOR_TRACE("PROBE guest-trace-stop pid=%d nr=%d pc=%llx cookie=%u boundary=%u args=%llx,%llx,%llx\n",
+        t->pid,t->seccomp.trace.call.nr,(unsigned long long)regs->pc,t->seccomp.trace.data,boundary,
+        (unsigned long long)t->seccomp.trace.call.args[0],
+        (unsigned long long)t->seccomp.trace.call.args[1],
+        (unsigned long long)t->seccomp.trace.call.args[2]);
     t->seccomp.trace.boundary=boundary;
     t->seccomp.trace.number=t->seccomp.trace.call.nr;
     t->seccomp.trace.stage=GUEST_TRACE_STOPPED;
-    if (!set_registers(t->pid,(struct user_pt_regs *)regs)) return 1;
-    if (md_debugger_seccomp(debugger,t->pid,&t->seccomp.trace.call,regs->sp,t->seccomp.trace.data)) return 1;
-    t->seccomp.trace.stage=GUEST_TRACE_NONE;
     struct user_pt_regs result=*regs;
+    /* ARM64 initializes the skipped-call result before seccomp admission.
+     * A promoted notification or host TRAP retains arguments instead of that
+     * kernel boundary. Preserve orig_x0 in call, but publish the entry result. */
+    if (boundary!=MD_TASK_CALL_SECCOMP && t->seccomp.trace.call.nr==-1) result.regs[0]=-ENOSYS;
+    if (!set_registers(t->pid,&result)) return 1;
+    if (md_debugger_seccomp(debugger,t->pid,&t->seccomp.trace.call,result.sp,t->seccomp.trace.data)) return 1;
+    t->seccomp.trace.stage=GUEST_TRACE_NONE;
     return_task_value(t,&result,-ENOSYS,boundary); return 1;
 }
 
@@ -136,6 +138,11 @@ int guest_trace_begin(struct thread *t,const struct seccomp_data *call,const str
         CHECK(!ioctl(listener,SECCOMP_IOCTL_NOTIF_SEND,&reply) || errno==ENOENT);
         return 1;
     }
+    if (t->seccomp.trace.stage!=GUEST_TRACE_NONE)
+        fprintf(stderr,"Shroot: overlapping policy admission pid=%d stage=%d old=%d/%#llx new=%d/%#llx boundary=%u\n",
+            t->pid,t->seccomp.trace.stage,t->seccomp.trace.call.nr,
+            (unsigned long long)t->seccomp.trace.call.instruction_pointer,call->nr,
+            (unsigned long long)call->instruction_pointer,boundary);
     CHECK(t->seccomp.trace.stage==GUEST_TRACE_NONE);
     t->seccomp.trace.data=decision&SECCOMP_RET_DATA;
     t->seccomp.trace.call=*call;
@@ -154,7 +161,7 @@ void guest_trace_promoted(struct thread *t,const struct user_pt_regs *regs) {
 int guest_trace_recheck(struct thread *t,const struct seccomp_data *call) {
     if (t->seccomp.trace.stage!=GUEST_TRACE_ADMISSION && t->seccomp.trace.stage!=GUEST_TRACE_HOST) return 0;
     int matches=!memcmp(call,&t->seccomp.trace.call,sizeof(*call));
-    t->seccomp.trace.stage=GUEST_TRACE_NONE;
+    t->seccomp.trace.stage=matches ? GUEST_TRACE_DISPATCH : GUEST_TRACE_NONE;
     return matches;
 }
 
@@ -209,7 +216,39 @@ static int guest_trace_host_pending(void *context,const siginfo_t *info) {
         && (uintptr_t)info->si_call_addr==call->instruction_pointer;
 }
 
+int guest_trace_execution_begin(struct thread *t,const struct seccomp_data *call,struct user_pt_regs *regs) {
+    /* Native-cacheable calls bypass address selectors. A fixed-number TRACE
+     * carrier guarantees custody without broadening the base filter. */
+    int number=SYS_getpid;
+    struct iovec io={&number,sizeof(number)};
+    regs->pc=abi.adapter_native_return;
+    if (!set_registers(t->pid,regs)
+            || !tracee_request(t,PTRACE_SETREGSET,(void *)NT_ARM_SYSTEM_CALL,&io,"debugger-execution-entry")) return 0;
+    t->seccomp.trace.call=*call;
+    t->seccomp.trace.stage=GUEST_TRACE_EXECUTION;
+    return 1;
+}
+
+int guest_trace_execution(struct thread *t,struct ptrace_syscall_info *info,struct user_pt_regs *regs) {
+    if (t->seccomp.trace.stage!=GUEST_TRACE_EXECUTION) return 0;
+    CHECK(info->op==PTRACE_SYSCALL_INFO_SECCOMP && info->instruction_pointer==abi.adapter_native_return
+        && info->seccomp.nr==SYS_getpid);
+    if (!registers(t->pid,regs)) return -ESRCH;
+    regs->pc=t->seccomp.trace.call.instruction_pointer;
+    int number=t->seccomp.trace.call.nr;
+    struct iovec io={&number,sizeof(number)};
+    if (!set_registers(t->pid,regs)
+            || !tracee_request(t,PTRACE_SETREGSET,(void *)NT_ARM_SYSTEM_CALL,&io,"debugger-execution-admission")) return -ESRCH;
+    info->instruction_pointer=regs->pc;
+    info->seccomp.nr=number;
+    t->seccomp.trace.stage=GUEST_TRACE_ADMISSION;
+    return 1;
+}
+
 int guest_trace_syscall(struct thread *t,const struct ptrace_syscall_info *info,struct user_pt_regs *regs) {
+    if (t->seccomp.trace.stage)
+        SUPERVISOR_TRACE("PROBE guest-trace-syscall pid=%d stage=%d op=%d pc=%llx\n",
+            t->pid,t->seccomp.trace.stage,info->op,(unsigned long long)info->instruction_pointer);
     if (t->seccomp.trace.stage==GUEST_TRACE_DRAIN && info->op==PTRACE_SYSCALL_INFO_EXIT)
         t->seccomp.trace.stage=GUEST_TRACE_NONE;
     if (t->seccomp.trace.stage==GUEST_TRACE_REPLAY && info->op==PTRACE_SYSCALL_INFO_ENTRY) {
@@ -225,6 +264,18 @@ int guest_trace_syscall(struct thread *t,const struct ptrace_syscall_info *info,
             regs->regs[8]=t->seccomp.trace.visible_number;
             regs->regs[0]=t->seccomp.trace.visible_argument;
             regs->pc=call.instruction_pointer;
+            if (regs->regs[0]!=call.args[0]) {
+                uint32_t decision;
+                CHECK(!md_seccomp_policy_eval(admission_policy(t),&call,&decision));
+                unsigned action=decision&SECCOMP_RET_ACTION_FULL;
+                if (action==SECCOMP_RET_ALLOW || action==SECCOMP_RET_LOG || action==SECCOMP_RET_TRACE) {
+                    /* Policy retains orig_x0, but resource dispatch uses the
+                     * tracer's execution argument. Admit an owned stop so a
+                     * conditional selector cannot miss that changed operand. */
+                    if (guest_trace_execution_begin(t,&call,regs)) resume(t->pid,0);
+                    return 1;
+                }
+            }
             if (!set_registers(t->pid,regs)) return 1;
             t->debug.call_active=1;
             resume(t->pid,0); return 1;
@@ -351,7 +402,7 @@ int guest_notification_event(struct thread *t,int status) {
     }
     if (!ready) { t->kernel_stopped=0; return 1; }
     if (continuing && !n->continuing_native && !n->host_signal.si_signo
-            && guest_notification_route(t,&n->original)==MD_INTERCEPT_NATIVE) {
+            && guest_notification_route(t,&t->execution.request)==MD_INTERCEPT_NATIVE) {
         struct md_task_call_arguments args={.number=n->original.nr,.flags=MD_TASK_CALL_INTERRUPTIBLE};
         memcpy(args.value,n->original.args,sizeof(args.value));
         args.value[0]=t->execution.registers.regs[0];
@@ -417,6 +468,7 @@ static int host_policy_deliver(struct thread *t,struct user_pt_regs *regs,const 
 
 uint32_t host_policy_interception(const struct seccomp_data *call) {
     if (call->arch!=AUDIT_ARCH_AARCH64) return SECCOMP_RET_ALLOW;
+    if (call->nr<0) return SECCOMP_RET_ERRNO|ENOSYS;
     if (call->nr==SYS_set_robust_list || call->nr==SYS_get_robust_list)
         return SECCOMP_RET_TRACE|MD_INTERCEPT_OBSERVE;
     /* These optional native facilities have no userspace implementation.
@@ -471,20 +523,8 @@ int host_policy_signal(struct thread *t,struct md_task_signal_stop *stop) {
     if (!t->signals.host || !t->entered) return 0;
     if (!signal_observe(t,stop,0)) return 1;
     siginfo_t info=stop->info;
-    if (info.si_code!=SYS_SECCOMP) {
-        if (t->signals.host_blocked) {
-            /* Kernel delivery has already selected this task. Like ptrace's
-             * blocked-signal requeue, retain that target; SI_QUEUE does not
-             * distinguish rt_sigqueueinfo from rt_tgsigqueueinfo. Guest sends
-             * retain their original scope at generation instead. */
-            CHECK(md_signal_pending_put(t->signals.pending,MD_SIGNAL_PRIVATE,&info)>=0);
-            resume(t->pid,0); return 1;
-        }
-        struct md_kernel_action action;
-        if (!md_signal_actions_read(t->signals.actions,SIGSYS,&action)
-                && action.handler==(uintptr_t)SIG_IGN) { resume(t->pid,0); return 1; }
-        return 0;
-    }
+    if (debug_host_policy_completed(t,&info)) { resume(t->pid,0); return 1; }
+    if (info.si_code!=SYS_SECCOMP) return 0;
     if (t->phase!=IDLE) return 0;
     if (!signal_observe(t,stop,1)) return 1;
     struct user_pt_regs regs=stop->regs;
@@ -517,6 +557,8 @@ int host_policy_signal(struct thread *t,struct md_task_signal_stop *stop) {
         if (t->debug.call_active) t->debug.adapter=1;
         return guest_notification_begin(t,&call,&regs,NULL,&info);
     }
+    if (action==SECCOMP_RET_KILL_THREAD || action==SECCOMP_RET_KILL_PROCESS)
+        signal_host_fatal(t);
     if (action!=SECCOMP_RET_ALLOW && action!=SECCOMP_RET_LOG) return 0;
     call.args[0]=regs.regs[0];
     return host_policy_dispatch(t,&regs,&call);
@@ -683,6 +725,7 @@ static int filter_listener_prepare(struct thread *t) {
     if (!object) return -errno;
     int error=md_fd_origins_prepare_object(t->resources.files,object,FD_CLOEXEC,&install->listener);
     if (!error) {
+        install->selectors=md_fd_object_selectors(object);
         install->source=md_proc_file_descriptor(md_proc_file_from_object(object));
         if (install->source<0) error=install->source;
     }
@@ -809,6 +852,23 @@ static void policy_sync_release(struct thread *t) {
     task_action_unpark();
 }
 
+int filter_selectors_required(const struct thread *t) {
+    const struct seccomp_data *call=&t->execution.request;
+    if (!md_seccomp_filter_call(call->nr,call->args[0],call->args[1])
+            || (md_seccomp_filter_flags(call->nr,call->args[1])&SECCOMP_FILTER_FLAG_TSYNC)) return 0;
+    /* Service gates permit later selector installation. Prepare all numbers
+     * only before thread-local policy can split a live group's filter chain:
+     * later TSYNC must neither fail nor spread that policy to its peers. */
+    for (const struct thread *peer=threads;peer;peer=peer->next)
+        if (peer!=t && peer->pid && peer->tgid==t->tgid) return 1;
+    return 0;
+}
+
+static void filter_listener_selected(struct thread *t,long error) {
+    if (error) filter_install_fail(t,error<0 ? (int)error : -EAGAIN);
+    else filter_install_progress(t);
+}
+
 void filter_install_progress(struct thread *t) {
     retry_clear(t,RETRY_FILTER);
     struct filter_install *install=t->seccomp.install;
@@ -817,7 +877,8 @@ void filter_install_progress(struct thread *t) {
     if (state==MD_RESOURCE_ORDER_READY) CHECK(!md_resource_order_start(&install->memory));
     else if (state!=MD_RESOURCE_ORDER_RUNNING) { retry_wait(t,RETRY_FILTER); return; }
     if (!md_memory_readonly_base(t->memory) || !t->entry.registration_revoked
-            || md_fd_selector_has_mask(t->descriptors.selector,MD_FD_SANDBOX_SELECTORS,-1)!=1) {
+            || (filter_selectors_required(t)
+                && md_fd_selector_has_mask(t->descriptors.selector,MD_FD_SANDBOX_SELECTORS,-1)!=1)) {
         t->seccomp.preflight=1;
         if (save_signal_mask(t,&t->execution.mask,"filter-admission-mask")
                 && shield(t) && skip(t->pid)) dispatch_with_stack(t);
@@ -855,9 +916,6 @@ void filter_install_progress(struct thread *t) {
     }
     if (install->stage==2) {
         struct sock_fprog program={install->program.len,install->code};
-        const uint32_t delegated[]={SYS_gettid,SYS_seccomp,SYS_prctl,SYS_rt_sigaction,SYS_rt_sigprocmask,
-            SYS_rt_sigreturn,SYS_rt_sigpending,SYS_rt_sigtimedwait,SYS_process_vm_readv,SYS_process_vm_writev,
-            SYS_ppoll,SYS_pselect6,SYS_epoll_pwait,SYS_epoll_pwait2,SYS_signalfd4,SYS_fcntl,SYS_mmap};
         struct md_svc_registry *registry=md_memory_svc(t->memory);
         size_t capacity=FILTER_SERVICE_GATES+(registry ? registry->pool_count : 0);
         struct md_seccomp_gate *gates=calloc(capacity,sizeof(*gates));
@@ -872,14 +930,12 @@ void filter_install_progress(struct thread *t) {
         const struct md_seccomp_route route=filter_service_route(gates,gate_count,registry ? registry->image : 0);
         int error=md_seccomp_capture_prepare(&install->capture,md_memory_readonly_buffers(t->memory),
             md_memory_readonly_base(t->memory),t->seccomp.policy,&program,
-            delegated,t->signals.host ? sizeof(delegated)/sizeof(*delegated) : 3,
-            MD_INTERCEPT_TASK,&route);
+            NULL,0,MD_INTERCEPT_TASK,&route);
         if (error==-E2BIG && registry) {
             const struct md_seccomp_route fallback=filter_service_route(gates,FILTER_SERVICE_GATES,0);
             error=md_seccomp_capture_prepare(&install->capture,md_memory_readonly_buffers(t->memory),
                 md_memory_readonly_base(t->memory),t->seccomp.policy,&program,
-                delegated,t->signals.host ? sizeof(delegated)/sizeof(*delegated) : 3,
-                MD_INTERCEPT_TASK,&fallback);
+                NULL,0,MD_INTERCEPT_TASK,&fallback);
         }
         free(gates);
         if (error==-EAGAIN) { retry_wait(t,RETRY_FILTER); return; }
@@ -892,6 +948,12 @@ void filter_install_progress(struct thread *t) {
     error=filter_listener_admit(t);
     if (error>0) return;
     if (error) { filter_install_fail(t,error); return; }
+    if (install->virtual_listener) {
+        error=selector_prepare(t,install->selectors,install->loan->number,MD_TASK_CALL_SECCOMP,
+            &t->execution.registers,filter_listener_selected);
+        if (error>0) return;
+        if (error) { filter_install_fail(t,error); return; }
+    }
     error=policy_sync_begin(t);
     if (error==-EAGAIN) { retry_wait(t,RETRY_FILTER); return; }
     if (error) { filter_install_fail(t,error); return; }

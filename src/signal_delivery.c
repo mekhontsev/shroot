@@ -53,6 +53,7 @@ static int realtime_event(struct md_signal_delivery *q,pid_t tid,int signal,int 
         struct md_signal_delivery_node *node=*at;
         info=node->info; *at=node->next; free(node);
         if (ptrace(PTRACE_SETSIGINFO,tid,NULL,&info)<0) return -errno;
+        *deliver=info.si_signo;
         return MD_SIGNAL_RESTORED;
     } else if (carrier) { *deliver=0; return MD_SIGNAL_CARRIER; }
     return MD_SIGNAL_NEW;
@@ -72,7 +73,9 @@ static int standard_hold(struct md_signal_delivery *q,const siginfo_t *info) {
         q->capture(q->capture_context,info,n->origin);
     }
     if (q->last) q->last->next=n; else q->first=n;
-    q->last=n; return 0;
+    q->last=n;
+    if (info->si_signo==SIGSTOP) q->stopping=1;
+    return 0;
 }
 int md_signal_delivery_hold(struct md_signal_delivery *q,const siginfo_t *info) {
     if (info->si_signo<=0 || info->si_signo>=MD_SIGRTMIN
@@ -83,6 +86,11 @@ int md_signal_delivery_hold(struct md_signal_delivery *q,const siginfo_t *info) 
 int md_signal_delivery_seccomp(struct md_signal_delivery *q,const siginfo_t *info) {
     if (info->si_signo!=SIGSYS || info->si_code!=SYS_SECCOMP) return -EINVAL;
     return standard_hold(q,info);
+}
+int md_signal_delivery_defer_stop(struct md_signal_delivery *q,const siginfo_t *info) {
+    if (info->si_signo<=0 || info->si_signo>=NSIG || info->si_signo==SIGKILL
+            || md_signal_synchronous(info)) return -EINVAL;
+    return info->si_signo>=MD_SIGRTMIN ? realtime_hold(q,info,1) : standard_hold(q,info);
 }
 int md_signal_delivery_generated(struct md_signal_delivery *q,const siginfo_t *info) {
     if (info->si_signo<=0 || info->si_signo>=MD_SIGRTMIN || info->si_signo==SIGKILL
@@ -105,14 +113,18 @@ int md_signal_delivery_retain(struct md_signal_delivery *q,pid_t tid,const sigin
      * a later opposite signal can then discard it in the kernel normally. */
     return info->si_signo;
 }
+static int carrier_signal(const struct md_signal_delivery_node *node) {
+    int signal=node->info.si_signo;
+    return signal==SIGSTOP || job_control(signal) ? SIGURG : signal;
+}
 static int carrier_mask(struct md_signal_delivery *q,pid_t tid) {
-    uint64_t mask=md_signal_blockable_mask() & ~(UINT64_C(1)<<(q->first->info.si_signo-1));
+    uint64_t mask=md_signal_blockable_mask() & ~(UINT64_C(1)<<(carrier_signal(q->first)-1));
     if (ptrace(PTRACE_SETSIGMASK,tid,(void *)sizeof(mask),&mask)<0) return -errno;
     return 0;
 }
 static int arm(struct md_signal_delivery *q,pid_t tid) {
     int error=carrier_mask(q,tid);
-    return error ? error : syscall(SYS_tkill,tid,q->first->info.si_signo)<0 ? -errno : 0;
+    return error ? error : syscall(SYS_tkill,tid,carrier_signal(q->first))<0 ? -errno : 0;
 }
 int md_signal_delivery_update_mask(struct md_signal_delivery *q,pid_t tid,uint64_t mask) {
     if (!q->active || !q->first) return -EINVAL;
@@ -164,18 +176,28 @@ int md_signal_delivery_publish(struct md_signal_delivery *q,pid_t tid,pid_t grou
 int md_signal_delivery_event(struct md_signal_delivery *q,pid_t tid,int signal,int *deliver) {
     if (signal>=MD_SIGRTMIN && signal<NSIG && (q->realtime || q->carriers[signal]))
         return realtime_event(q,tid,signal,deliver);
-    if (!q->active || signal!=q->first->info.si_signo) return MD_SIGNAL_NEW;
+    if (!q->active || signal!=carrier_signal(q->first)) return MD_SIGNAL_NEW;
     siginfo_t observed;
     if (ptrace(PTRACE_GETSIGINFO,tid,NULL,&observed)<0) return -errno;
     /* Standard carriers can coalesce with asynchronous kernel signals too. */
     if (md_signal_synchronous(&observed)) return MD_SIGNAL_NEW;
     struct md_signal_delivery_node *n=q->first;
+    /* Under RLIMIT_SIGPENDING exhaustion even tkill has no allocated siginfo:
+     * Linux reports SI_USER with zero sender. Do not invent an application
+     * delivery for that anonymous service carrier. */
+    int anonymous=observed.si_code==SI_USER && !observed.si_pid && !observed.si_uid;
+    if (signal!=n->info.si_signo && !anonymous
+            && !(observed.si_code==SI_TKILL && observed.si_pid==getpid())) {
+        int error=md_signal_delivery_hold(q,&observed);
+        if (error) return error;
+    }
     if (ptrace(PTRACE_SETSIGINFO,tid,NULL,&n->info)<0) return -errno;
-    *deliver=signal;
+    *deliver=n->info.si_signo;
+    if (*deliver==SIGSTOP) q->stopping=0;
     q->first=n->next; if (!q->first) q->last=NULL;
     if (n->origin) { free(q->child_origin); q->child_origin=n->origin; }
     free(n);
-    if (q->first) {
+    if (q->first && *deliver!=SIGSTOP) {
         /* Requeue this blocked signal and select the next inside the same
          * kernel get_signal invocation. Do not execute a userspace checkpoint:
          * it would discard the pending SA_RESTART decision. */

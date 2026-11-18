@@ -578,6 +578,9 @@ in one transaction. The source is not modified apart from normal read atime.
 Callers supply byte/entry limits. Traversal uses a heap-owned stack, one copy
 buffer and open directory FDs; no recursive import stack or SQLite work enters the guest.
 This offline operation is deliberately not exposed as a long-running RPC request.
+The backing directory is synchronized once before commit through the same batch
+owner as archive layers and overlay assembly. File data barriers and rollback on
+a failed directory synchronization remain mandatory.
 
 Regular data, permission bits, access/modification timestamps, directories and
 symlink text are preserved. Source device/inode pairs identify shared objects;

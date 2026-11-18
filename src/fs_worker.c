@@ -168,51 +168,66 @@ struct worker_runtime {
     struct md_provider_tree *sysfs, *devices;
     int listener;
 };
-static int runtime_open(struct md_fs_worker *w,struct worker_runtime *runtime) {
+static void startup_stage(struct md_fs_worker *w,const char **stage,int64_t *started,const char *next) {
+    if (w->statistics) {
+        int64_t now=md_event_now();
+        if (*stage) fprintf(stderr,"MD_WORKER_STARTUP pid=%d phase=%s ns=%lld next=%s\n",
+            getpid(),*stage,(long long)(now-*started),next);
+        *started=now;
+    }
+    *stage=next;
+}
+static int runtime_open(struct md_fs_worker *w,struct worker_runtime *runtime,
+        struct md_inode_statistics *stats,struct md_fs_statistics *rpc) {
     *runtime=(struct worker_runtime){.listener=-1};
     struct md_filesystem *fs=&runtime->fs;
-    const char *stage="inode store";
+    fs->statistics=rpc;
+    const char *stage=NULL;
+    int64_t started=0;
+    startup_stage(w,&stage,&started,"inode store");
     int error=md_inode_store_open(w->store,0,&fs->store);
-    if (!error) { stage="runtime directories"; error=md_inode_runtime_prepare(fs->store); }
-    if (!error && w->admit) { stage="image catalogue"; error=md_image_catalogue_open(fs->store,w->admit,&fs->images); }
+    if (!error && stats) md_inode_measure(fs->store,stats);
+    if (!error) { startup_stage(w,&stage,&started,"runtime directories"); error=md_inode_runtime_prepare(fs->store); }
+    if (!error && w->admit) { startup_stage(w,&stage,&started,"image catalogue"); error=md_image_catalogue_open(fs->store,w->admit,&fs->images); }
     fs->storage=&runtime->storage; fs->exchanges=w->exchanges;
     fs->cursors=w->cursors; fs->ipc_store=w->store;
-    if (!error) { stage="mount attachments"; error=md_fs_mounts_open(fs,w->attachments,w->attachment_count); }
+    if (!error) { startup_stage(w,&stage,&started,"mount attachments"); error=md_fs_mounts_open(fs,w->attachments,w->attachment_count); }
     /* Startup attachment creation belongs to this store owner, not PID 0.
      * Publish request authentication after the initial layout is prepared. */
     fs->tasks=w->tasks;
     if (!error) {
-        stage="resolver";
+        startup_stage(w,&stage,&started,"resolver");
         error=md_network_resolver_prepare(fs,w->network);
         if (error) fprintf(stderr,"Shroot resolver: %s; supply --dns IP or prepare /etc/resolv.conf\n",strerror(-error));
     }
     w->network=NULL;
-    if (!error) md_fs_render_prepare(fs);
-    if (!error) { stage="sysfs"; error=md_fs_sysfs_prepare(fs,&runtime->sysfs); }
-    if (!error) { stage="devices"; error=md_fs_devices_prepare(fs,w->input && w->input->endpoint,&runtime->devices); }
+    if (!error) { startup_stage(w,&stage,&started,"render"); md_fs_render_prepare(fs); }
+    if (!error) { startup_stage(w,&stage,&started,"sysfs"); error=md_fs_sysfs_prepare(fs,&runtime->sysfs); }
+    if (!error) { startup_stage(w,&stage,&started,"devices"); error=md_fs_devices_prepare(fs,w->input && w->input->endpoint,&runtime->devices); }
     fs->devices=runtime->devices;
-    if (!error) { stage="procfs"; error=md_fs_proc_prepare(fs); }
+    if (!error) { startup_stage(w,&stage,&started,"procfs"); error=md_fs_proc_prepare(fs); }
     if (!error) {
-        stage="device events";
+        startup_stage(w,&stage,&started,"device events");
         w->device_events=md_device_events_new();
         if (!w->device_events) error=-errno;
     }
     fs->device_events=w->device_events;
-    if (!error) { stage="input"; error=md_input_session_start(fs,w->input,w->device_events,runtime->sysfs,&runtime->input); }
+    if (!error) { startup_stage(w,&stage,&started,"input"); error=md_input_session_start(fs,w->input,w->device_events,runtime->sysfs,&runtime->input); }
     w->input=NULL;
     if (!error && w->inherited && w->inherited->count) {
-        stage="inherited IPC";
+        startup_stage(w,&stage,&started,"inherited IPC");
         struct md_ipc_credentials *authority=NULL;
         error=md_fs_ipc_authority(fs,&authority);
         if (!error) error=md_ipc_credentials_inherit(authority,w->inherited);
     }
     w->inherited=NULL;
     if (!error) {
-        stage="filesystem listener";
+        startup_stage(w,&stage,&started,"filesystem listener");
         runtime->listener=md_fs_listen(w->endpoint);
         if (runtime->listener<0) error=runtime->listener;
     }
     if (error) fprintf(stderr,"Shroot filesystem startup (%s): %s\n",stage,strerror(-error));
+    startup_stage(w,&stage,&started,error ? "failed" : "ready");
     return error;
 }
 static void retire_work(struct md_fs_worker *w,int error) {
@@ -250,15 +265,14 @@ static void *run(void *context) {
     sigemptyset(&mask); sigaddset(&mask,SIGPIPE);
     pthread_sigmask(SIG_BLOCK,&mask,NULL);
     struct worker_runtime runtime;
-    int error=runtime_open(w,&runtime);
+    struct md_inode_statistics stats={0};
+    struct md_fs_statistics rpc={0};
+    int error=runtime_open(w,&runtime,w->statistics ? &stats : NULL,w->statistics ? &rpc : NULL);
     pthread_mutex_lock(&w->lock);
     w->mounts=md_mount_namespace_retain(runtime.fs.mounts); w->error=error;
     pthread_mutex_unlock(&w->lock);
     md_event_signal(w->ready);
-    struct md_inode_statistics stats={0};
-    struct md_fs_statistics rpc={0};
     if (!error) {
-        if (w->statistics) md_inode_measure(runtime.fs.store,&stats);
         struct md_fs_work_source source={.fd=w->wake.reader,.wakeup=w->wakeup,.context=w,.ready=run_ready,
             .notification_fd=notification_fd,.notification=notification,.prepare_wait=prepare_wait,.paused=paused};
         error=md_fs_serve(&runtime.fs,runtime.listener,w->stop,5000,w->statistics ? &rpc : NULL,&source);

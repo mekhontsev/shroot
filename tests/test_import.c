@@ -74,7 +74,9 @@ static void semantics(void) {
     if(!aliases) { CHECK(errno==EACCES || errno==EPERM); puts("LIMIT source hard links denied by host policy; physical alias import requires another test host"); }
     else CHECK(linkat(src,"sym",src,"sym2",0)==0);
     struct md_inode_store *s=store(dstpath); struct md_inode_import_result result;
+    struct md_inode_statistics stats={0}; md_inode_measure(s,&stats);
     CHECK(md_inode_import_tree(s,src,&limits,&result)==0);
+    CHECK(stats.sync_directory.calls==1 && stats.sync_object.calls>=2);
     CHECK(result.entries==(aliases?7U:5U) && result.bytes==16 && result.aliases==(aliases?2U:0U));
     imported(s,src,"a"); imported(s,src,"d/inside");
     char target[8]; CHECK(md_inode_readlink(s,-1,"sym",target,sizeof(target))==1 && target[0]=='a');
@@ -103,7 +105,9 @@ static void fifo_import(void) {
     }
     CHECK(!fchmodat(src, "pipe", 0640, 0));
     struct md_inode_store *s = store(dstpath); struct md_inode_import_result result;
-    CHECK(!md_inode_import_tree(s, src, &limits, &result) && result.entries == 1 && !result.bytes);
+    int error = md_inode_import_tree(s, src, &limits, &result);
+    if (error) fprintf(stderr, "FIFO import: %s (%d)\n", strerror(-error), error);
+    CHECK(!error && result.entries == 1 && !result.bytes);
     struct stat st; CHECK(!md_inode_stat(s, -1, "pipe", 0, &st));
     CHECK(S_ISFIFO(st.st_mode) && (st.st_mode & 0777) == 0640 && st.st_size == 0);
     int fd = md_inode_open(s, -1, "pipe", O_RDWR | O_NONBLOCK, 0); CHECK(fd >= 0);

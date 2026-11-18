@@ -17,12 +17,38 @@ static inline enum md_entry_owner md_entry_request_owner(unsigned kind) {
 static inline atomic_uint *md_entry_owner_awake(struct md_entry_channel *c,enum md_entry_owner owner) {
     return owner==MD_ENTRY_SUPERVISOR_OWNER ? &c->control_awake : &c->awake;
 }
+static inline int md_entry_fd_pending(unsigned state) {
+    return state==MD_ENTRY_FD_REQUEST || state==MD_ENTRY_FD_RETIRING;
+}
 /* Either publication observes a parked owner or parking observes the request.
  * The returned wake obligation must be fulfilled by the caller's transport. */
 static inline int md_entry_publish_request(struct md_entry_channel *c,unsigned state) {
     atomic_uint *awake=md_entry_owner_awake(c,md_entry_request_owner(c->call.reserved));
-    atomic_store_explicit(&c->state,state,memory_order_seq_cst);
+    if (state==MD_ENTRY_FD_REQUEST) {
+        /* Withdrawal must preserve an older effect's retirement. Its owner
+         * may finish concurrently with this next request's publication. */
+        unsigned previous=atomic_load_explicit(&c->state,memory_order_acquire);
+        do {
+            state=previous==MD_ENTRY_RETIRING ? MD_ENTRY_FD_RETIRING : MD_ENTRY_FD_REQUEST;
+        } while (!atomic_compare_exchange_weak_explicit(&c->state,&previous,state,
+            memory_order_seq_cst,memory_order_acquire));
+    } else atomic_store_explicit(&c->state,state,memory_order_seq_cst);
     return !atomic_load_explicit(awake,memory_order_seq_cst);
+}
+static inline int md_entry_withdraw_fd(struct md_entry_channel *c) {
+    unsigned pending=atomic_load_explicit(&c->state,memory_order_acquire);
+    while (md_entry_fd_pending(pending)) {
+        unsigned previous=pending==MD_ENTRY_FD_RETIRING ? MD_ENTRY_RETIRING : MD_ENTRY_IDLE;
+        if (atomic_compare_exchange_weak_explicit(&c->state,&pending,previous,
+                memory_order_acq_rel,memory_order_acquire)) {
+            /* Only an unadmitted sequence is reusable. Invalidate captures
+             * before a later request can publish that sequence again. */
+            c->input.sequence=0;
+            --c->sequence;
+            return 1;
+        }
+    }
+    return 0;
 }
 static inline int md_entry_publish_response(struct md_entry_channel *c,unsigned state) {
     atomic_store_explicit(&c->state,state,memory_order_seq_cst);
@@ -48,10 +74,12 @@ static inline int md_entry_native_retire(struct md_entry_channel *c,uint64_t seq
     unsigned offered=MD_ENTRY_NATIVE;
     if (atomic_compare_exchange_strong_explicit(&c->state,&offered,MD_ENTRY_RESPONSE,
             memory_order_seq_cst,memory_order_acquire)) return 1;
-    if (offered!=MD_ENTRY_RETIRING && offered!=MD_ENTRY_REQUEST && offered!=MD_ENTRY_FD_REQUEST) return -EPROTO;
-    unsigned retiring=MD_ENTRY_RETIRING;
-    atomic_compare_exchange_strong_explicit(&c->state,&retiring,MD_ENTRY_IDLE,
-        memory_order_release,memory_order_relaxed);
+    while (offered==MD_ENTRY_RETIRING || offered==MD_ENTRY_FD_RETIRING) {
+        unsigned next=offered==MD_ENTRY_RETIRING ? MD_ENTRY_IDLE : MD_ENTRY_FD_REQUEST;
+        if (atomic_compare_exchange_weak_explicit(&c->state,&offered,next,
+                memory_order_release,memory_order_relaxed)) return 0;
+    }
+    if (offered!=MD_ENTRY_REQUEST) return -EPROTO;
     return 0;
 }
 #endif

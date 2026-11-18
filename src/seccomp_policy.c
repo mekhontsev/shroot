@@ -147,14 +147,14 @@ int md_seccomp_policy_internal_gates(const struct md_seccomp_policy *p,
 int md_seccomp_policy_bind_entry(struct md_seccomp_policy *p,uint64_t image,
         const struct md_seccomp_gate *gates,size_t count) {
     assert(p && !p->users && !p->entry_image && !p->internal_gate_count);
-    if (!image || (count && !gates) || count>SIZE_MAX/sizeof(*gates)) return -EINVAL;
+    if ((count && !gates) || count>SIZE_MAX/sizeof(*gates)) return -EINVAL;
     if (count && (!p->parent || md_seccomp_policy_internal_gates(p->parent,gates,count))) {
         p->internal_gates=malloc(count*sizeof(*gates));
         if (!p->internal_gates) return -ENOMEM;
         memcpy(p->internal_gates,gates,count*sizeof(*gates));
         p->internal_gate_count=count;
     }
-    if (!p->parent || md_seccomp_policy_entry_compatible(p->parent,image)) p->entry_image=image;
+    if (image && (!p->parent || md_seccomp_policy_entry_compatible(p->parent,image))) p->entry_image=image;
     p->entry_portable=p->entry_image && !p->uses_ip && (!p->parent || p->parent->entry_portable);
     return 0;
 }
@@ -309,7 +309,8 @@ static int policy_route(const struct md_seccomp_policy *p, const uint32_t *calls
 }
 
 static unsigned gate_size(const struct md_seccomp_gate *gate) {
-    return (gate->number>=0 ? 2 : 0)+(gate->first==gate->end ? 5 : 11);
+    return (gate->number>=0 ? 2 : 0)+(gate->first==gate->end ? 5
+        : (gate->first>>32)==(gate->end>>32) ? 6 : 11);
 }
 static unsigned gate_write(struct sock_filter *code,const struct md_seccomp_gate *gate) {
     unsigned size=gate_size(gate),used=0;
@@ -324,6 +325,15 @@ static unsigned gate_write(struct sock_filter *code,const struct md_seccomp_gate
             BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)(gate->first>>32),0,3),
             BPF_STMT(BPF_LD|BPF_W|BPF_ABS,ip),
             BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)gate->first,0,1),
+            BPF_STMT(BPF_RET|BPF_K,gate->decision)};
+        memcpy(code+used,match,sizeof(match));
+    } else if ((gate->first>>32)==(gate->end>>32)) {
+        const struct sock_filter match[]={
+            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,ip+4),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,(uint32_t)(gate->first>>32),0,4),
+            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,ip),
+            BPF_JUMP(BPF_JMP|BPF_JGE|BPF_K,(uint32_t)gate->first,0,2),
+            BPF_JUMP(BPF_JMP|BPF_JGE|BPF_K,(uint32_t)gate->end,1,0),
             BPF_STMT(BPF_RET|BPF_K,gate->decision)};
         memcpy(code+used,match,sizeof(match));
     } else {
@@ -372,6 +382,56 @@ static unsigned constant_allow_prefix(struct sock_filter *out,const struct md_se
     }
     return used;
 }
+static unsigned reusable_allow_prefix(const struct sock_filter *code,unsigned length,
+        struct md_seccomp_cache *allow) {
+    unsigned cut=0;
+    while (cut<length) {
+        const struct sock_filter *at=code+cut;
+        if ((at->code==(BPF_LD|BPF_W|BPF_ABS)
+                && (at->k==offsetof(struct seccomp_data,nr) || at->k==offsetof(struct seccomp_data,arch)))
+                || at->code==(BPF_JMP|BPF_JA)
+                || at->code==(BPF_JMP|BPF_JEQ|BPF_K)
+                || at->code==(BPF_JMP|BPF_JGT|BPF_K)
+                || at->code==(BPF_JMP|BPF_JGE|BPF_K)
+                || (at->code==(BPF_RET|BPF_K) && at->k==SECCOMP_RET_ALLOW)) ++cut;
+        else break;
+    }
+    /* The prefix is a validated, forward-only nr/arch dispatch. Its single
+     * fallthrough reloads A; X and scratch retain their original entry state. */
+    if (!cut || cut==length || code[cut].code!=(BPF_LD|BPF_W|BPF_ABS)) return 0;
+    unsigned char origins[BPF_MAXINSNS+1]={0}; origins[0]=4;
+    for (unsigned i=0;i<cut;++i) {
+        const struct sock_filter *at=code+i;
+        unsigned origin=origins[i],yes=i+1,no=i+1;
+        if (at->code==(BPF_RET|BPF_K)) continue;
+        if (at->code==(BPF_LD|BPF_W|BPF_ABS))
+            origin=at->k==offsetof(struct seccomp_data,nr) ? 1 : 2;
+        else if (at->code==(BPF_JMP|BPF_JA)) {
+            if (at->k>=cut-i) return 0;
+            yes=no=i+1+at->k;
+        } else {
+            /* Above the cache range all unsigned syscall numbers must follow
+             * the same path; all nonnative architectures must do likewise. */
+            if (origin==1 ? at->k>=64*MD_SECCOMP_CACHE_WORDS
+                    : origin!=2 || at->code!=(BPF_JMP|BPF_JEQ|BPF_K) || at->k!=AUDIT_ARCH_AARCH64)
+                return 0;
+            yes+=at->jt; no+=at->jf;
+        }
+        if (yes>cut || no>cut) return 0;
+        origins[yes]|=origin; origins[no]|=origin;
+    }
+    *allow=(struct md_seccomp_cache){0};
+    struct sock_fprog prefix={cut,(struct sock_filter *)code};
+    for (unsigned arch=0;arch<2;++arch) for (unsigned nr=0;nr<=64*MD_SECCOMP_CACHE_WORDS;++nr) {
+        uint32_t result;
+        int error=md_seccomp_program_constant(&prefix,nr,arch ? AUDIT_ARCH_AARCH64 : 0,&result);
+        /* Reaching cut is an incomplete program here, not an ALLOW decision. */
+        if (error==-EINVAL) continue;
+        if (error || result!=SECCOMP_RET_ALLOW || !arch || nr==64*MD_SECCOMP_CACHE_WORDS) return 0;
+        allow->allow[nr/64]|=UINT64_C(1)<<(nr%64);
+    }
+    return cut;
+}
 static int gates_delegate(const struct md_seccomp_route *route,const uint32_t *calls,size_t count,uint16_t cookie) {
     if (!route->entry_first || !route->delegation_pc || !count || !calls) return 0;
     for (size_t i=0;i<count;++i) {
@@ -392,7 +452,7 @@ int md_seccomp_policy_route(const struct md_seccomp_policy *p,const uint32_t *ca
         uint16_t cookie,struct sock_filter *out,size_t capacity,const struct md_seccomp_route *route) {
     if (count>(BPF_MAXINSNS-2U)/2U) return -E2BIG;
     if (route && (route->internal_gate_count>route->gate_count
-            || (route->internal_gate_count && (!route->entry_first || !route->entry_image)))) return -EINVAL;
+            || (route->internal_gate_count && !route->entry_first))) return -EINVAL;
     if (!route || !route->gate_count) return policy_route(p,calls,count,cookie,out,capacity,route);
     if (!out || !route->gates || route->instruction_pointer) return -EINVAL;
     unsigned gates=0;
@@ -423,13 +483,22 @@ int md_seccomp_policy_route(const struct md_seccomp_policy *p,const uint32_t *ca
         if (delegated) for (size_t i=0;i<count;++i)
             if (calls[i]<64*MD_SECCOMP_CACHE_WORDS)
                 cache.allow[calls[i]/64]&=~(UINT64_C(1)<<(calls[i]%64));
-        unsigned prefix=constant_allow_prefix(NULL,&cache)+gates+1;
+        struct md_seccomp_cache residual;
+        unsigned reused=reusable_allow_prefix(code,used,&residual),tail=0;
+        if (reused) {
+            for (unsigned i=0;i<MD_SECCOMP_CACHE_WORDS;++i) residual.allow[i]&=~cache.allow[i];
+            tail=constant_allow_prefix(NULL,&residual);
+            if (tail>reused) reused=tail=0;
+        }
+        unsigned prefix=constant_allow_prefix(NULL,&cache)+gates+(reused ? tail : 1);
+        used-=reused;
         int error=prefix>BPF_MAXINSNS-used ? -E2BIG : used+prefix>capacity ? -ENOSPC : 0;
         if (error) { free(code); return error; }
         unsigned at=constant_allow_prefix(out,&cache);
         for (size_t n=0;n<route->gate_count;++n) at+=gate_write(out+at,route->gates+n);
-        out[at++]=(struct sock_filter)BPF_STMT(BPF_ALU|BPF_AND|BPF_K,0);
-        memcpy(out+at,code,used*sizeof(*code)); free(code);
+        if (reused) at+=constant_allow_prefix(out+at,&residual);
+        else out[at++]=(struct sock_filter)BPF_STMT(BPF_ALU|BPF_AND|BPF_K,0);
+        memcpy(out+at,code+reused,used*sizeof(*code)); free(code);
         return (int)(at+used);
     }
     for (unsigned i=0;i<(unsigned)length;++i) {

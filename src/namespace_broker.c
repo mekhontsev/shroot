@@ -95,7 +95,7 @@ struct md_namespace_broker {
     void (*entry)(pid_t,struct md_entry_channel *);
     md_control_factory control;
     md_control_query control_query;
-    int (*native_observe)(pid_t,struct md_entry_native *);
+    int (*native_observe)(pid_t,struct md_entry_native *,int);
     int (*retire)(const struct md_broker_retirement *);
     struct md_resource_wakeup *wakeup;
     struct operation *all, *free;
@@ -351,17 +351,26 @@ int md_broker_hold_event(struct md_namespace_broker *b,pid_t pid,int status,cons
     int held=0;
     if (t) task_park(t);
     if (t && t->native_borrowed) { pthread_mutex_unlock(&b->lock); return 0; }
-    if (t) {
+    if (t && t->held) {
+        /* SIGKILL can advance a task that is already stopped. Its terminal
+         * event supersedes the retained boundary, including a ready event
+         * whose worker operation has retired. Keep the existing event lease. */
+        if (WIFSTOPPED(status) && (unsigned)status>>16!=PTRACE_EVENT_EXIT) {
+            pthread_mutex_unlock(&b->lock); return -EBUSY;
+        }
+        t->status=status; t->usage=usage ? *usage : (struct rusage){0}; held=1;
+    } else if (t) {
         if (t->operation || t->control_active) {
             if (t->operation && t->operation->native_plan==2) {
-                int error=b->native_observe ? b->native_observe(pid,&t->channel->native) : -ENOTSUP;
+                int terminal=!WIFSTOPPED(status) || (unsigned)status>>16==PTRACE_EVENT_EXIT
+                    || (unsigned)status>>16==PTRACE_EVENT_EXEC;
+                int error=b->native_observe ? b->native_observe(pid,&t->channel->native,terminal) : -ENOTSUP;
                 if (error==-ESRCH) {
                     atomic_store_explicit(&t->channel->native.state,MD_NATIVE_UNKNOWN,memory_order_release);
                     error=0;
                 }
                 if (error) { pthread_mutex_unlock(&b->lock); return error; }
             }
-            if (t->held) { pthread_mutex_unlock(&b->lock); return -EBUSY; }
             t->held=1; ++t->borrowed; ++b->held_events;
             t->status=status; t->usage=usage ? *usage : (struct rusage){0}; held=1;
         } else {
@@ -403,7 +412,7 @@ void md_broker_completion_handler(struct md_namespace_broker *b,void (*recover)(
 }
 void md_broker_control_factory(struct md_namespace_broker *b,md_control_factory factory) { b->control=factory; }
 void md_broker_control_query(struct md_namespace_broker *b,md_control_query query) { b->control_query=query; }
-void md_broker_native_observer(struct md_namespace_broker *b,int (*observe)(pid_t,struct md_entry_native *)) {
+void md_broker_native_observer(struct md_namespace_broker *b,int (*observe)(pid_t,struct md_entry_native *,int)) {
     b->native_observe=observe;
 }
 void md_broker_retirement_handler(struct md_namespace_broker *b,int (*retire)(const struct md_broker_retirement *)) {
@@ -719,7 +728,7 @@ static int prepare_call(struct md_filesystem *fs, struct operation *op, size_t c
     /* NULL path operands are not descriptor operations. Preserve task-affine
      * fault handling if direct capture cannot establish the complete input. */
     if (q->data.nr!=SYS_fstat && q->data.nr!=SYS_getdents64 && q->data.nr!=SYS_fstatfs
-            && q->data.nr!=SYS_fchmod && q->data.nr!=SYS_fchown && q->data.nr!=SYS_utimensat
+            && !md_fs_syscall_descriptor_effect(q->data.nr,arguments[1])
             && op->request.operation!=MD_FS_FXATTR && !op->request.path[0]) return 0;
     if ((op->syscall.operands==2 || q->data.nr==SYS_symlinkat) && !op->request.path[1]) return 0;
     if (op->syscall.copy==MD_FS_COPY_XATTR) {
@@ -816,7 +825,7 @@ static int capture(struct operation *op) {
             else *fd=duplicate(op->task,q->pid,base);
         }
         if (*fd<0 && borrowed<0) return 0;
-        if (!path && (q->data.nr==SYS_fchmod || q->data.nr==SYS_fchown || q->data.nr==SYS_utimensat)) {
+        if (!path && md_fs_syscall_descriptor_effect(q->data.nr,q->data.args[1])) {
             int flags=fcntl(*fd,F_GETFL);
             if (flags<0) return -errno;
             if (flags&O_PATH) return -EBADF;
@@ -926,6 +935,17 @@ static int native_descriptor(struct operation *op) {
     unsigned long args[6]; memcpy(args,op->notification.data.args,sizeof(args));
     int error=md_fd_mutation_prepare(op->context.task.files,op->notification.data.nr,args,&op->mutation);
     return error ? error : native_offer(op);
+}
+static int native_metadata(struct operation *op) {
+    const struct seccomp_data *call=&op->notification.data;
+    if (!op->channel || !md_fs_syscall_descriptor_effect(call->nr,call->args[1])) return 0;
+    struct md_fd_native native;
+    /* Retained provenance and the table turn replace a second OFD capture,
+     * not policy checks. Provider/inode metadata and readonly mounts retain
+     * normal dispatch. The actual syscall validates O_PATH, args and access. */
+    if (!md_fd_origins_native(&op->order,(int)call->args[0],&native)
+            || !md_fs_anchor_native_metadata(native.origin)) return 0;
+    return 1;
 }
 /* Zero requests task-affine handling, one means delivered/cancelled. */
 static int reply(struct operation *op, const void *data) {
@@ -1226,6 +1246,15 @@ static int perform(struct md_namespace_broker *b, struct operation *op, int prep
             if (result==1) return recycle(b,op);
             if (result<0) { cooperative_reply(op,MD_ENTRY_COMPLETED,result); return recycle(b,op); }
             goto delegate;
+        }
+        if (native_metadata(op)) {
+            /* In particular, host fsync must not retain a previous inode
+             * operation's store gate while its kernel IO is in progress. */
+            int error=window ? md_execution_window_end(window) : 0;
+            if (error) return error;
+            int effect=native_offer(op);
+            if (effect<0) return effect;
+            op->waiting=b->waiting; b->waiting=op; return 0;
         }
         int cwd=0;
         for (unsigned i=0;i<op->syscall.operands;++i)
@@ -1708,7 +1737,7 @@ static int cooperative_progress(struct md_namespace_broker *b,struct md_filesyst
         while (t && left && (!channel_available(t)
                 || atomic_load_explicit(&t->channel->state,memory_order_acquire)!=MD_ENTRY_REQUEST
                 || control_request_pending(t))) {
-            native_pending|=atomic_load_explicit(&t->channel->state,memory_order_acquire)==MD_ENTRY_FD_REQUEST;
+            native_pending|=md_entry_fd_pending(atomic_load_explicit(&t->channel->state,memory_order_acquire));
             effect_pending|=t->operation && t->operation->native_plan==2;
             unsigned state=atomic_load_explicit(&t->channel->state,memory_order_acquire);
             /* A supervisor-owned wait cannot continue filesystem work until

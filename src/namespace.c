@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "namespace_internal.h"
 #include "native_identity.h"
+#include "host_open.h"
 #include "proc_paths.h"
 #include "fs_rpc.h"
 #include "fs_path_call.h"
@@ -524,7 +525,10 @@ __attribute__((noinline)) static long path_metadata(const struct md_fs *fs, long
         r=metadata_request(fs,nr,operand,first,a[2],a[3],flags&~AT_EMPTY_PATH,&out);
         if (r==-EREMOTE) return md_namespace_host_call(fs,fs->image ? fs->image->executable_path : "",
             nr,a,1,out.data,out.result.proc_namespace);
-        if (r==-EXDEV && !operand.capture.path && !*first) return md_raw(nr,a[0],a[1],a[2],a[3],a[4],a[5]);
+        if (r==-EXDEV && !operand.capture.path && !*first) {
+            if (nr==SYS_fchmodat2) return md_host_chmod_fd(base,a[2]);
+            return md_raw(nr,a[0],a[1],a[2],a[3],a[4],a[5]);
+        }
         return r;
     }
     case SYS_statfs: {

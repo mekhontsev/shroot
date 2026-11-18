@@ -62,9 +62,12 @@ static void cancel_collected(void) {
     puts("PASS collected cancellation: terminal batch drained before blocking reap");
 }
 int main(int argc,char **argv) {
+    setvbuf(stdout,NULL,_IOLBF,0);
     int idle=argc==2 && !strcmp(argv[1],"--idle");
     int small=argc==2 && !strcmp(argv[1],"--small");
-    assert(argc==1 || idle || small);
+    int cancel=argc==2 && !strcmp(argv[1],"--cancel");
+    int live=argc==2 && !strcmp(argv[1],"--live");
+    assert(argc==1 || idle || small || cancel || live);
     enum { CAPACITY=388 };
     unsigned hot=idle || small ? 4 : 48, total=idle ? CAPACITY : hot, requests=idle || small ? 2048 : 128;
     sigset_t mask;
@@ -78,6 +81,9 @@ int main(int argc,char **argv) {
     struct timespec started,ended;
     assert(!clock_gettime(CLOCK_MONOTONIC,&started));
     alarm(30);
+    if (cancel) {
+        cancel_collected(); alarm(0); close(fd); return 0;
+    }
     int gate[2]; assert(!pipe(gate));
     for (unsigned i=0;i<total;i++) {
         children[i]=fork(); assert(children[i]>=0);
@@ -93,7 +99,8 @@ int main(int argc,char **argv) {
     struct md_task_wait state={0};
     struct md_task_wait_member members[CAPACITY]={0};
     for (unsigned i=0;i<total;++i) md_task_wait_track(&state,&members[i],children[i]);
-    unsigned exited=0, stops=0, empty=0;
+    printf("READY live wait: hot=%u total=%u\n",hot,total);
+    unsigned exited=0, stops=0, empty=0, initialized=0;
     while (exited<hot) {
         struct signalfd_siginfo info[8];
         ssize_t bytes;
@@ -131,12 +138,17 @@ int main(int argc,char **argv) {
             children[i]=0; exited++; continue;
         }
         assert(WIFSTOPPED(status));
-        if (!seen[i]) assert(!ptrace(PTRACE_SETOPTIONS,pid,0,
-            PTRACE_O_TRACESYSGOOD|PTRACE_O_EXITKILL));
+        if (!seen[i]) {
+            assert(!ptrace(PTRACE_SETOPTIONS,pid,0,PTRACE_O_TRACESYSGOOD|PTRACE_O_EXITKILL));
+            if (++initialized==total) printf("READY initial child stops: children=%u stops=%u\n",total,stops);
+        }
         seen[i]++; stops++;
+        if (!(stops%2048)) printf("READY wait progress: stops=%u calls=%u general=%u directed=%u misses=%u\n",
+            stops,calls,general,directed,misses);
         assert(!ptrace(i<hot ? PTRACE_SYSCALL : PTRACE_CONT,pid,0,0));
     }
     assert(stops>=hot*requests*2);
+    printf("PASS live syscall stops: children=%u stops=%u\n",exited,stops);
     if (idle) {
         for (unsigned i=hot;i<total;++i) assert(!kill(children[i],SIGKILL));
         for (unsigned i=hot;i<total;++i) {
@@ -146,7 +158,7 @@ int main(int argc,char **argv) {
         }
     }
     close(gate[0]); close(gate[1]);
-    cancel_collected();
+    if (argc==1) cancel_collected();
     alarm(0); close(fd);
     assert(!clock_gettime(CLOCK_MONOTONIC,&ended));
     double elapsed=ended.tv_sec-started.tv_sec+(ended.tv_nsec-started.tv_nsec)/1e9;

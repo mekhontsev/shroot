@@ -60,6 +60,11 @@ original PC with all arguments intact. The saved signal, siginfo, registers and
 mask are restored at an owned checkpoint, never in a handler's replacement context.
 No additional stop, ticket or ioctl is added to uninterrupted metadata reads.
 Directory cursors and mutating operations cannot use this replay path.
+An original guest TRACE or USER_NOTIF decision also excludes transparent replay:
+its debugger/listener may deliberately wait, so that wait retains signal
+interruption and SA_RESTART. The decision uses the original SVC address and
+arguments, not a borrowed service frame. A retry that yields to another
+continuation restores that same replay context before resuming.
 
 ### Image Preparation
 
@@ -118,6 +123,10 @@ the kernel. `MD_DOMAIN_KERNEL_CALLS` and `MD_DOMAIN_KERNEL_ARGUMENTS` describe
 additional calls requiring no adaptation or observation in any guest domain.
 The domain checker and seccomp filter consume these same definitions. Argument
 predicates compare the full 64-bit value; other commands retain the dispatcher.
+POSIX/OFD lock installation and `flock` stay in the calling kernel task, including
+blocking waits and interruption. They need no descriptor publication or private
+adapter round trip; application filters and debugger syscall observation still
+apply. PID-returning lock queries retain the ordinary dispatcher.
 `MD_DOMAIN_FD_CALLS` and `MD_DOMAIN_FD_ARGUMENTS` separately select short native
 descriptor mutations whose origins need ordered observation. Their fcntl command
 is normalized to the kernel's 32-bit argument. Close, dup/dup3, close_range and
@@ -139,10 +148,12 @@ lazy entry evaluates the original call in the shared interpreter instead.
 Logical credentials,
 root changes, filter installation and dumpability changes retain their observers.
 Watch descriptors install bounded FD-class read selectors lazily; reads in
-unselected classes stay native until an application installs its own filter.
-Before that irreversible boundary, a single group-wide selector covers future
-typed descriptors without later seccomp calls. The application filter itself
-retains its application-site denials. Kernel-object identity distinguishes watch
+unselected classes stay native, including after single-threaded or synchronized
+application-filter installation. Stable service gates admit later selectors
+without weakening application-site denials. Before a thread-local filter splits
+a live group's policy, group-wide selectors cover future typed descriptors so
+later installation cannot spread the private policy through TSYNC.
+Kernel-object identity distinguishes watch
 readers from ordinary descriptors sharing a class. Selected reads retain their
 original signal context while the worker waits for records; protected readers
 use task-affine copying and a native readiness wait. Filter installation ownership is separate from
@@ -184,6 +195,10 @@ injecting guest clock syscalls or querying foreign process limits on every poll.
 In Base, when mixed-table classification finds only native descriptors in the selected
 vector, it retires the input buffer and resumes the original wait directly;
 there is no output to copy or intermediate adapter acknowledgement.
+Resident entry makes the same terminal-native decision once its service gates
+are admitted and no logical temporary mask is needed. Classification releases
+its buffer and readiness owner; the native journal retains signal/restart
+semantics using the original arguments, including the timeout pointer.
 Short ppoll vectors can be classified directly from an ordered snapshot, without
 entering the adapter. Zero-time native epoll waits use the same provider predicate
 as the full path; queues preparing a virtual provider cannot take this shortcut.
@@ -288,11 +303,25 @@ kernel skip state independently of register edits and stop-decoder ownership,
 including explicit caller-requested SYSEMU. Injection drains that skipped exit before executing the
 borrowed call, then reconstructs an emulated entry without replaying guest IO.
 Ordinary data IO retains its native path.
+A sequence owner can collect a completed noninterruptible native effect while
+retaining its shielded borrowed exit. Further effects reuse that custody; the
+original registers, signal mask and syscall boundary are restored once, before
+releasing admission, lending the task or returning to the application. A collected
+result cannot resume the task directly. Interruptible effects and original
+restart recovery retain full restoration. Typed syscall-info observations supply
+entry arguments, PC and exit results; full register reads are reserved for actual
+register mutation or context recovery. Signal control uses this same sequence
+owner, including protected-copy fallback and consumed notification entries.
 Parked signal waits release scratch, memory and file-table turns and can lend
 their exact task boundary to protected proc inspection. Their existing decoder
 suspension remains owned by the wait. A service interrupt rechecks the wait with
 its original deadline; completed signal consumption and genuine application
 interruption retain their ordinary results.
+Zero-time signal probes retain their admitted scratch and memory turn instead
+of preparing a parked wait. A scalar signalfd read with only native signals
+first checks for a ready record under its exact descriptor turn; only an empty
+queue needs an O_NONBLOCK query. Vector validation, logical signal priority,
+partial reads and blocking waits retain the same signal-operation owner.
 Deferred events retain their captured accounting across debugger attachment
 changes; replay neither queries it again nor inherits another event's values.
 For more than four members, kernel collection checks one round-robin TID on two
@@ -310,7 +339,8 @@ Membership is updated at task admission/retirement, without a full task scan.
 Private mapping/descriptor helpers and deferred FIFO-open children belong to
 the same collection ring from confirmed birth through terminal reaping. They
 do not acquire guest task identities or depend on the general scan for progress.
-The signal source is refreshed when its hint queue is empty. While shared-memory
+The shared readiness dispatcher refreshes signal hints within its event-count
+budget; kernel-event collection does not repeat that signalfd read. While shared-memory
 progress guarantees another event-loop turn, a directed miss retains the discovery
 budget instead of immediately scanning the entire child list. A general wait still
 runs at the budget boundary and before parking without another guaranteed turn.
@@ -321,8 +351,11 @@ before resuming any of them. This prevents a hot child from immediately
 reoccupying the kernel list head while the same batch is being collected.
 The collector owns each status until delivery, including its original accounting;
 membership changes and new signals cannot discard an already collected event.
-Directed hints remain the first path: repeatedly draining the full child list
-is expensive when a desktop has many sleeping threads.
+Directed hints are preferred when collection is sparse: repeatedly draining the
+full child list is expensive when a desktop has many sleeping threads. An actual
+empty general wait after several collected statuses selects bounded batching
+for the next burst. A full or sparse batch restores directed discovery; the
+preference never substitutes for an empty-queue observation or a new signal.
 Group exit can replace an already collected seccomp or syscall-entry stop with
 a terminal stop even when ptrace still succeeds. An inconsistent protocol event
 therefore checks the current stop's exact signal information before rejecting it.
@@ -832,11 +865,21 @@ domain; the domain policy and gate share the explicit list. External calls still
 enter their adapters after guest-policy admission. When the entire installed
 chain admits the runtime image, owned service gates precede the guest-policy
 body in the kernel mirror. The internal transport does not repeat the original
-call's policy evaluation. Unproven inherited gates retain kernel admission;
+call's policy evaluation. One bootstrap-code ALLOW range leaves carrier
+dispatch, cookies and notification-listener ownership in the base filter;
+application filters do not duplicate that dispatch. Dynamic SVC pools retain
+their separate admitted TRACE ranges. Repeated routing reuses a proven
+number/architecture-only ALLOW prefix instead of accumulating copies.
+Unproven inherited gates retain kernel admission;
 Android's inherited filters apply in either case.
 Internal fstat at the same gate reads native descriptor metadata directly; it
 does not request logical inode or set-ID metadata. Application fstat retains the
 namespace and image-catalogue path.
+Admitted native chmod/chown, timestamps and filesystem synchronization also use
+that exact gate without a second stop. The filesystem owner has already checked
+the logical target and mount policy; these effects do not change descriptor
+slots or task state. Original application calls still enter their normal owners,
+and foreign instruction addresses do not receive the exemption.
 
 The guest owns SIGSYS, signal masks and alternate stacks. Native clone and signal
 return retain their register/extension ABI. Guest ERRNO, TRAP and KILL decisions

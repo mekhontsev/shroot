@@ -331,6 +331,8 @@ int md_inode_plan_reopen(struct md_inode_store *s, int original, int flags, int 
     struct mdi_node node;
     r = mdi_fd(s, original, &node);
     if (!r && (flags & O_DIRECTORY) && node.kind != S_IFDIR) r = -ENOTDIR;
+    if (!r && node.kind==S_IFLNK && !(flags&O_PATH)) r=-ELOOP;
+    if (!r && node.kind==S_IFSOCK && !(flags&O_PATH)) r=-ENXIO;
     if (!r && node.kind==S_IFDIR && (flags&(O_WRONLY|O_RDWR|O_TRUNC))) r=-EISDIR;
     if (!r && write && (mutable || node.kind==S_IFREG) && mdi_readonly(s)) r=-EROFS;
     int device=!r && (node.kind==S_IFCHR || node.kind==S_IFBLK) && !(flags&O_PATH);

@@ -14,16 +14,41 @@ cmake --build build --target shroot-check-fixtures -j 4
 ctest --test-dir build --output-on-failure
 ```
 
-This path requires CMake, a C compiler, Python 3.11+ and OpenSSL for local HTTPS test
-certificates. It requires no Java, Android application, privileged service or
+This path requires CMake, a C compiler, Python 3.11+, `zstd` for independent archive
+checks and OpenSSL for local HTTPS test certificates. It requires no Java, Android application, privileged service or
 public registry. `NativeChecks.cmake` registers the existing component fixtures,
 including supervisor state, policy, signal, robust-futex, descriptor, storage and
 image contracts. `run_component.py` uses the same local executor as runtime and
 service suites for private directories, process-group cleanup and timeout
 failure; assertions remain in the same C tests used by device runners.
+Child exit and output readiness are observed independently. A terminated command
+cannot hold the runner until its deadline through a descendant's inherited stdout;
+cleanup is confined to that invocation's private process group.
 `ctest -L component` selects these checks; `-L integration`
 selects native management/import workflows. Cross-built binaries must run on
 their target, not the build machine.
+
+Independent resource groups, client scenarios and Python unittest methods have
+individual CTest names. The same assertions run when invoking their fixture
+directly; discovery does not maintain a second list of Python tests. Per-command
+and fixture failure bounds remain in effect. Use `ctest --rerun-failed
+--output-on-failure` after a focused fix instead of repeating completed suites.
+Management, bundle and nested fixtures keep disposable data in the selected
+environment's temporary directory, independently of the build's location and
+ownership. `TMPDIR` can select that workspace; the binary directory is input.
+The resource-ownership group prepares filesystem descriptor transport before
+taking its leak baseline. IPC owners are still created afterwards, and every
+iteration must return to the exact baseline, independently of test ordering.
+
+`ctest -LE benchmark` runs functional qualification. `ctest -L benchmark`
+separately measures checkpoint costs, retaining every mode, round and CPU
+frequency observation. Benchmark tests run serially; do not overlap them with
+other builds or workloads. Plain `ctest` runs both. An incremental build at the
+host or first guest level supplies reusable binaries; recursive execution tests
+do not require rebuilding the compiler or runtime at each nesting level.
+`test_bundle.py BUILD --prefix INSTALLATION` copies and relocates a prepared
+installation, then runs the same ELF and API/CLI checks on the target host.
+Without `--prefix`, it retains the native CMake installation check.
 
 The independent [CI matrix](../embedding.md#continuous-integration) runs these
 contracts on ARM64 Linux and builds Android artifacts on Linux.
@@ -34,19 +59,18 @@ separate `SHROOT_BUILD_TESTS=OFF` installation, not test-enabled helpers.
 
 ### Qualified Hosts
 
-The native set passes on both hosts below. It covers component, management, runtime, transport and
-packaging contracts, including native/kernel-profile admission and the complete
-applicable signal-checkpoint controls.
+The host coverage below spans component, management, runtime, transport and
+packaging contracts, including native/kernel-profile admission and applicable
+signal-checkpoint controls.
 
 | Host | Execution identity | Kernel / page size | Additional verified workflows |
 | --- | --- | --- | --- |
 | Raspberry Pi 5, Debian 13 | UID/GID 1000, no effective capabilities or inherited seccomp | 6.18.60+rpt-rpi-2712 / 16 KiB | Installed production API/CLI, independent CMake consumer, stripped archive audit, stock Alpine 3.23.8 with `apk update`, Debian trixie with `dpkg --audit` and `apt-get update`, stock k3s with network policies, Traefik ingress, PVC and server restart |
 | Android, Termux | UID/GID 10601, `untrusted_app_27`, no effective capabilities, inherited seccomp | 6.12.23-android16 / 4 KiB | Shared standalone native test set; not MagicDesk's Zygote identity or Shell |
 
-Android passes all 87 checks with Clang and bundled static dependencies. The Pi
-passes all 82 applicable checks with GCC, system SQLite and dynamic runtime
-helpers. The static-only installed-bundle test is not registered for that
-configuration. Stock Alpine and Debian execute successfully with both builds in
+Android uses Clang and bundled static dependencies. The Pi uses GCC, system
+SQLite and dynamic runtime helpers. Static-only installed-bundle checks are not
+registered for that configuration. Stock Alpine and Debian execute successfully with both builds in
 Base and lazy-SVC modes, sharing the same installed stores without copies.
 
 Linux package checks include logical guest root, shell execution, hardlinks and
@@ -62,12 +86,24 @@ separately below.
 stores using the same helper binaries. All four Base/lazy combinations cover
 startup, fork/exec/wait, exit status, arguments, environment, hardlink/symlink
 metadata and descriptor isolation. `--depth 3` extends this to eight combinations
-and 24 launches. Both depths pass on the Android Termux host above. Nested
-distribution workloads, Linux/16 KiB placement and performance comparisons are
-not yet qualified.
+and 24 launches. Both depths pass on the Android Termux host above.
+
+In the distribution test, Alpine hosts Debian. All 272 native functional cases
+completed from Debian across the full run and focused rechecks, including FIFO
+and two-layer OCI import into Debian's inode-backed temporary directory. The
+glibc runtime starts a third guest for debugger and signal tests. The recursive
+case adds a fourth guest and checks all 12 launches across the four innermost
+Base/lazy combinations. The 272 cases do not all run in the fourth guest.
+
+These are functional results, not first-level timing guarantees. The RPC
+fixture completed 10,000 consecutive descriptor exchanges in one run (465 s
+for the fixture). Fourth-level launches took 37-68 s each; qualification used
+longer test deadlines and a longer filesystem-worker startup deadline in the
+measurement build. These checks do not cover nested execution on 16 KiB pages
+or the full distribution GUI/container matrix.
 
 Alpine 3.23.8 running inside the Android-hosted runtime builds Shroot with GCC
-15.2 and its stock musl toolchain. The same 87 checks pass there, including the
+15.2 and its stock musl toolchain. The standalone checks cover the
 installed/relocated bundle, netlink descriptor admission, Base/lazy nested
 launches, debugger and signal controls. The outer runtime keeps the Termux UID;
 guest root is logical. This covers a musl-built supervisor and worker, not only
@@ -77,12 +113,36 @@ musl applications running under an Android-built runtime.
 `test_debugger_runtime.py`: syscall-info mutation, signal interruption of
 metadata/poll/epoll calls, seccomp TRACE and number changes, SYSEMU, pending
 interrupts, pidfd descriptor copies, foreign proc-FD reopen, service admission
-and nondestructive signal-queue inspection. `--native-control` also executes
+and nondestructive signal-queue inspection. `proc-thread` checks leader/thread
+proc aliases, fdinfo and cwd after independently splitting CLONE_FILES and
+CLONE_FS ownership. Foreign proc-FD directory traversal also preserves mounted
+providers, including `/dev/fd`, instead of exposing their physical carriers.
+TRACE controls include filter
+installation with live peers through both APIs: each original call must publish
+one event and exit even when admission requires internal preparation.
+`--native-control` also executes
 these scenarios directly on the host. `--case signals` reuses the signal-delivery
 and machine-context fixtures under Base and lazy entry, including ignored signals
-and interrupts during native signal-frame construction. CTest registers
-`nested_debugger`, `nested_signals` and `nested_nested`; these supplement, not
-replace, ordinary runtime and ELF tests.
+and interrupts during native signal-frame construction. Machine-context groups
+(`frame`, `alias`, `native`, `kernel`) retain all 77 alias cases and the native
+frame controls, with the same per-invocation alarm. CTest registers
+`nested_debugger_*`, `nested_signals_*` and `nested_nested`; these supplement, not
+replace, ordinary runtime and ELF tests. Debugger and signal names separate Base
+(`0`) from lazy (`1`) so a failed variant can be repeated independently.
+Debugger TRACE cases also accept `--scenario seccomp-trace:openat` (or
+`install`, `getpid`, `getuid`, `getpgid`, `sigmask`, `skip`); signal interruption
+accepts `syscall-signal:stat`, `:poll` and `:epoll`. The recursive driver runs
+all groups with the same assertions, variants, 32 signal iterations per syscall
+and per-process alarm, instead of accumulating unrelated children under one alarm.
+CTest discovers these scenario names from the runner and registers each separately,
+so one failure neither prevents later scenarios nor requires replaying earlier ones.
+
+`--depth` counts the runtimes created by the recursive fixture, not runtimes
+already enclosing it. Plan the total depth explicitly: inside Debian hosted by
+Alpine, `--depth 1` exercises level three; the default adds levels three and four.
+`ctest -LE 'benchmark|recursive'` separates ordinary contracts from this extra
+recursion, then `test_nested_runtime.py BUILD --case nested --depth N` checks the
+chosen additional levels. This is a test-plan choice, not a runtime depth limit.
 
 ## Fixture Transports
 
@@ -662,6 +722,13 @@ Unlike the ordinary datagram pair, this exercises descriptor custody and publica
 These retain their normal owners and guest filters; setup is outside the timed loop.
 Use `--statistics` in a separate run to record syscall, checkpoint, ptrace and
 supervisor CPU counters; instrumented timings are not a performance baseline.
+`MD_PROGRESS` separates retained-actor work, task-owner progress, resident
+entry and PID collection. These elapsed-time counters include descheduling;
+`MD_RETAINED` counts group and fallback actor traversals to expose repeated tree
+scans independently of CPU frequency.
+`MD_WORKER_STARTUP` separates inode admission, runtime directories, attachments
+and provider preparation. Store and mount counters include worker startup;
+ordinary launches do not sample these clocks.
 
 `test_os_boot.py --service-io avahi|cups|firewalld` supplements the stock boot
 observer with protocol IO and three stop/start cycles. Avahi must answer mDNS

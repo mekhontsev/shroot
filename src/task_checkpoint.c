@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <linux/ptrace.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ptrace.h>
@@ -185,7 +186,11 @@ static int checkpoint_event(struct md_task_checkpoints *m,pid_t pid,int *status)
         if (signal!=SIGTRAP) { c->stage=MARKER_REARM; return 0; }
         struct user_pt_regs r;
         int error=regs(m,pid,PTRACE_GETREGSET,&r); if (error) return error;
-        if (r.pc!=c->marker) return -EPROTO;
+        if (r.pc!=c->marker) {
+            fprintf(stderr,"Shroot: checkpoint position pid=%d actual=%#llx expected=%#lx stage=%d\n",
+                pid,(unsigned long long)r.pc,(unsigned long)c->marker,c->stage);
+            return -EPROTO;
+        }
         c->stage=0;
         c->registers=r; c->registers_valid=1;
         *status=(MD_TASK_CHECKPOINT_EVENT<<16)|(SIGTRAP<<8)|0x7f;

@@ -493,6 +493,14 @@ static void symlinks(void) {
     CHECK(md_inode_fstat(s, fd, &st) == 0 && S_ISLNK(st.st_mode) && st.st_ino == link.st_ino);
     char bytes[PATH_MAX] = {0};
     CHECK(md_inode_readlink(s, fd, "", bytes, sizeof(bytes)) == 10 && !memcmp(bytes, "../b/value", 10));
+    for (unsigned nofollow=0;nofollow<2;++nofollow) {
+        int reopened=md_inode_reopen(s,fd,O_PATH|(nofollow ? O_NOFOLLOW : 0),0);
+        CHECK(reopened>=0 && !md_inode_fstat(s,reopened,&st)
+            && S_ISLNK(st.st_mode) && st.st_ino==link.st_ino);
+        CHECK(md_inode_readlink(s,reopened,"",bytes,sizeof(bytes))==10 && !memcmp(bytes,"../b/value",10));
+        CHECK(!close(reopened));
+        CHECK(md_inode_reopen(s,fd,O_RDONLY|(nofollow ? O_NOFOLLOW : 0),0)==-ELOOP);
+    }
     CHECK(readlinkat(a, "", bytes, sizeof(bytes)) == -1 && errno == ENOENT);
     CHECK(md_inode_readlink(s, a, "", bytes, sizeof(bytes)) == -ENOENT);
     CHECK(readlinkat(file, "", bytes, sizeof(bytes)) == -1 && errno == ENOENT);
@@ -1784,6 +1792,12 @@ static void native_plans(void) {
     CHECK(!md_inode_read_scope_end(s));
     int fifo=md_inode_plan_open(s,-1,"fifo",O_RDONLY,0,0,&completion,0,NULL);
     CHECK(fifo>=0 && completion.kind==MD_OPEN_PIPE);
+    CHECK(!md_inode_metadata(s,&(struct md_fs_request){.operation=MD_FS_UTIMENS,
+        .directory={MD_INODE_ROOT},.path={"fifo"},.attributes={.seconds={1000000000,1000000001},.nanos={123,456}}}));
+    struct stat endpoint;
+    CHECK(!md_inode_stat(s,-1,"fifo",0,&st) && !md_inode_fstat(s,fifo,&endpoint));
+    CHECK(endpoint.st_mtim.tv_sec==1000000001 && endpoint.st_mtim.tv_nsec==456);
+    CHECK(endpoint.st_ctim.tv_sec==st.st_ctim.tv_sec && endpoint.st_ctim.tv_nsec==st.st_ctim.tv_nsec);
     CHECK(!close(completion.control) && !close(fifo));
     CHECK(md_inode_plan_open(s,-1,"link",O_RDONLY|O_NOFOLLOW,0,0,&completion,1,NULL)==-ELOOP);
     CHECK(md_inode_plan_open(s,-1,"missing",O_RDONLY,0,0,&completion,1,NULL)==-ENOENT);
@@ -1910,17 +1924,7 @@ static void directory_times(void) {
     md_inode_store_close(copy); md_inode_store_close(source); md_identity_release(&identity);
     puts("PASS directory timestamps: logical/native names, errors, same-inode rename, exchange, peer/reopen and snapshot isolation");
 }
-int main(int argc, char **argv) {
-    CHECK(argc == 2 || argc == 3);
-    CHECK(argv[1][0] == '/' && strlen(argv[1]) < sizeof(root)); strcpy(root, argv[1]);
-    if (argc == 3) { CHECK(!strcmp(argv[2], "exec-child")); exec_child("exec"); return 0; }
-    CHECK(mkdir(root, 0700) == 0);
-    descriptors(); dentry_names(); namespace(); directory_times(); contention(); multiple_stores(); across_exec(argv[0]);
-    native_plans(); native_births(); native_birth_custody(); native_birth_recovery(); native_birth_acl();
-    hierarchy(); symlinks(); permissions(); kernel_reference(); scoped_paths(); read_admission_failure(); operation_windows();
-    path_prefixes(); prefix_mutations(); metadata_working_set();
-    permission_snapshot(); reused_queries(); metadata_queries(); cached_path_names();
-    backing_cache(); recent_cache_keys(); mutation_cache(); directory_publication(); membership_queries(); directory_name_cost(); counter_audit(); retained_journal();
+static void crash_recovery(void) {
     unsigned serial = 0;
     recovery(CREATE, MD_OBJECT_SYNCED, serial++);
     for (enum operation op = CREATE; op <= EXCHANGE; ++op) {
@@ -1936,6 +1940,34 @@ int main(int argc, char **argv) {
         tree_recovery(op, MD_NAMESPACE_COMMITTED, trees++);
     }
     printf("PASS %u hierarchy SIGKILL boundaries, retained dirfd and consistent parent links\n", trees);
+}
+int main(int argc, char **argv) {
+    setvbuf(stdout,NULL,_IOLBF,0);
+    CHECK(argc == 2 || argc == 3 || (argc == 4 && !strcmp(argv[2],"--case")));
+    CHECK(argv[1][0] == '/' && strlen(argv[1]) < sizeof(root)); strcpy(root, argv[1]);
+    if (argc == 3) { CHECK(!strcmp(argv[2], "exec-child")); exec_child("exec"); return 0; }
+    const char *selected=argc==4 ? argv[3] : NULL;
+    CHECK(mkdir(root, 0700) == 0);
+    unsigned executed=0;
+    if (!selected || !strcmp(selected,"namespace")) {
+        descriptors(); dentry_names(); namespace(); directory_times(); contention(); multiple_stores(); across_exec(argv[0]);
+        ++executed;
+    }
+    if (!selected || !strcmp(selected,"native")) {
+        native_plans(); native_births(); native_birth_custody(); native_birth_recovery(); native_birth_acl();
+        ++executed;
+    }
+    if (!selected || !strcmp(selected,"paths")) {
+        hierarchy(); symlinks(); permissions(); kernel_reference(); scoped_paths(); read_admission_failure(); operation_windows();
+        path_prefixes(); prefix_mutations(); ++executed;
+    }
+    if (!selected || !strcmp(selected,"metadata")) {
+        metadata_working_set(); permission_snapshot(); reused_queries(); metadata_queries(); cached_path_names();
+        backing_cache(); recent_cache_keys(); mutation_cache(); directory_publication(); membership_queries();
+        directory_name_cost(); counter_audit(); retained_journal(); ++executed;
+    }
+    if (!selected || !strcmp(selected,"recovery")) { crash_recovery(); ++executed; }
+    CHECK(executed && (!selected || executed==1));
     puts("PASS inode-store fixture (hierarchical model, not guest syscall integration)");
     return 0;
 }

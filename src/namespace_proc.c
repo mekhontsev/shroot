@@ -20,6 +20,10 @@
 #include "statx_abi.h"
 #include <linux/openat2.h>
 
+static int process_link(enum md_proc_kind kind) {
+    return kind==MD_PROC_FD || kind==MD_PROC_CWD || kind==MD_PROC_ROOT || kind==MD_PROC_EXE;
+}
+
 static long mount_table_open(const struct md_fs *fs,const struct md_proc_path *ref,
         const char *path,int flags) {
     if (*ref->tail) return -ENOTDIR;
@@ -40,7 +44,6 @@ static long mount_table_open(const struct md_fs *fs,const struct md_proc_path *r
 static long fdinfo_open(const struct md_fs *fs,const struct md_proc_path *ref,
         int flags,uint64_t proc_namespace) {
     if (*ref->tail) return -ENOTDIR;
-    if (ref->kind==MD_PROC_FOREIGN) return -ENOTSUP;
     if (flags&O_DIRECTORY) return -ENOTDIR;
     if (!(flags&O_PATH) && ((flags&MD_O_ACCMODE)!=O_RDONLY || (flags&O_TRUNC))) return -EACCES;
     if ((flags&(O_CREAT|O_EXCL))==(O_CREAT|O_EXCL)) return -EEXIST;
@@ -51,6 +54,14 @@ static long fdinfo_open(const struct md_fs *fs,const struct md_proc_path *ref,
     struct md_fs_request q={.operation=MD_FS_FDINFO,.directory={-1,ref->descriptor},
         .capture={{selected,O_RDONLY|O_CLOEXEC}},
         .flags=(unsigned)flags&(O_PATH|O_CLOEXEC),.offset=(int64_t)proc_namespace};
+    char target[96]="/proc/";
+    if (ref->process!=md_native_tid()) {
+        md_decimal(target+md_length(target),(unsigned)ref->process);
+        md_append(target,sizeof(target),"/fd/");
+        md_decimal(target+md_length(target),(unsigned)ref->descriptor);
+        q.directory[1]=-1;
+        q.capture[1]=(struct md_fs_task_capture){target,O_PATH|O_CLOEXEC};
+    }
     struct md_fs_response out;
     long result=md_namespace_request(fs,&q,&out);
     return result<0 ? result : out.result.fd;
@@ -79,7 +90,7 @@ long md_namespace_host_open_resolved(const struct md_fs *fs,int base,const char 
      * retains the kernel's relative openat2 scope and symlink checks. */
     struct md_proc_path ref=md_proc_path(identity);
     enum md_proc_kind kind=ref.kind==MD_PROC_FOREIGN ? ref.foreign_kind : ref.kind;
-    if (ref.ordinary_link && !*ref.tail
+    if ((ref.ordinary_link || process_link(kind)) && !*ref.tail
             && ((how->flags&O_NOFOLLOW) || (how->resolve&RESOLVE_NO_SYMLINKS)))
         return md_host_open_resolved(base,path,how);
     if (kind==MD_PROC_MEMORY) {
@@ -317,21 +328,22 @@ static long host_readlink(const struct md_fs *fs, const struct md_proc_path *ref
         const char *path, const unsigned long *a) {
     if (!a[3]) return -EINVAL;
     char text[PATH_MAX];
-    long n = RAW4(readlinkat, AT_FDCWD, path, text, sizeof(text) - 1);
-    long native_error=n<0 ? n : 0;
-    if (n<0 && (ref->process<=0 || (n!=-ENOENT && n!=-EACCES && n!=-EPERM))) return n;
-    text[n<0 ? 0 : n] = 0;
     int fd=-1;
     int borrowed=md_namespace_proc_borrow(ref,&fd);
     char selected[PATH_MAX];
-    if (!borrowed && (n=md_proc_task_path(path,selected,sizeof(selected)))<0) return n;
+    long r=borrowed ? 0 : md_proc_task_path(path,selected,sizeof(selected));
+    if (r<0) return r;
     struct md_fs_request q = {.operation = MD_FS_PATH, .mode=MD_FS_PATH_DISPLAY, .directory = {fd, -1},
         .capture={{borrowed ? NULL : selected,borrowed ? 0 : O_PATH}}};
     struct md_fs_response out;
-    long r = md_namespace_request(fs, &q, &out);
-    if (!r) r = md_copy(text, sizeof(text), out.data);
-    if (r<0 && native_error) return r;
+    r = md_namespace_request(fs, &q, &out);
+    if (!r) return link_result(out.data,a);
     if (r < 0 && r != -EXDEV && (borrowed || out.delivery!=MD_FS_NOT_SENT)) return r;
+    /* A retained logical target owns its name. Its native carrier may name an
+     * unrelated object, especially when another runtime supplies that carrier. */
+    long n=RAW4(readlinkat,AT_FDCWD,path,text,sizeof(text)-1);
+    if (n<0) return n;
+    text[n]=0;
     return link_result(text, a);
 }
 static long target_call(const struct md_fs *fs, long nr, const unsigned long *a, struct md_namespace_operand operand) {
@@ -388,10 +400,11 @@ static long host_call(const struct md_fs *fs, const char *exe, long nr, const un
         struct md_namespace_operand entry={.descriptor=-1,.capture={path,O_PATH|O_NOFOLLOW}};
         return target_call(fs,nr,a,entry);
     }
-    /* Proc aliases are ordinary links, not their target's process controls.
-     * Keep no-follow operations on that dentry in the caller's kernel view. */
-    if (ref.ordinary_link && !*ref.tail
-            && (nr==SYS_readlinkat || link_operation(nr,a))) {
+    /* A no-follow operation selects the link inode, not its process control.
+     * Apply the same boundary to local, foreign and ordinary proc aliases. */
+    if (ref.tail && !*ref.tail
+            && ((ref.ordinary_link && nr==SYS_readlinkat)
+                || ((ref.ordinary_link || process_link(control)) && link_operation(nr,a)))) {
         unsigned long args[6]; memcpy(args,a,sizeof(args)); args[path_index]=(unsigned long)path;
         return native_call(fs,nr,args);
     }
@@ -431,11 +444,6 @@ static long host_call(const struct md_fs *fs, const char *exe, long nr, const un
     if (ref.kind == MD_PROC_FOREIGN) {
         if (ref.foreign_kind==MD_PROC_ROOT || ref.foreign_kind==MD_PROC_CWD
                 || (ref.foreign_kind==MD_PROC_FD && *ref.tail)) {
-            if (!*ref.tail && link_operation(nr,a)) {
-                unsigned long args[6]; memcpy(args,a,sizeof(args));
-                args[path_index]=(unsigned long)path;
-                return native_call(fs,nr,args);
-            }
             char anchor[PATH_MAX];
             size_t length=*ref.tail ? ref.anchor_length : md_length(path);
             memcpy(anchor,path,length); anchor[length]=0;
@@ -459,11 +467,6 @@ static long host_call(const struct md_fs *fs, const char *exe, long nr, const un
         if (*ref.tail) return -ENOTSUP;
         if (ref.foreign_kind==MD_PROC_FD
                 || (ref.foreign_kind==MD_PROC_EXE && (nr==SYS_newfstatat || nr==SYS_statx))) {
-            if (link_operation(nr,a)) {
-                unsigned long args[6]; memcpy(args,a,sizeof(args));
-                args[path_index]=(unsigned long)path;
-                return native_call(fs,nr,args);
-            }
             long result=nr==SYS_openat
                 ? md_proc_control_reopen(ref.process,ref.descriptor,(int)a[2]&~(O_CREAT|O_EXCL))
                 : md_proc_control_metadata(&ref,nr,a);
@@ -509,7 +512,7 @@ static long host_call(const struct md_fs *fs, const char *exe, long nr, const un
             if (nr!=SYS_readlinkat) return md_descriptor_metadata(fs,ref.descriptor,nr,a);
             known=0;
         }
-        if (known) {
+        if (known && (!tail || !md_proc_file_directory((enum md_proc_file_kind)(known-1)))) {
             if (tail) return -ENOTDIR;
             if (nr==SYS_openat) return md_proc_control_reopen(ref.process,ref.descriptor,(int)a[2]&~(O_CREAT|O_EXCL));
             if (nr!=SYS_readlinkat || md_proc_file_namespace((enum md_proc_file_kind)(known-1))) {

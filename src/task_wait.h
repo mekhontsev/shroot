@@ -21,7 +21,7 @@ struct md_task_wait {
         int status;
         struct rusage usage;
     } pending[32];
-    int drained;
+    int drained, batch;
 };
 void md_task_wait_track(struct md_task_wait *, struct md_task_wait_member *, pid_t);
 void md_task_wait_untrack(struct md_task_wait *, struct md_task_wait_member *);

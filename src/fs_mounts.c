@@ -70,7 +70,9 @@ static int record(struct md_filesystem *fs,int fd,struct md_view_mount *mount,co
     p = calloc(1, sizeof(*p));
     if (!p) return -ENOMEM;
     char proc[64]; snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
-    p->fd = retained ? fcntl(fd,F_DUPFD_CLOEXEC,3) : open(proc, O_PATH | O_CLOEXEC);
+    /* A native symlink descriptor is already an O_PATH pin. Retain its
+     * flags and identity without another proc magic-link traversal. */
+    p->fd = retained || S_ISLNK(st.st_mode) ? fcntl(fd,F_DUPFD_CLOEXEC,3) : open(proc, O_PATH | O_CLOEXEC);
     if (p->fd < 0) { int r = -errno; free(p); return r; }
     if (md_view_inode(mount)) {
         struct md_inode_store *store;
@@ -130,7 +132,7 @@ int md_view_identity(struct md_filesystem *fs, int fd, struct md_view_object **o
 int md_view_backing_path(struct md_filesystem *fs, int fd, const struct md_view_mount *mount,
         char *out, size_t size) {
     if (mount && mount->backing==MD_MOUNT_PROC) return md_procfs_guest_path(mount,fd,out,size);
-    if (mount && mount->provider) return md_provider_tree_path(mount->provider,fd,out,size);
+    if (mount && mount->provider) return md_provider_tree_path(mount->provider,fd,NULL,out,size);
     if (mount && mount->devpts) {
         char name[32]; int r=md_devpts_name(mount->devpts,fd,name,sizeof(name));
         if (r) return r;

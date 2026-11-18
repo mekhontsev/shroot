@@ -486,8 +486,24 @@ int main(int argc, char **argv) {
     assert(!symlinkat("/guest", directory, "absolute"));
     int guest = opened(&fs, "/volume/absolute", O_RDONLY); close(guest);
     int symlink_fd = opened(&fs, "/volume/absolute", O_PATH | O_NOFOLLOW);
-    result = call(&fs, MD_FS_REOPEN, symlink_fd, NULL, O_PATH | O_NOFOLLOW, 0, NULL, 0);
-    assert(!result.error && !fstat(result.fd, &st) && S_ISLNK(st.st_mode)); close(result.fd); close(symlink_fd);
+    struct stat symlink_stat; assert(!fstat(symlink_fd,&symlink_stat));
+    for (unsigned nofollow=0;nofollow<2;++nofollow) {
+        unsigned flags=O_PATH|O_CLOEXEC|(nofollow ? O_NOFOLLOW : 0);
+        result=call(&fs,MD_FS_REOPEN,symlink_fd,NULL,flags,0,NULL,0);
+        assert(!result.error && !fstat(result.fd,&st) && S_ISLNK(st.st_mode)
+            && st.st_dev==symlink_stat.st_dev && st.st_ino==symlink_stat.st_ino);
+        int status_flags=fcntl(result.fd,F_GETFL);
+        if (status_flags!=(int)(flags&~O_CLOEXEC))
+            fprintf(stderr,"reopened symlink flags=%#x requested=%#x\n",status_flags,flags);
+        assert(status_flags==(int)(flags&~O_CLOEXEC));
+        assert(fcntl(result.fd,F_GETFD)==FD_CLOEXEC);
+        assert(readlinkat(result.fd,"",bytes,sizeof(bytes))==6 && !memcmp(bytes,"/guest",6));
+        close(result.fd);
+        result=call(&fs,MD_FS_REOPEN,symlink_fd,NULL,O_RDONLY|(nofollow ? O_NOFOLLOW : 0),0,NULL,0);
+        assert(result.error==-ELOOP && result.fd==-1);
+    }
+    result=call(&fs,MD_FS_REOPEN,symlink_fd,NULL,O_PATH|O_DIRECTORY,0,NULL,0);
+    assert(result.error==-ENOTDIR && result.fd==-1); close(symlink_fd);
     assert(!symlinkat("/volume", directory, "self"));
     result = call(&fs, MD_FS_UNLINK, -1, "/volume/self/", AT_REMOVEDIR, 0, NULL, 0);
     assert(result.error == -ENOTDIR);

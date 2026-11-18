@@ -60,20 +60,38 @@ SYSEMU suppresses the selected syscall before guest filtering. Switching to it
 at a fork event omits the parent's syscall exit; switching at TRACE finishes
 the already admitted syscall before observing the next entry. Internal replay
 cannot inherit debugger stepping or syscall suppression.
+Cancelling a TRACE call retains its real syscall-exit continuation until the
+kernel reports completion. Active signal carriers suppress guest stepping,
+not an operation's owned continuation; neither synthetic result publication nor
+an interrupt may retire that pending exit.
+An admitted TRACE notification also survives internal preparation of that same
+call. Replayed admission checks the exact syscall, PC and arguments; preparation
+does not publish a second event, while a later application call at the same site
+receives its own event.
 Interrupting an already stopped
 seized inferior retains a pending stop for its next continuation.
 
 PEEKSIGINFO reads private or shared native queues without consuming signals or
 their retained sender metadata. Queue traversal and PID/UID translation reuse
 the signal owners; offsets, partial copies and invalid flags retain their Linux
-contracts. A queue containing a deferred logical SIGSYS currently returns
-EOPNOTSUPP instead of silently omitting that signal.
+contracts. When a logical SIGSYS is pending, its coalesced slot precedes the selected
+native queue in the read-only view. Offsets and short buffers address that same
+combined view; native realtime order is unchanged. Private and shared slots remain
+distinct, and peeking consumes neither queue. Without a logical slot, observation
+stays native.
 Attach/interrupt stops are published at a guest boundary, outside adapter code.
 Stop demand survives intermediate preparation and borrowed-task stops. Before
 an interruptible service wait resumes, an outstanding debugger stop is handed
 to that wait's cancellation owner. Provider waits distinguish that interruption
 from data readiness; a pending stop cannot cause a resume/interrupt loop while
 waiting for data that the debugger itself will supply after detach.
+Boundary recovery observes registers only for an outstanding stop request or
+deferred signal, not on every continuation of a traced process. Actual syscall,
+single-step and signal stops retain their own context owners.
+Ordinary syscall stops reuse the kernel's typed syscall-info record for guest
+event publication, without fetching all general registers. Actual context
+mutation, replay and a matching inherited-policy SIGSYS still read the native
+registers. Register-backed adapter completions use the same event publisher.
 A resident native call uses its effect journal
 to restore the original context, including the interval between publication and
 kernel entry. EVENT_STOP recovery uses the kernel's completed restart decision;
@@ -84,9 +102,11 @@ Lazy SVC admission is suspended for the shared address space, not permanently
 disabled. The last detach or debugger exit permits lazy re-admission through
 the same registry owner, subject to independent filter and mapping constraints.
 An inferior's unmaskable SIGSTOP also waits for that boundary, after its internal
-file-table and filesystem turns finish. Its original siginfo belongs to the
-debugger relationship; suppressing the stop does not group-stop the application
-or expose adapter registers. Untraced processes retain kernel job control.
+file-table and filesystem turns finish. The common signal-delivery owner retains
+its original siginfo and cancels interruptible waits. An inert carrier restores
+a real delivery stop before debugger publication, so suppression and injection
+both retain native semantics without exposing adapter registers. Untraced
+processes retain kernel job control.
 Borrowed interruptible calls cancel through their call owner before publishing
 that stop. Signals recovered from native or provider waits pass the same debugger
 admission as ordinary delivery. Debugger continuation and an already-admitted
@@ -97,6 +117,10 @@ recipient PID/UID translation and PID-1 signal policy. Debugger observation uses
 the debugger's view separately. This preserves libc's thread-directed set-ID
 handshake under strace across PID namespaces, including nondumpable targets;
 signal-free resumes do not add a siginfo query.
+Sender credential substitution applies to the executor UID, not to arbitrary
+UID values supplied through PTRACE_SETSIGINFO. A coincidentally live sender PID
+does not override those values during delivery, pending-signal inspection or
+child-notice retention. The executor UID is captured once at runtime startup.
 Admitting a trace relationship activates observation in the owner's whole thread
 group. A native wait entered before that relationship is interrupted and restarted
 through the same debugger-aware wait path. This also covers a child requesting
@@ -122,21 +146,42 @@ An adapter that consumes the native exit completes metadata replay through the
 same result owner; it cannot leave a second owner waiting for a later syscall.
 Signal delivery follows the completed virtual syscall exit as well. Ignored
 signals remain visible to a guest tracer, which may suppress or replace them.
+Interrupted adapted waits publish a syscall-traced exit at the real kernel
+exit, before signal selection. Debugger injection and detach then retain native
+queueing and the atomic wait's temporary mask; delivery is not consumed merely
+to manufacture that earlier exit event.
 A pending interrupt during delivery is acknowledged only after the kernel
 commits the signal frame and the machine-entry owner restores its guest context.
 
 Under inherited host seccomp, a syscall-exit stop can precede the SIGSYS that
 admits its adapter. For an actively syscall-traced guest, the coordinator checks
-the pending signal's exact syscall/PC and original guest policy before deferring
-that exit. The same interception policy selects translation and completion;
-the debugger receives the final result once. Guest TRAP and unsupported native
+the pending signal's exact latched syscall number, PC and original guest policy.
+An empty or unrelated pending queue needs no syscall-number register read; an
+actual candidate still checks the latch independently of the saved x8 value.
+A scalar emulated errno is published at that native exit; the later matching
+service SIGSYS is consumed without overwriting the debugger's register changes.
+Guest TRACE also publishes before consuming that exit, with the retained entry's
+original first argument rather than the result in x0. Skipping the call then
+retains native signal injection from a syscall stop; a debugger-selected syscall
+uses the existing replay owner. Calls needing adapter
+work defer their guest exit until that work completes. The same interception
+policy selects translation and completion; the debugger receives the final
+result once. Guest TRAP and unsupported native
 calls retain exit-before-signal ordering. Untraced calls and executors without
 host-SIGSYS translation do not scan the signal queue.
 
 ## Waits And Process Identity
 
 Guest wait4 and waitid deliver queued trace stops in event order, with rusage
-and waitid WNOWAIT support. Mixed traced/untraced waits first check the native
+and waitid WNOWAIT support. A ready-event queue avoids scanning sleeping
+inferiors to select the oldest notice; exact-PID selection uses the PID index.
+Consumption, continuation, detach, exec replacement and owner exit unlink the
+same queued record. Failed output copies and WNOWAIT retain it.
+An exact-PID WNOHANG probe of a live owned inferior
+can return an empty result from that same event owner without a kernel probe.
+It leaves wait4 outputs and rusage untouched; waitid clears only its defined
+result fields. WCONTINUED, __WNOTHREAD, mixed selections and real-child terminal
+reaping retain their native checks. Mixed traced/untraced waits first check the native
 child queue without blocking. Only that short probe defers asynchronous handlers;
 it must not mistake a handler's syscall for the requested wait. With no ready
 result, the calling guest thread waits in an interruptible empty native poll,
@@ -157,8 +202,17 @@ debugger while the supervisor remains the kernel ptracer. Only a process leader
 with actual parenthood can use native child reaping.
 
 The same owner excludes retained-memory actors from guest waits. It snapshots
-visible real-child candidates once per wake round and probes exact PIDs; the
-kernel still enforces __WNOTHREAD and wait-class eligibility. No eligible child
+visible real-child candidates once per wake round. Live traced children need no
+native exit probe: their terminal observation precedes real-parent reaping.
+Children owned by another tracer still establish that the parent's wait has
+children, even when no native probe remains. Continued events, foreign
+job-control stops and __WNOTHREAD retain native probes. Ordinary group-stop
+handling and guest PTRACE_LISTEN share native admission, freezer publication
+and real-parent wakeup; a parked parent must recheck after either path.
+The child's published
+parent suffices while that parent itself is calling wait; other relationships
+are refreshed from the kernel to account for adoption. The kernel still
+enforces native wait-class eligibility. No eligible child
 means ECHILD, even if a private actor remains alive. Child stop/continue events
 wake existing waiters without fabricating SIGCHLD. NULL waitid output borrows a
 shared buffer only for the nonblocking probe, so consuming an event remains
@@ -183,7 +237,9 @@ owner to restore the caller's signal mask before entering the kernel; waiting
 inside the shielded adapter would defer SIGCHLD indefinitely and strand GDB on
 an inferior's fork. Ordinary unselected native waits retain their original path.
 EXITKILL and stopped-inferior release belong to debugger
-lifetime. Records are released when consumed or their owner exits.
+lifetime. Records are released when consumed or their owner exits. Exact PID
+lookup uses an index; event publication retains wait order separately. Failed
+attach/options/interrupt requests roll back their unpublished state.
 Invalid wait flags are rejected before consuming an event. waitid siginfo includes
 the inferior's logical UID and distinguishes normal, killed and core-dumped exits.
 PTRACE_GET_SYSCALL_INFO exposes entry/exit records only with TRACESYSGOOD; short
@@ -231,8 +287,7 @@ than waiting indefinitely for an exit that still needs ptrace continuation.
 This is a bounded nested-debugging implementation, not complete ptrace emulation.
 Attach cannot cross supervised launches or target Android processes.
 Pidfd-based virtual waits and __WNOTHREAD wait selection are not implemented.
-SYSEMU_SINGLESTEP and deferred logical SIGSYS queue merging still need
-implementation. Seccomp-PC mutation coverage includes skipping the instruction
+SYSEMU_SINGLESTEP still needs implementation. Seccomp-PC mutation coverage includes skipping the instruction
 after SVC, independently and together with argument changes, not arbitrary
 debugger control-flow rewrites.
 Non-leader debugger exec, as distinct from inferior exec, needs dedicated lifecycle coverage.

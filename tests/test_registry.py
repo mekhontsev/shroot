@@ -57,7 +57,7 @@ class Handler(BaseHTTPRequestHandler):
 class RegistryTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.trust = tempfile.TemporaryDirectory(prefix="shroot-registry-ca-", dir=BUILD)
+        cls.trust = tempfile.TemporaryDirectory(prefix="shroot-registry-ca-")
         directory = Path(cls.trust.name)
         cls.cert, cls.key = directory / "ca.pem", directory / "key.pem"
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
@@ -71,7 +71,7 @@ class RegistryTest(unittest.TestCase):
         cls.trust.cleanup()
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="shroot-registry-", dir=BUILD)
+        self.temporary = tempfile.TemporaryDirectory(prefix="shroot-registry-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.library = self.root / "library"

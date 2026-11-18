@@ -154,6 +154,9 @@ static void socket_binds(const char *base) {
     struct md_identity root=md_identity_new(0,0); store->identity=&root;
     int server=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0); assert(server>=0);
     assert(!md_inode_socket_bind(store,-1,"/socket","/socket",0600,server));
+    int pin=md_inode_open(store,-1,"/socket",O_PATH,0); assert(pin>=0);
+    assert(md_inode_reopen(store,pin,O_RDONLY,0)==-ENXIO);
+    assert(!close(pin));
     assert(!listen(server,1));
     assert(!md_inode_link(store,-1,"/socket",-1,"/socket-alias",0));
     put(store,"/mounted","target"); put(store,"/plain","plain");

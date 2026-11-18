@@ -242,6 +242,21 @@ static void entry_revocation(void) {
         }
     }
     puts("PASS SVC pause ownership: debugger/filter composition, both release orders and permanent revocation");
+    const unsigned states[]={MD_SVC_PUBLISHED,MD_SVC_PAUSED,MD_SVC_RETIRED};
+    for (unsigned i=0;i<sizeof(states)/sizeof(*states);++i) {
+        unsigned state=states[i];
+        sites[0].state=state;
+        sites[1]=sites[0]; sites[1].replacement=0x14000001;
+        r.disabled=state!=MD_SVC_PUBLISHED;
+        for (unsigned version=0;version<3;++version) {
+            uint32_t word=version<2 ? sites[version].replacement : 0xd503201f;
+            revocation_code[0]=UINT64_C(0xd503201f00000000)|word;
+            assert(!md_svc_registry_suspend(&r,111,sites[0].direct.svc));
+            assert(revocation_code[0]==(UINT64_C(0xd503201f00000000)
+                |(version<2 ? sites[0].original : word)));
+        }
+    }
+    puts("PASS SVC recovery: inherited published/paused/retired branches, earlier chains and unrelated text");
 }
 
 static void code_staging(void) {
@@ -753,10 +768,13 @@ static void revoked_frames(void) {
     if (!child) {
         struct md_svc_registry *copy=md_svc_registry_copy(&r);
         assert(copy && copy->frames_dirty && !r.frames_dirty);
-        copy->entry_fence_drained=1;
+        copy->pause_reasons=MD_SVC_PAUSE_FILTER;
+        assert(!copy->entry_fence_drained);
         assert(md_svc_registry_prepare_fork(copy,getpid(),INT_MAX)==-EBADF && copy->frames_dirty);
+        assert(!copy->entry_fence_drained);
         int fd=open("/proc/self/mem",O_RDWR|O_CLOEXEC); assert(fd>=0);
         assert(!md_svc_registry_prepare_fork(copy,getpid(),fd) && !copy->frames_dirty);
+        assert(copy->entry_fence_drained && !r.entry_fence_drained);
         assert(!md_svc_registry_occupied(copy,getpid(),&occupied) && !occupied);
         assert(!*(uint64_t *)frames && !*(uint64_t *)last);
         assert(!*(uint64_t *)(last+MD_SVC_DIRECT_PENDING));

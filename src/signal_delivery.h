@@ -13,7 +13,7 @@ struct md_signal_delivery {
     unsigned carriers[NSIG];
     uintptr_t carrier_cookie;
     uint64_t mask, kernel_mask;
-    int active, committing;
+    int active, committing, stopping;
     md_signal_origin_capture capture;
     void *capture_context;
     struct md_signal_origin *child_origin;
@@ -21,6 +21,9 @@ struct md_signal_delivery {
 /* Standard signals coalesce without losing the first siginfo. Realtime
  * instances retain FIFO order per signal, ahead of subsequent kernel arrivals. */
 int md_signal_delivery_hold(struct md_signal_delivery *,const siginfo_t *);
+/* Restore a consumed asynchronous delivery stop after an internal operation.
+ * Job-control signals use an inert carrier, not another STOP/CONT generation. */
+int md_signal_delivery_defer_stop(struct md_signal_delivery *,const siginfo_t *);
 /* Explicitly generated standard signal, after recipient/si_code admission.
  * A self-directed queued signal may legitimately carry a positive code. */
 int md_signal_delivery_generated(struct md_signal_delivery *,const siginfo_t *);

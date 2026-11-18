@@ -28,7 +28,8 @@ static inline struct seccomp_data syscall_observation(const struct ptrace_syscal
 static inline struct seccomp_data syscall_stopped(const struct user_pt_regs *regs,
         const struct ptrace_syscall_info *info) {
     struct seccomp_data call=syscall_description(regs);
-    if (info && info->op==PTRACE_SYSCALL_INFO_SECCOMP && regs->pc==info->instruction_pointer)
+    if (info && (info->op==PTRACE_SYSCALL_INFO_SECCOMP || info->op==PTRACE_SYSCALL_INFO_ENTRY)
+            && regs->pc==info->instruction_pointer)
         call.nr=info->seccomp.nr;
     return call;
 }
@@ -38,7 +39,8 @@ static inline struct seccomp_data syscall_stopped(const struct user_pt_regs *reg
 static inline struct seccomp_data syscall_policy(const struct user_pt_regs *regs,
         const struct ptrace_syscall_info *info) {
     struct seccomp_data call=syscall_stopped(regs,info);
-    if (info && info->op==PTRACE_SYSCALL_INFO_SECCOMP && regs->pc==info->instruction_pointer)
+    if (info && (info->op==PTRACE_SYSCALL_INFO_SECCOMP || info->op==PTRACE_SYSCALL_INFO_ENTRY)
+            && regs->pc==info->instruction_pointer)
         call.args[0]=info->seccomp.args[0];
     return call;
 }

@@ -50,7 +50,9 @@ memory and futex operations retain native execution. Signal masks also stay
 native unless inherited Android policy requires the logical SIGSYS view. Signal sending
 always checks launch membership and guest credentials, even without a PID
 namespace. Group/broadcast sends select only supervised guest processes, never
-other Android processes sharing the executor UID. Features such as
+other Android processes sharing the executor UID. After signal admission,
+unchanged native operands require no result-side observation; translated IDs
+and logical SIGSYS retain their owning completion. Features such as
 guest debugging, routed networking and virtual descriptor readiness activate
 only for their owning resources.
 
@@ -183,6 +185,9 @@ does not authorize releasing worker storage or an unobserved descriptor result.
 Releasing a memory-admission barrier also rechecks retained worker completions
 and descriptor continuations: their original readiness notification may already
 have been consumed while admission was closed.
+A terminal event can supersede a broker-held stop when SIGKILL advances the
+task. The broker retains one event lease through worker retirement, publishing
+the terminal status and usage instead of replaying a stale continuation.
 
 See [process lifetime](process-lifetime.md), [interception](interception.md)
 and [process resources](process-resources.md) for scheduler, cancellation,
@@ -211,10 +216,15 @@ use retained sources and confirmed kernel publication; cancellation releases
 unpublished resources without closing an application's installed or reused FD.
 No SQLite transaction or file-table turn may span an application readiness wait.
 Mixed poll/epoll keeps native waiting in the calling guest's signal context.
-Before an application installs seccomp, readiness selectors are prepared for
-future virtual FDs, because the application may forbid further filter installation.
-That sandbox path adds admission overhead even to native waits; ordinary
-unfiltered workloads retain selective interception.
+Service-code admission allows descriptor and readiness selectors to remain
+selective after an application installs seccomp. Before a thread-local filter
+can split a live thread group's kernel policy, selectors are prepared for all
+future virtual FDs: a later TSYNC must neither fail nor spread that thread's
+policy to its peers. This prepared path adds admission overhead to native IO
+and waits; single-threaded and synchronized policy installation stay selective.
+Typed descriptors, including seccomp listeners and signal FDs, prepare their
+exact ioctl/readiness selectors before publication through the shared task-action
+owner. Their provisional table turn remains held until admission or retirement.
 When all destination selectors are already prepared, descriptor duplication
 uses the native mutation owner directly. It still orders shared-table changes,
 retires internal loans and publishes only the kernel's actual result. Ordinary
@@ -329,7 +339,11 @@ ordinary native IO acquires no additional turn or observation. `signal_pending`
 separates thread-private and process-shared SIGSYS queues and the shared-sighand
 wait domain. Other signals retain native kernel queues. `signal_fd` integrates
 signalfd/read/readv, typed FD transfer, poll and task-affine epoll through the
-existing descriptor owners. Epoll publication commits logical ET/ONESHOT state
+existing descriptor owners. Zero-time signal probes and nonblocking descriptor
+reads use their admitted scratch directly; only actual blocking waits acquire
+parked storage and release the memory turn. Partial descriptor reads retain
+nonblocking tail consumption and return the bytes already copied.
+Epoll publication commits logical ET/ONESHOT state
 only after the caller's copy succeeds; native task events validate the actual
 output buffer before consumption. The mapping turn covers that nonblocking
 publication, never a blocking wait. Parked waits release shared transport slots.
@@ -343,6 +357,10 @@ TSYNC retains immutable admission snapshots for already admitted calls and
 pending Android denials. A group barrier is limited to filter installation;
 ordinary syscalls do not acquire global entry tracing. Owned completion gates
 finish the original admitted request without replaying it through a later filter.
+Private fork preparation releases inherited entry claims and re-evaluates a
+temporary filter pause against the child's own policy. Recovery recognizes
+earlier published branches even when the parent's registry has since paused,
+retired or extended them; unrelated application instructions remain untouched.
 This admission/notification lifecycle is shared by app UID and UID 2000;
 only translation of Android's inherited SIGSYS policy is app-UID-specific.
 `guest_debugger` supplies typed TRACESECCOMP events through the supervisor's

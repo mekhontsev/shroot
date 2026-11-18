@@ -192,11 +192,11 @@ struct md_provider_tree *md_procfs_new(int parent,const char *text,const struct 
     if (error) { md_provider_tree_release(tree); errno=error; return NULL; }
     return tree;
 }
-int md_procfs_path(const struct md_view_mount *mount,int fd,char *out,size_t size) {
+int md_procfs_path(const struct md_view_mount *mount,int fd,const struct stat *metadata,char *out,size_t size) {
     if (!mount->provider) return md_view_fdpath(fd,out,size);
     if (size<6) return -ENAMETOOLONG;
     memcpy(out,"/proc",5);
-    int result=md_provider_tree_path(mount->provider,fd,out+5,size-5);
+    int result=md_provider_tree_path(mount->provider,fd,metadata,out+5,size-5);
     if (!result && !strcmp(out,"/proc/")) out[5]=0;
     return result;
 }
@@ -221,7 +221,7 @@ static pid_t visible(const struct md_view_mount *mount,pid_t native) {
 }
 int md_procfs_guest_path(const struct md_view_mount *mount,int fd,char *out,size_t size) {
     char path[PATH_MAX];
-    int error=md_procfs_path(mount,fd,path,sizeof(path));
+    int error=md_procfs_path(mount,fd,NULL,path,sizeof(path));
     if (error) return error;
     if (strncmp(path,"/proc",5) || (path[5] && path[5]!='/')) return -EXDEV;
     const char *relative=path[5] ? path+5 : "/", *tail;
@@ -557,7 +557,7 @@ int md_procfs_step(struct md_filesystem *fs,struct md_mount_namespace *view,stru
         const struct stat *parent,const char *name,const char *tail,int follow_final,uint64_t resolve,
         struct stat *metadata,struct md_provider_lookup **pending) {
     char path[PATH_MAX], mapped[32];
-    int r=md_procfs_path(mount,fd,path,sizeof(path));
+    int r=md_procfs_path(mount,fd,parent,path,sizeof(path));
     if (r) return r;
     if (md_procfs_masked(path)) return -EACCES;
     if (network_directory(fs,path)) {
@@ -662,15 +662,18 @@ int md_procfs_step(struct md_filesystem *fs,struct md_mount_namespace *view,stru
     if (mount->provider) {
         int host=host_network(fs,path) || (!strcmp(path,"/proc/sys") && !strcmp(name,"net")
             && host_network(fs,"/proc/sys/net"));
-        next=host ? md_provider_tree_host_step(mount->provider,fd,name)
-            : md_provider_tree_step(mount->provider,fd,name);
+        next=md_provider_tree_step_path(mount->provider,path[5] ? path+5 : "/",name,host);
     }
     else { next=openat(fd,name,O_PATH|O_NOFOLLOW|O_CLOEXEC); if (next<0) next=-errno; }
     if (next>=0 && fstat(next,metadata)) { int error=-errno; close(next); next=error; }
     /* Native admission is the common path. A protected launch member can
      * instead capture this exact step under guest inspection authority; the
      * saved walker still owns the mount, suffix and openat2 boundary. */
-    if ((next==-ENOENT || next==-EPERM || next==-EACCES) && fs->actor
+    /* hidepid can conceal a process/thread directory itself. Once its parent
+     * is admitted, a missing child is not an inspection denial: retrying it
+     * inside the target could wait on the caller of this very lookup. */
+    int hidden_task=next==-ENOENT && group && decimal(name,NULL);
+    if ((hidden_task || next==-EPERM || next==-EACCES) && fs->actor
             && boundary && strcmp(name,"..")) {
         char target[PATH_MAX];
         int n=!strcmp(name,".") ? snprintf(target,sizeof(target),"%s",path)
@@ -706,7 +709,7 @@ int md_procfs_step(struct md_filesystem *fs,struct md_mount_namespace *view,stru
 ssize_t md_procfs_readlink(struct md_filesystem *fs,const struct md_view_mount *mount,
         int fd,void *data,size_t capacity) {
     char path[PATH_MAX], value[64];
-    int r=md_procfs_path(mount,fd,path,sizeof(path));
+    int r=md_procfs_path(mount,fd,NULL,path,sizeof(path));
     if (r) return r;
     char *leaf=strrchr(path,'/');
     if (leaf) {
@@ -739,7 +742,7 @@ ssize_t md_procfs_readlink(struct md_filesystem *fs,const struct md_view_mount *
 }
 ssize_t md_procfs_getdents(struct md_filesystem *fs,const struct md_view_mount *mount,int fd,void *data,size_t capacity) {
     char path[PATH_MAX];
-    int error=md_procfs_path(mount,fd,path,sizeof(path));
+    int error=md_procfs_path(mount,fd,NULL,path,sizeof(path));
     if (error) return error;
     if (md_procfs_masked(path)) return -EACCES;
     error=md_procfs_check(fs,mount,path,1);

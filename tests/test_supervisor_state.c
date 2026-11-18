@@ -29,16 +29,38 @@
 #include "full_device.h"
 
 static void stopped_call_context(void) {
-    struct user_pt_regs regs={.pc=0x1004,.regs={7,[8]=SYS_getpid}};
-    struct ptrace_syscall_info info={.op=PTRACE_SYSCALL_INFO_SECCOMP,
-        .arch=AUDIT_ARCH_AARCH64,.instruction_pointer=regs.pc};
-    info.seccomp.nr=SYS_getpgid; info.seccomp.args[0]=23;
-    struct seccomp_data execution=syscall_stopped(&regs,&info),policy=syscall_policy(&regs,&info);
-    assert(execution.nr==SYS_getpgid && execution.args[0]==7);
-    assert(policy.nr==SYS_getpgid && policy.args[0]==23);
-    regs.pc+=4;
-    policy=syscall_policy(&regs,&info);
-    assert(policy.nr==SYS_getpid && policy.args[0]==7);
+    const unsigned stops[]={PTRACE_SYSCALL_INFO_ENTRY,PTRACE_SYSCALL_INFO_SECCOMP};
+    for (unsigned i=0;i<sizeof(stops)/sizeof(*stops);++i) {
+        struct user_pt_regs regs={.pc=0x1004,.regs={7,[8]=SYS_getpid}};
+        struct ptrace_syscall_info info={.op=stops[i],
+            .arch=AUDIT_ARCH_AARCH64,.instruction_pointer=regs.pc};
+        info.entry.nr=SYS_getpgid; info.entry.args[0]=23;
+        struct seccomp_data execution=syscall_stopped(&regs,&info),policy=syscall_policy(&regs,&info);
+        assert(execution.nr==SYS_getpgid && execution.args[0]==7);
+        assert(policy.nr==SYS_getpgid && policy.args[0]==23);
+        regs.pc+=4;
+        policy=syscall_policy(&regs,&info);
+        assert(policy.nr==SYS_getpid && policy.args[0]==7);
+    }
+}
+
+static void proc_call_context(void) {
+    struct thread t={.execution={.request={.nr=SYS_read,.args={3,0x4000,16},
+        .instruction_pointer=0x1004},.registers={.sp=0x8000}}};
+    struct md_proc_syscall_view view={0};
+    assert(!proc_retained_syscall(NULL,&view));
+    const enum phase native[]={IDLE,NATIVE_WAIT,ADAPTER_NATIVE};
+    for (unsigned i=0;i<sizeof(native)/sizeof(*native);++i) {
+        t.phase=native[i]; assert(!proc_retained_syscall(&t,&view));
+    }
+    const enum phase retained[]={WATCH_READ,IPC_WAITING,SOCKET_WAITING,FILE_WAITING,
+        CONTROL_WAITING,CLOSE_WAITING,EPOLL_WAIT,DEBUG_PARK_EXIT};
+    for (unsigned i=0;i<sizeof(retained)/sizeof(*retained);++i) {
+        t.phase=retained[i]; assert(proc_retained_syscall(&t,&view));
+        assert(view.number==SYS_read && view.args[0]==3 && view.args[1]==0x4000
+            && view.args[2]==16 && view.stack==0x8000 && view.instruction==0x1004);
+    }
+    puts("PASS proc syscall: retained waits publish their call; native waits retain kernel observation");
 }
 
 static void filesystem_control_metadata(void) {
@@ -223,9 +245,10 @@ static void terminal_cleanup_broker(void) {
 }
 static unsigned observation_updates;
 static int observation_error;
+static unsigned long observation_extra=PTRACE_O_TRACEEXIT;
 static long observation_trace(int request,pid_t pid,void *address,void *data) {
     assert(request==PTRACE_SETOPTIONS && pid==123 && !address);
-    assert((uintptr_t)data==(trace_options|PTRACE_O_TRACEEXIT));
+    assert((uintptr_t)data==(trace_options|observation_extra));
     ++observation_updates;
     if (observation_error) { errno=observation_error; return -1; }
     return 0;
@@ -245,6 +268,21 @@ static void terminal_observation_idempotent(void) {
     assert(task_observe_exit(&task)==-ESRCH && task.trace_options_dirty);
     observation_error=0;
     assert(!task_observe_exit(&task) && !task.trace_options_dirty && observation_updates==4);
+    task.terminal_observation=0; task.debug.options=0;
+    for (int dirty=0;dirty<2;++dirty) {
+        task.trace_options_dirty=dirty; observation_error=EIO;
+        assert(debugger_options(task.pid,PTRACE_O_TRACEEXIT)==-EIO);
+        assert(!task.debug.options && task.trace_options_dirty==dirty);
+    }
+    observation_error=0;
+    assert(!debugger_options(task.pid,PTRACE_O_TRACEEXIT));
+    assert(task.debug.options==PTRACE_O_TRACEEXIT && !task.trace_options_dirty);
+    observation_extra=0; observation_error=EIO;
+    assert(debugger_options(task.pid,0)==-EIO);
+    assert(task.debug.options==PTRACE_O_TRACEEXIT && !task.trace_options_dirty);
+    observation_error=0;
+    assert(!debugger_options(task.pid,0) && !task.debug.options);
+    observation_extra=PTRACE_O_TRACEEXIT;
     checkpoints.trace=checkpoint_native_trace;
     thread_index[task.pid%THREAD_BUCKETS]=NULL;
     puts("PASS terminal observation: repeated owners and debugger changes reuse observation; pending and failed installs retry");
@@ -333,21 +371,56 @@ static void native_child_membership(void) {
     struct thread descendant={.pid=child,.tgid=child,.born=1};
     struct thread parent={.pid=getpid(),.tgid=getpid(),.born=1,.next=&descendant};
     threads=&parent;
-    assert(retained_retirement_group_ready(parent.pid));
+    assert(!thread_index[parent.pid%THREAD_BUCKETS]);
+    thread_index[parent.pid%THREAD_BUCKETS]=&parent;
+    assert(retained_retirement_group_ready(parent.pid,0));
     for (struct thread *t=threads;t;t=t->next) {
         t->terminal_stop=1;
-        assert(!retained_retirement_group_ready(parent.pid));
-        assert(retained_retirement_group_ready(-1));
+        assert(!retained_retirement_group_ready(parent.pid,0));
+        assert(retained_retirement_group_ready(-1,0));
         t->terminal_stop=0; t->robust.terminal=1;
-        assert(!retained_retirement_group_ready(parent.pid));
+        assert(!retained_retirement_group_ready(parent.pid,0));
         t->robust.terminal=0;
-        assert(retained_retirement_group_ready(parent.pid));
+        assert(retained_retirement_group_ready(parent.pid,0));
     }
+    descendant.terminal_stop=1;
+    assert(!retained_retirement_group_ready(parent.pid,1));
+    assert(parent.robust.retirement_blocked==1);
+    descendant.terminal_stop=0;
+    assert(!retained_retirement_group_ready(parent.pid,1));
+    assert(retained_retirement_group_ready(parent.pid,2));
+    thread_index[parent.pid%THREAD_BUCKETS]=NULL;
     threads=saved;
     assert(!kill(child,SIGKILL));
     int status; assert(waitpid(child,&status,0)==child && WIFSIGNALED(status));
     assert(md_task_parent(child)==-ENOENT);
     puts("PASS native child classification and retirement: parent/child exit ownership, wait class and parenthesized comm");
+}
+static void retained_retirement_shared_parent(void) {
+    enum { CHILDREN=256, PASSES=8 };
+    struct retained_memory children[CHILDREN]={0};
+    struct thread peers[CHILDREN]={0};
+    struct thread parent={.pid=123,.tgid=123,.born=1,.entered=1,.ready=1,.robust.terminal=1};
+    struct interception_statistics counts={0},*previous=statistics;
+    struct thread *saved=threads;
+    assert(!retained_work && !retained_retirement && !retained_barrier && !quiescence_busy(NULL));
+    assert(!thread_index[parent.pid%THREAD_BUCKETS]);
+    thread_index[parent.pid%THREAD_BUCKETS]=&parent;
+    for (unsigned i=0;i<CHILDREN;++i) {
+        peers[i]=(struct thread){.pid=1000+(pid_t)i,.tgid=1000+(pid_t)i,.born=1,
+            .next=i+1<CHILDREN ? &peers[i+1] : &parent};
+        children[i]=(struct retained_memory){.retained.actor=2000+(pid_t)i,.ready=1,
+            .retiring=1,.queued=1,.parent=&parent,
+            .work_next=i+1<CHILDREN ? &children[i+1] : NULL};
+    }
+    threads=peers; retained_work=children; statistics=&counts;
+    for (unsigned i=0;i<PASSES;++i) retained_progress();
+    assert(counts.retirement_group_scans==PASSES*(CHILDREN+1));
+    assert(!counts.retirement_actor_scans && !retained_retirement && !retained_barrier);
+    for (unsigned i=0;i<CHILDREN;++i) assert(!children[i].killed && !children[i].dead);
+    thread_index[parent.pid%THREAD_BUCKETS]=NULL;
+    threads=saved; retained_work=NULL; statistics=previous;
+    puts("PASS private-child retirement: one blocked-group scan per pass, no repeated actor search for adopted siblings");
 }
 static int wait_test_hidden,wait_test_done,wait_test_admitted=1;
 static pid_t wait_test_last;
@@ -417,6 +490,37 @@ static void private_wait_selection(void) {
     assert(!__real_md_debugger_active(d) && !wait_test_done);
     md_debugger_destroy(d);
     puts("PASS private-child wait selection: native admission, exact candidates, ECHILD and event-driven retry");
+}
+static unsigned group_listen_wakes;
+static pid_t group_listen_group(pid_t pid) { return pid; }
+static pid_t group_listen_parent(pid_t pid) { assert(pid==1); return 123; }
+static void group_listen_wake(pid_t pid) { assert(pid==123); ++group_listen_wakes; }
+static long group_listen_trace(int request,pid_t pid,void *address,void *data) {
+    assert(request==PTRACE_LISTEN && pid==1 && !address && !data); return 0;
+}
+static void group_listen_publication(void) {
+    struct md_debugger *saved=debugger;
+    struct md_debugger_host host={.wait_children=wait_test_children,.complete=wait_test_complete,
+        .wait=wait_test_run,.wait_admit=wait_test_admit,.group=group_listen_group,
+        .parent=group_listen_parent,.wait_wake=group_listen_wake};
+    for (unsigned traced=0;traced<2;++traced) {
+        debugger=md_debugger_create(&host); assert(debugger);
+        struct thread child={.pid=1,.kernel_stopped=1};
+        assert(!thread_index[1]); thread_index[1]=&child;
+        struct seccomp_data call={.nr=SYS_wait4,.args={1,0,WUNTRACED}};
+        wait_test_hidden=1; wait_test_last=1; wait_test_done=0; group_listen_wakes=0;
+        assert(md_debugger_call(debugger,123,call)==MD_DEBUG_CALL_HANDLED);
+        md_debugger_wait_complete(debugger,123,0,NULL);
+        assert(wait_test_action==MD_DEBUG_WAIT_PARK && !wait_test_done);
+        checkpoints.trace=group_listen_trace;
+        if (traced) assert(!debugger_listen(child.pid));
+        else task_group_stop(&child);
+        assert(child.listening && !child.kernel_stopped && group_listen_wakes==1);
+        checkpoints.trace=checkpoint_native_trace; thread_index[1]=NULL;
+        md_debugger_destroy(debugger);
+    }
+    debugger=saved;
+    puts("PASS group-stop publication: native and guest-debugger LISTEN wake the real parent after admission");
 }
 static void private_wait_buffer_cancel(void) {
     struct thread t={.pid=123,.memory=md_memory_new()};
@@ -649,6 +753,30 @@ static long continuation_trace(int request,pid_t pid,void *address,void *data) {
     }
     return 0;
 }
+static void native_terminal_journal(void) {
+    struct md_interception_abi saved=abi;
+    abi.native_begin=0x1000; abi.native_call=0x1004; abi.native_end=0x1010;
+    struct thread t={.pid=123,.kernel_stopped=1};
+    assert(!thread_index[t.pid%THREAD_BUCKETS]); thread_index[t.pid%THREAD_BUCKETS]=&t;
+    checkpoints.trace=continuation_trace;
+    const uintptr_t pcs[]={0x800,0x1004,0x1008,0x2000};
+    for (unsigned terminal=0;terminal<2;++terminal) for (unsigned i=0;i<4;++i) {
+        struct md_entry_native native={.state=MD_NATIVE_RUNNING,.number=SYS_close,.result=-EINTR};
+        continuation_registers=(struct user_pt_regs){.pc=pcs[i],.regs={7}};
+        struct user_pt_regs before=continuation_registers;
+        int outside=i==0 || i==3;
+        assert(cooperative_native_observe(t.pid,&native,terminal)==(outside && !terminal ? -EPROTO : 0));
+        unsigned expected=outside ? (terminal ? MD_NATIVE_UNKNOWN : MD_NATIVE_RUNNING)
+            : i==1 ? MD_NATIVE_CANCELLED : MD_NATIVE_DONE;
+        assert(atomic_load(&native.state)==expected);
+        assert(native.result==(expected==MD_NATIVE_DONE ? 7 : -EINTR));
+        if (terminal || outside) assert(!memcmp(&continuation_registers,&before,sizeof(before)));
+        else assert(continuation_registers.pc==abi.native_end);
+        if (terminal) assert(!cooperative_native_observe(t.pid,&native,1));
+    }
+    checkpoints.trace=checkpoint_native_trace; thread_index[t.pid%THREAD_BUCKETS]=NULL; abi=saved;
+    puts("PASS terminal native journal: exact results retained, displaced execution unknown, no terminal register mutation");
+}
 static void borrowed_continuations(void) {
     for (unsigned owner=0;owner<5;++owner) {
         struct signal_control signal={.started=1};
@@ -670,7 +798,8 @@ static void borrowed_continuations(void) {
         *call=(struct md_task_call){0};
         continuation_registers=(struct user_pt_regs){.pc=0x2004,.regs={[8]=SYS_getpid,[0]=123}};
         struct user_pt_regs saved=continuation_registers;
-        continuation_info=(struct ptrace_syscall_info){.op=PTRACE_SYSCALL_INFO_EXIT};
+        continuation_info=(struct ptrace_syscall_info){.op=PTRACE_SYSCALL_INFO_EXIT,
+            .instruction_pointer=continuation_registers.pc,.exit.rval=123};
         continuation_mask=0;
         struct md_task_call_arguments arguments={.number=SYS_gettid};
         assert(!md_task_call_begin(call,continuation_trace,t.pid,MD_TASK_CALL_EXIT,&saved,0x1000,0x1004,&arguments));
@@ -682,8 +811,11 @@ static void borrowed_continuations(void) {
             assert(continuation_request==expected[step] && !t.kernel_stopped);
             continuation_registers.pc=0x1004;
             continuation_info=(struct ptrace_syscall_info){.op=step%2
-                ? PTRACE_SYSCALL_INFO_EXIT : PTRACE_SYSCALL_INFO_ENTRY};
-            if (step%2) continuation_registers.regs[0]=123;
+                ? PTRACE_SYSCALL_INFO_EXIT : PTRACE_SYSCALL_INFO_ENTRY,
+                .instruction_pointer=continuation_registers.pc};
+            if (step%2) {
+                continuation_registers.regs[0]=123; continuation_info.exit.rval=123;
+            }
             else {
                 continuation_info.entry.nr=step ? SYS_getpid : SYS_gettid;
                 memcpy(continuation_info.entry.args,continuation_registers.regs,sizeof(continuation_info.entry.args));
@@ -721,8 +853,30 @@ static void pending_queue_scan(void) {
     puts("PASS pending signals: exact ordered scan and geometric kernel queue traversal");
 }
 static siginfo_t debug_host_signal;
-static unsigned debug_host_scans;
+static unsigned debug_host_scans,debug_host_numbers,debug_host_register_reads;
+static long debug_host_result;
+static struct user_pt_regs debug_host_registers;
 static long debug_host_trace(int request,pid_t pid,void *address,void *data) {
+    if (request==PTRACE_SETREGSET) {
+        assert(pid==123 && (uintptr_t)address==NT_PRSTATUS);
+        struct iovec *io=data;
+        assert(io->iov_len==sizeof(uint64_t));
+        debug_host_result=*(long *)io->iov_base;
+        return 0;
+    }
+    if (request==PTRACE_GETREGSET) {
+        assert(pid==123);
+        struct iovec *io=data;
+        if ((uintptr_t)address==NT_PRSTATUS) {
+            assert(io->iov_len==sizeof(debug_host_registers));
+            memcpy(io->iov_base,&debug_host_registers,sizeof(debug_host_registers));
+            ++debug_host_register_reads; return 0;
+        }
+        assert((uintptr_t)address==NT_ARM_SYSTEM_CALL); ++debug_host_numbers;
+        assert(io->iov_len==sizeof(int));
+        *(int *)io->iov_base=debug_host_signal.si_syscall;
+        return 0;
+    }
     assert(request==PTRACE_PEEKSIGINFO && pid==123);
     const struct ptrace_peeksiginfo_args *args=address;
     assert(!args->flags && !args->off);
@@ -733,38 +887,82 @@ static long debug_host_trace(int request,pid_t pid,void *address,void *data) {
 }
 static void debug_host_exit(void) {
     struct thread t={.pid=123,.entered=1,.signals.host=1,.debug.call_active=1};
-    struct user_pt_regs regs={.pc=0x12345678,.regs={[8]=SYS_setresgid,[0]=81}};
+    t.signals.actions=md_signal_actions_new(); assert(t.signals.actions);
+    assert(!thread_index[t.pid%THREAD_BUCKETS]);
+    thread_index[t.pid%THREAD_BUCKETS]=&t;
+    debug_host_registers=(struct user_pt_regs){.pc=0x12345678,.regs={[8]=SYS_setresgid,[0]=81}};
+    struct ptrace_syscall_info info={.op=PTRACE_SYSCALL_INFO_EXIT,.arch=AUDIT_ARCH_AARCH64,
+        .instruction_pointer=debug_host_registers.pc,.exit={.rval=81}};
     debug_host_signal=(siginfo_t){.si_signo=SIGSYS,.si_code=SYS_SECCOMP};
     debug_host_signal.si_arch=AUDIT_ARCH_AARCH64;
     debug_host_signal.si_syscall=SYS_setresgid;
-    debug_host_signal.si_call_addr=(void *)(uintptr_t)regs.pc;
-    checkpoints.trace=debug_host_trace; debug_host_scans=0;
-    assert(debug_host_policy_pending(&t,&regs)==1 && debug_host_scans==1);
-    t.signals.host=0; assert(!debug_host_policy_pending(&t,&regs) && debug_host_scans==1);
+    debug_host_signal.si_call_addr=(void *)(uintptr_t)info.instruction_pointer;
+    checkpoints.trace=debug_host_trace; debug_host_scans=debug_host_numbers=0;
+    debug_host_register_reads=0;
+    assert(debug_host_policy_pending(&t,&info)==1 && debug_host_scans==1 && debug_host_numbers==1
+        && debug_host_register_reads==1);
+    t.signals.host=0; assert(!debug_host_policy_pending(&t,&info) && debug_host_scans==1);
     t.signals.host=1; t.debug.call_active=0;
-    assert(!debug_host_policy_pending(&t,&regs) && debug_host_scans==1);
+    assert(!debug_host_policy_pending(&t,&info) && debug_host_scans==1);
     t.debug.call_active=1;
-    ++regs.pc; assert(!debug_host_policy_pending(&t,&regs)); --regs.pc;
-    debug_host_signal.si_code=SI_QUEUE; assert(!debug_host_policy_pending(&t,&regs));
+    ++info.instruction_pointer; assert(!debug_host_policy_pending(&t,&info)); --info.instruction_pointer;
+    debug_host_signal.si_code=SI_QUEUE; assert(!debug_host_policy_pending(&t,&info));
+    assert(debug_host_numbers==1 && debug_host_register_reads==1);
     debug_host_signal.si_code=SYS_SECCOMP;
     const uint32_t actions[]={SECCOMP_RET_ALLOW,SECCOMP_RET_LOG,SECCOMP_RET_ERRNO|EACCES,
-        SECCOMP_RET_TRACE|17,SECCOMP_RET_USER_NOTIF,SECCOMP_RET_TRAP|19,SECCOMP_RET_KILL_PROCESS};
+        SECCOMP_RET_TRACE|17,SECCOMP_RET_USER_NOTIF,SECCOMP_RET_TRAP|19,
+        SECCOMP_RET_KILL_PROCESS,SECCOMP_RET_KILL_THREAD};
     for (unsigned i=0;i<sizeof(actions)/sizeof(*actions);++i) {
+        struct md_kernel_action disposition={.handler=(uintptr_t)SIG_IGN,
+            .flags=SA_RESTART,.mask=UINT64_C(1)<<(SIGUSR1-1)};
+        assert(!md_signal_actions_commit(t.signals.actions,SIGSYS,&disposition));
+        t.signals.host_blocked=1; t.signals.handler_mask_known=1;
         struct sock_filter code[]={BPF_STMT(BPF_RET|BPF_K,actions[i])};
         struct sock_fprog program={1,code};
         assert(!md_seccomp_policy_capture(NULL,&program,&t.seccomp.policy));
-        assert(debug_host_policy_pending(&t,&regs)==(i<5));
+        assert(debug_host_policy_pending(&t,&info)==(i<5 && i!=2));
+        if (i==2) {
+            assert(debug_host_result==-EACCES && info.exit.rval==-EACCES && info.exit.is_error);
+            assert(debug_host_policy_completed(&t,&debug_host_signal));
+        }
+        struct md_kernel_action observed;
+        assert(!md_signal_actions_read(t.signals.actions,SIGSYS,&observed));
+        assert(observed.handler==(i>=6 ? (uintptr_t)SIG_DFL : disposition.handler)
+            && observed.flags==disposition.flags && observed.mask==disposition.mask);
+        assert(t.signals.host_blocked==(i<6) && t.signals.handler_mask_known==(i<6));
         md_seccomp_policy_release(t.seccomp.policy); t.seccomp.policy=NULL;
     }
-    regs.regs[8]=debug_host_signal.si_syscall=SYS_getpid;
-    assert(!debug_host_policy_pending(&t,&regs));
+    debug_host_registers.regs[8]=debug_host_signal.si_syscall=SYS_getpid;
+    assert(!debug_host_policy_pending(&t,&info));
     const int optional[]={SYS_set_robust_list,SYS_get_robust_list,SYS_rseq,
         SYS_get_mempolicy,SYS_set_mempolicy,SYS_mbind,SYS_adjtimex,SYS_clock_adjtime,SYS_kcmp};
     for (unsigned i=0;i<sizeof(optional)/sizeof(*optional);++i) {
-        regs.regs[8]=debug_host_signal.si_syscall=optional[i];
-        assert(debug_host_policy_pending(&t,&regs)==1);
+        debug_host_registers.regs[8]=debug_host_signal.si_syscall=optional[i];
+        assert(debug_host_policy_pending(&t,&info)==(i<2));
+        if (i>=2) {
+            assert(debug_host_result==-ENOSYS && info.exit.rval==-ENOSYS && info.exit.is_error);
+            assert(debug_host_policy_completed(&t,&debug_host_signal));
+        }
     }
-    debug_host_signal.si_signo=0; assert(!debug_host_policy_pending(&t,&regs));
+    debug_host_registers.regs[8]=SYS_gettid;
+    debug_host_signal.si_syscall=-1;
+    assert(!debug_host_policy_pending(&t,&info));
+    assert(debug_host_result==-ENOSYS && info.exit.rval==-ENOSYS && info.exit.is_error);
+    siginfo_t other=debug_host_signal; ++other.si_syscall;
+    assert(!debug_host_policy_completed(&t,&other));
+    other=debug_host_signal; other.si_code=SI_QUEUE;
+    assert(!debug_host_policy_completed(&t,&other));
+    other=debug_host_signal; other.si_call_addr=(void *)(uintptr_t)(info.instruction_pointer+4);
+    assert(!debug_host_policy_completed(&t,&other));
+    assert(debug_host_policy_completed(&t,&debug_host_signal));
+    assert(!debug_host_policy_completed(&t,&debug_host_signal));
+    debug_host_signal.si_signo=0;
+    unsigned before=debug_host_numbers;
+    unsigned before_registers=debug_host_register_reads;
+    for (unsigned i=0;i<128;++i) assert(!debug_host_policy_pending(&t,&info));
+    assert(debug_host_numbers==before && debug_host_register_reads==before_registers);
+    thread_index[t.pid%THREAD_BUCKETS]=NULL;
+    md_signal_actions_release(t.signals.actions);
     checkpoints.trace=NULL;
     puts("PASS debugger host exit: deferred adapter results, guest policy precedence and native signal ordering");
 }
@@ -786,6 +984,67 @@ static void signalfd_information(void) {
     puts("PASS signalfd information: native kernel layout oracle for queued, timer, poll and signal-specific codes");
 }
 static int pending_child_gone;
+static unsigned pending_peek_calls;
+static int pending_peek_error;
+static long pending_peek_trace(int request,pid_t pid,void *address,void *data) {
+    assert(request==PTRACE_PEEKSIGINFO && pid==123 && address);
+    ++pending_peek_calls;
+    const struct ptrace_peeksiginfo_args *args=address;
+    if (pending_peek_error) { errno=pending_peek_error; return -1; }
+    if (args->nr<0 || (args->flags&~PTRACE_PEEKSIGINFO_SHARED)) { errno=EINVAL; return -1; }
+    siginfo_t *items=data;
+    unsigned count=0;
+    while (args->off<2 && count<(unsigned)args->nr && args->off+count<2) {
+        items[count]=(siginfo_t){.si_signo=MD_SIGRTMIN,.si_code=SI_QUEUE,
+            .si_errno=(int)(args->off+count+1)};
+        ++count;
+    }
+    return count;
+}
+static void debugger_pending_queues(void) {
+    struct thread t={.pid=123,.signals.pending=md_signal_pending_new()};
+    assert(t.signals.pending);
+    siginfo_t info={.si_signo=SIGSYS,.si_code=SI_QUEUE,.si_errno=71};
+    assert(md_signal_pending_put(t.signals.pending,MD_SIGNAL_PRIVATE,&info)==1);
+    info.si_errno=72;
+    assert(md_signal_pending_put(t.signals.pending,MD_SIGNAL_SHARED,&info)==1);
+    thread_index[t.pid%THREAD_BUCKETS]=&t; checkpoints.trace=pending_peek_trace;
+    for (unsigned shared=0;shared<2;++shared) {
+        unsigned flags=shared ? PTRACE_PEEKSIGINFO_SHARED : 0;
+        for (uint64_t offset=0;offset<5;++offset) for (unsigned size=0;size<5;++size) {
+            struct ptrace_peeksiginfo_args args={.off=offset,.flags=flags,.nr=(int)size};
+            siginfo_t values[5]; memset(values,0xa5,sizeof(values));
+            for (unsigned repeat=0;repeat<2;++repeat) {
+                pending_peek_calls=0;
+                long result=debugger_trace(PTRACE_PEEKSIGINFO,123,&args,values);
+                long expected=offset>=3 ? 0 : 3-offset;
+                if (expected>(long)size) expected=size;
+                assert(result==expected && pending_peek_calls==(offset==0 && size==1 ? 0u : 1u));
+                for (long i=0;i<result;++i) {
+                    assert(values[i].si_signo==(offset+i ? MD_SIGRTMIN : SIGSYS));
+                    assert(values[i].si_errno==(offset+i ? (int)(offset+i) : 71+(int)shared));
+                }
+            }
+        }
+        struct ptrace_peeksiginfo_args args={.off=UINT64_MAX,.flags=flags,.nr=1};
+        siginfo_t value;
+        assert(!debugger_trace(PTRACE_PEEKSIGINFO,123,&args,&value));
+        args.off=0; args.nr=-1;
+        assert(debugger_trace(PTRACE_PEEKSIGINFO,123,&args,&value)==-1 && errno==EINVAL);
+        args.nr=1; args.flags|=2;
+        assert(debugger_trace(PTRACE_PEEKSIGINFO,123,&args,&value)==-1 && errno==EINVAL);
+        args.nr=2; args.flags=flags; pending_peek_error=ESRCH;
+        assert(debugger_trace(PTRACE_PEEKSIGINFO,123,&args,&value)==-1 && errno==ESRCH);
+        pending_peek_error=0;
+    }
+    md_signal_pending_clear(t.signals.pending,1);
+    struct ptrace_peeksiginfo_args args={.nr=1};
+    siginfo_t value; pending_peek_calls=0;
+    assert(debugger_trace(PTRACE_PEEKSIGINFO,123,&args,&value)==1 && value.si_errno==1 && pending_peek_calls==1);
+    checkpoints.trace=checkpoint_native_trace; thread_index[t.pid%THREAD_BUCKETS]=NULL;
+    md_signal_pending_release(t.signals.pending);
+    puts("PASS debugger pending queues: native/logical scopes, offsets, bounded batches, repeated peeks and native failures");
+}
 static long pending_child_trace(int request,pid_t pid,void *address,void *data) {
     assert(request==PTRACE_PEEKSIGINFO && pid==123 && address && data);
     if (pending_child_gone) { errno=ESRCH; return -1; }
@@ -980,7 +1239,63 @@ static void metadata_mask_mutation(void) {
     md_memory_release(t.memory);
     puts("PASS metadata admission: signal-mask mutations retain their native completion owner");
 }
+static void metadata_policy_wait(void) {
+    const uint32_t actions[]={SECCOMP_RET_USER_NOTIF,SECCOMP_RET_TRACE|17};
+    const unsigned calls[]={SYS_fstat,SYS_newfstatat,SYS_readlinkat,SYS_rt_sigprocmask};
+    struct thread t={.pid=123,.phase=IDLE,.ready=1,.entered=1,.memory=md_memory_new(),
+        .seccomp.application_filter=1};
+    assert(t.memory);
+    for (unsigned host=0;host<2;++host) for (unsigned a=0;a<2;++a)
+        for (unsigned n=0;n<sizeof(calls)/sizeof(*calls);++n) {
+            t.signals.host=host;
+            struct sock_filter code[]={
+                BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,instruction_pointer)),
+                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,0x400004,0,3),
+                BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,calls[n],0,1),
+                BPF_STMT(BPF_RET|BPF_K,actions[a]),
+                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};
+            struct sock_fprog program={sizeof(code)/sizeof(*code),code};
+            assert(!md_seccomp_policy_capture(NULL,&program,&t.seccomp.policy));
+            struct md_task_signal_stop stop={.has_info=1,.has_regs=1,
+                .info={.si_signo=SIGALRM,.si_code=SI_KERNEL},.regs={.pc=0x400000}};
+            stop.regs.regs[8]=calls[n];
+            assert(!interrupted_metadata_event(&t,(SIGALRM<<8)|0x7f,NULL,&stop));
+            assert(!t.metadata_restart && !t.broker_event.held && !t.signals.shielded);
+            md_seccomp_policy_release(t.seccomp.policy); t.seccomp.policy=NULL;
+        }
+    md_memory_release(t.memory);
+    puts("PASS metadata admission: guest notification and TRACE waits retain signal interruption");
+}
 static unsigned metadata_replay_step;
+static struct user_pt_regs metadata_retry_saved;
+static long metadata_retry_trace(int request,pid_t pid,void *address,void *data) {
+    assert(pid==123);
+    if (!metadata_replay_step++) {
+        assert(request==PTRACE_SETREGSET && (uintptr_t)address==NT_PRSTATUS);
+        struct user_pt_regs expected=metadata_retry_saved; expected.pc=RAW_GATE-4;
+        assert(!memcmp(((struct iovec *)data)->iov_base,&expected,sizeof(expected)));
+    } else assert(metadata_replay_step==2 && request==PTRACE_SYSCALL && !address && !data);
+    return 0;
+}
+static void metadata_replay_retry(void) {
+    const enum md_task_call_boundary boundaries[]={MD_TASK_CALL_USER,MD_TASK_CALL_EXIT};
+    for (unsigned i=0;i<sizeof(boundaries)/sizeof(*boundaries);++i) {
+        struct metadata_restart restart={.stage=METADATA_WAIT,.mask=MD_SIGNAL_SYS_BIT,
+            .saved={.pc=0x410000,.sp=0x800000,.regs={123,456}},.requeued_signal=SIGALRM};
+        struct thread t={.pid=123,.phase=IDLE,.kernel_stopped=1,.metadata_restart=&restart};
+        restart.saved.regs[8]=SYS_newfstatat;
+        metadata_retry_saved=restart.saved; metadata_replay_step=0;
+        struct user_pt_regs borrowed={.pc=0x900004,.regs={999}};
+        thread_index[t.pid%THREAD_BUCKETS]=&t; checkpoints.trace=metadata_retry_trace;
+        restart_boundary(&t,&borrowed,0,RESTART_SIGNAL,boundaries[i]);
+        assert(metadata_replay_step==2 && restart.stage==METADATA_ENTRY && t.phase==IDLE);
+        assert(!memcmp(&restart.saved,&metadata_retry_saved,sizeof(restart.saved)));
+        assert(restart.mask==MD_SIGNAL_SYS_BIT && restart.requeued_signal==SIGALRM);
+        checkpoints.trace=checkpoint_native_trace; thread_index[t.pid%THREAD_BUCKETS]=NULL;
+    }
+    puts("PASS metadata retry: borrowed USER/EXIT cancellation returns to its existing continuation");
+}
 static int metadata_replay_borrowed;
 static uint64_t metadata_replay_mask;
 static long metadata_replay_value;
@@ -1023,6 +1338,7 @@ static long metadata_replay_trace(int request,pid_t pid,void *address,void *data
 }
 static void metadata_replay_completion(void) {
     debugger=md_debugger_create(&(struct md_debugger_host){0}); assert(debugger);
+    metadata_replay_retry();
     const long values[]={0,-EACCES,-3};
     for (unsigned completion=0;completion<3;++completion)
         for (unsigned host=0;host<2;++host) for (unsigned blocked=0;blocked<2;++blocked)
@@ -1119,7 +1435,7 @@ static void metadata_policy_delivery(void) {
     t.broker_event.held=t.broker_event.has_info=1;
     uintptr_t gate=abi.raw_gate; abi.raw_gate=(uintptr_t)test_wait_svc+4;
     assert(shield(&t));
-    metadata_restart_enter(&t);
+    metadata_restart_retry(&t);
     while (waitpid(pid,&status,0)==pid && WIFSTOPPED(status)) {
         t.kernel_stopped=1; t.interrupt_pending=0;
         md_signal_delivery_checkpoint(&t.signals.delivery,status);
@@ -1155,20 +1471,54 @@ static void external_signal_target(void) {
     struct thread t={.pid=123,.signals.host=1,.entered=1,.signals.host_blocked=1,.signals.pending=pending};
     thread_index[t.pid%THREAD_BUCKETS]=&t; checkpoints.trace=external_signal_trace;
     const int codes[]={SI_USER,SI_TKILL,SI_QUEUE,SI_TIMER};
-    for (unsigned i=0;i<sizeof(codes)/sizeof(*codes);++i) {
+    for (unsigned restored=0;restored<2;++restored) for (unsigned i=0;i<sizeof(codes)/sizeof(*codes);++i) {
         t.resume_lost=0; external_signal_code=codes[i];
         struct md_task_signal_stop stop;
         md_task_signal_stop_init(&stop,native_trace);
-        assert(host_policy_signal(&t,&stop));
+        if (restored) signals_event(&t,t.pid,SIGSYS,&stop,1);
+        else assert(signal_logical_receive(&t,SIGSYS,&stop));
         struct md_signal_pending_value value;
         assert(!md_signal_pending_peek(peer,&value));
         assert(md_signal_pending_peek(pending,&value) && value.scope==MD_SIGNAL_PRIVATE);
         assert(value.info.si_code==codes[i] && value.info.si_errno==19);
         assert(md_signal_pending_take(pending,&value));
     }
-    checkpoints.trace=NULL; thread_index[t.pid%THREAD_BUCKETS]=NULL;
+    checkpoints.trace=checkpoint_native_trace; thread_index[t.pid%THREAD_BUCKETS]=NULL;
     md_signal_pending_release(peer); md_signal_pending_release(pending);
     puts("PASS external signal delivery: retained kernel-selected task, independent of siginfo source code");
+}
+static void debugger_delivery_mask(void) {
+    for (unsigned host=0;host<2;++host) {
+        pid_t pid=fork(); assert(pid>=0);
+        if (!pid) { assert(!ptrace(PTRACE_TRACEME,0,NULL,NULL)); raise(SIGSTOP); _exit(0); }
+        int status; assert(waitpid(pid,&status,0)==pid && WIFSTOPPED(status));
+        struct thread t={.pid=pid,.signals.host=host,.signals.host_blocked=1};
+        assert(!thread_index[(unsigned)pid%THREAD_BUCKETS]);
+        thread_index[(unsigned)pid%THREAD_BUCKETS]=&t;
+        uint64_t original=UINT64_C(1)<<(SIGUSR2-1),mask=original;
+        assert(!ptrace(PTRACE_SETSIGMASK,pid,(void *)sizeof(mask),&mask));
+        assert(!debugger_signal_mask(pid,0,&mask));
+        assert(mask==(original|(host ? MD_SIGNAL_SYS_BIT : 0)));
+        siginfo_t retained={.si_signo=SIGUSR1,.si_code=SI_USER,.si_pid=getpid(),.si_uid=getuid()};
+        assert(!md_signal_delivery_hold(&t.signals.delivery,&retained));
+        assert(!md_signal_delivery_publish(&t.signals.delivery,pid,pid) && t.signals.delivery.active);
+        assert(!debugger_signal_mask(pid,0,&mask));
+        assert(mask==(original|(host ? MD_SIGNAL_SYS_BIT : 0)));
+        mask=UINT64_MAX; t.signals.handler_mask_known=1;
+        assert(!debugger_signal_mask(pid,1,&mask) && !t.signals.handler_mask_known);
+        assert(!debugger_signal_mask(pid,0,&mask) && mask==md_signal_blockable_mask());
+        uint64_t native=0;
+        assert(!ptrace(PTRACE_GETSIGMASK,pid,(void *)sizeof(native),&native));
+        assert(native==(md_signal_blockable_mask()&~(UINT64_C(1)<<(SIGUSR1-1))));
+        assert(!kill(pid,SIGKILL));
+        assert(waitpid(pid,&status,0)==pid && WIFSIGNALED(status));
+        uint64_t saved=t.signals.delivery.mask; mask=0;
+        assert(debugger_signal_mask(pid,1,&mask)==-ESRCH);
+        assert(t.signals.delivery.mask==saved && t.signals.host_blocked==1);
+        md_signal_delivery_clear(&t.signals.delivery);
+        thread_index[(unsigned)pid%THREAD_BUCKETS]=NULL;
+    }
+    puts("PASS debugger masks: native and logical views, retained carriers and failed mutation rollback");
 }
 static unsigned policy_info_reads,policy_register_reads,policy_info_writes;
 static long policy_signal_trace(int request,pid_t pid,void *address,void *data) {
@@ -1243,6 +1593,8 @@ static void trace_policy_admission(void) {
     assert(debugger_at_boundary(&t));
     t.seccomp.trace.stage=GUEST_TRACE_REPLAY; assert(!debugger_at_boundary(&t));
     t.seccomp.trace.stage=GUEST_TRACE_ADMISSION; assert(!debugger_at_boundary(&t));
+    t.seccomp.trace.stage=GUEST_TRACE_EXECUTION; assert(!debugger_at_boundary(&t));
+    t.seccomp.trace.stage=GUEST_TRACE_DRAIN; assert(!debugger_at_boundary(&t));
     t.seccomp.trace.stage=GUEST_TRACE_NONE; assert(debugger_at_boundary(&t));
     t.signals.host=1; t.entered=0; assert(guest_trace_decision(&t,&call)==SECCOMP_RET_ALLOW);
     md_seccomp_policy_release(t.seccomp.policy);
@@ -1400,6 +1752,8 @@ static void filter_listener_ownership(void) {
         assert(!md_fd_order_complete(&previous));
         assert(!filter_listener_prepare(&caller));
         assert(!filter_listener_prepare(&caller));
+        assert(caller.seccomp.install->selectors==((1U<<MD_FD_SELECTOR_PROC)
+            |(1U<<MD_FD_SELECTOR_EPOLL_TARGET)|(1U<<MD_FD_SELECTOR_POLL)));
         assert(md_fd_order_state(&caller.seccomp.install->files)==MD_RESOURCE_ORDER_RUNNING);
         if (outcomes[i]>=0) {
             caller.seccomp.install->loan->number=outcomes[i];
@@ -1443,6 +1797,19 @@ static void filter_listener_ownership(void) {
     puts("PASS listener ownership: ordered publication, FD zero, failure, fork, SCM_RIGHTS and descriptor reuse");
 }
 static void process_snapshot(void) {
+    const char *leaves[]={"fd/0","fdinfo/0","cwd","root"};
+    const enum md_proc_kind resources[]={MD_PROC_FD,MD_PROC_FDINFO,MD_PROC_CWD,MD_PROC_ROOT};
+    for (unsigned i=0;i<sizeof(resources)/sizeof(*resources);++i) {
+        const char *owners[]={"self","42","42/task/42","thread-self","43","42/task/43"};
+        for (unsigned j=0;j<sizeof(owners)/sizeof(*owners);++j) {
+            char path[128]; snprintf(path,sizeof(path),"/proc/%s/%s",owners[j],leaves[i]);
+            struct md_proc_path selected=md_proc_path_for(path,43,42);
+            assert(selected.process==(j<3 ? 42 : 43));
+            assert(selected.kind==(j<3 ? MD_PROC_FOREIGN : resources[i]));
+            if (j<3) assert(selected.foreign_kind==resources[i]);
+        }
+    }
+    assert(md_proc_path_for("/dev/fd/0",43,42).kind==MD_PROC_FOREIGN);
     const char *public_dentries[]={"/proc/123", "/proc/123/exe", "/proc/123/cwd", "/proc/123/root",
         "/proc/123/mem", "/proc/123/auxv", "/proc/123/cmdline",
         "/proc/123/task/124", "/proc/123/task/124/exe", "/proc/123/task/124/mem",
@@ -2637,8 +3004,10 @@ static void resident_file_waiter_custody(void) {
     struct thread t={.pid=123,.ready=1,.born=1,.initial_stop=1,.phase=MEMORY_WAIT,
         .resources={.files=files},.entry={.control=&channel}};
     struct readiness_owner readiness={0}; t.readiness=&readiness;
+    struct filter_install install={0}; t.seccomp.install=&install;
     struct md_fd_order *turns[]={&t.descriptors.order,&t.proc.lookup,&t.memory_op.files,
-        &t.metadata.files,&t.fs.descriptor_order,&t.fs.returned.files,&t.proc.delivery.files,&readiness.files};
+        &t.metadata.files,&t.fs.descriptor_order,&t.fs.returned.files,&t.proc.delivery.files,&readiness.files,
+        &install.files};
     for (unsigned i=0;i<sizeof(turns)/sizeof(*turns);++i) {
         assert(!md_fd_order_begin(files,turns[i],NULL));
         assert(task_files_queued(&t) && task_action_borrowable(&t,NULL));
@@ -3406,6 +3775,31 @@ static void signal_execution_admission(void) {
     md_memory_release(t.memory);
     puts("PASS signal execution checkpoint: handler acknowledgement and sigreturn retirement without kernel stops");
 }
+static void fd_native_admission(void) {
+    assert(!debugger);
+    debugger=md_debugger_create(&(struct md_debugger_host){0}); assert(debugger);
+    struct thread t={.pid=getpid(),.phase=IDLE,.debug.options=PTRACE_O_TRACESECCOMP|PTRACE_O_TRACEEXIT};
+    t.resources.files=md_fd_origins_new(); assert(t.resources.files);
+    int fd=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK); assert(fd>=0);
+    struct seccomp_data call={.arch=AUDIT_ARCH_AARCH64,.nr=SYS_read,.args={(unsigned)fd,0,8}};
+    assert(fd_native_classify(&t,&call,MD_INTERCEPT_PROC)==1);
+    call.nr=SYS_write;
+    assert(fd_native_classify(&t,&call,MD_INTERCEPT_PROC)==1);
+    assert(!fd_native_classify(&t,&call,MD_INTERCEPT_TASK));
+    t.debug.call_active=1; assert(!fd_native_classify(&t,&call,MD_INTERCEPT_PROC));
+    t.debug.call_active=0; t.debug.step_call=1;
+    assert(!fd_native_classify(&t,&call,MD_INTERCEPT_PROC)); t.debug.step_call=0;
+    struct md_fd_origins *peer=md_fd_origins_fork(t.resources.files,1); assert(peer);
+    assert(!fd_native_classify(&t,&call,MD_INTERCEPT_PROC)); md_fd_origins_release(peer);
+    assert(fd_native_classify(&t,&call,MD_INTERCEPT_PROC)==1);
+    struct md_fd_order held={0};
+    assert(md_fd_order_begin(t.resources.files,&held,NULL)==1 && !md_fd_order_start(&held));
+    assert(!fd_native_classify(&t,&call,MD_INTERCEPT_PROC));
+    assert(!md_fd_order_complete(&held));
+    close(fd); md_fd_origins_release(t.resources.files);
+    md_debugger_destroy(debugger); debugger=NULL;
+    puts("PASS native IO admission: debugger event options, syscall/step boundaries, selector identity and exclusive FD custody");
+}
 static void fd_native_retirement(void) {
     struct md_filesystem fs={0};
     struct md_fs_anchor *origin=NULL;
@@ -3656,6 +4050,58 @@ static void process_remote_repair(void) {
     }
     debug_reply_outcome=MD_ENTRY_NEEDS_STOP; debug_reply_value=RESTART_SIGNAL;
     puts("PASS remote memory admission: read/write, proc exposure and debugger share repair admission without registers or replay");
+}
+static void process_signal_admission(void) {
+    const long calls[]={SYS_kill,SYS_tkill,SYS_tgkill,SYS_rt_sigqueueinfo,SYS_rt_tgsigqueueinfo};
+    for (unsigned shared=0;shared<2;++shared) for (unsigned translated=0;translated<=shared;++translated)
+    for (unsigned restricted=0;restricted<2;++restricted) for (unsigned host=0;host<2;++host)
+    for (unsigned i=0;i<sizeof(calls)/sizeof(*calls);++i) {
+        struct md_entry_channel channel={.call={.number=calls[i],.reserved=MD_ENTRY_EXECUTION_BEGIN}};
+        struct thread caller={.pid=123,.tgid=123,.born=1,.signals.host=host,
+            .seccomp.application_filter=restricted};
+        struct thread target={.pid=456,.tgid=456,.born=1,.signals.host=host};
+        struct md_pid_namespace *space=md_pid_namespace_new(NULL,NULL); assert(space);
+        struct md_pid_identity *identity=NULL;
+        assert(!md_pid_identity_prepare(space,&identity) && !md_pid_identity_publish(identity,target.pid,target.tgid));
+        if (translated) caller.resources.pid=identity;
+        if (shared) { caller.entry.control=&channel; caller.entry.admission=1; }
+        struct seccomp_data call={.nr=calls[i],.instruction_pointer=0x1000,
+            .args={translated ? 1 : target.pid,SIGUSR1,0x2000}};
+        int group=calls[i]==SYS_tgkill || calls[i]==SYS_rt_tgsigqueueinfo;
+        if (group) { call.args[1]=call.args[0]; call.args[2]=SIGUSR1; call.args[3]=0x2000; }
+        memcpy(channel.call.args,call.args,sizeof(call.args));
+        struct user_pt_regs regs={0}; memcpy(regs.regs,call.args,sizeof(call.args)); regs.regs[8]=call.nr;
+        memset(&caller.execution.registers,0xa5,sizeof(caller.execution.registers));
+        struct user_pt_regs untouched=caller.execution.registers;
+        thread_index[caller.pid%THREAD_BUCKETS]=&caller;
+        thread_index[target.pid%THREAD_BUCKETS]=&target;
+        fd_expected_resume=PTRACE_CONT; fd_resume_calls=0;
+        checkpoints.trace=shared ? no_trace : fd_resume_trace;
+        if (shared && !translated && !restricted) {
+            debug_stop_reply=&channel; debug_reply_outcome=MD_ENTRY_COMPLETED; debug_reply_value=0;
+        }
+        unsigned long cookie=MD_INTERCEPT_DISPATCH;
+        assert(process_call(&caller,&call,shared ? NULL : &regs,&cookie));
+        assert(caller.phase==IDLE && !caller.entry.execution && !caller.entry.stop.resume);
+        assert(!memcmp(&untouched,&caller.execution.registers,sizeof(untouched)));
+        assert(!memcmp(channel.call.args,call.args,sizeof(call.args)));
+        if (!shared) {
+            assert(fd_resume_calls==1 && !caller.entry.effect);
+        } else if (translated || restricted) {
+            assert(caller.entry.effect==(translated ? process_entry_complete : entry_complete));
+            assert(channel.native.number==call.nr && channel.native.args[0]==(unsigned)target.pid);
+            assert(channel.native.args[group+1]==SIGUSR1);
+            assert(!caller.entry.waiting && atomic_load(&channel.native.state)==MD_NATIVE_READY);
+        } else {
+            assert(!debug_stop_reply && !caller.entry.control && !caller.entry.effect);
+            assert(channel.execution_action==MD_EXECUTION_NATIVE);
+        }
+        thread_index[caller.pid%THREAD_BUCKETS]=thread_index[target.pid%THREAD_BUCKETS]=NULL;
+        md_pid_identity_release(identity); md_pid_namespace_release(space);
+    }
+    checkpoints.trace=checkpoint_native_trace;
+    debug_reply_outcome=MD_ENTRY_NEEDS_STOP; debug_reply_value=RESTART_SIGNAL;
+    puts("PASS signal admission: native Base/channel return, restricted policy, translated PID and unchanged caller context");
 }
 static void process_shared_waits(void) {
     struct md_debugger *saved=debugger;
@@ -5147,6 +5593,40 @@ static void resident_receive_admission(void) {
     md_fd_origins_release(t.resources.files); md_memory_release(t.memory);
     puts("PASS resident receive: single nonblocking IO, retained rights, no early output, protected/blocked/provider fallback");
 }
+static void readiness_resident_native(void) {
+    const long calls[]={SYS_ppoll,SYS_pselect6};
+    checkpoints.trace=no_trace;
+    for (unsigned i=0;i<sizeof(calls)/sizeof(*calls);++i) for (unsigned host=0;host<2;++host) {
+        struct md_entry_channel channel={0};
+        struct readiness_owner *owner=calloc(1,sizeof(*owner)); assert(owner);
+        struct thread t={.pid=123,.phase=DISPATCHING,.memory=md_memory_new(),.readiness=owner,
+            .resources.files=md_fd_origins_new(),.signals.host=host,
+            .entry={.control=&channel,.execution=&channel}};
+        assert(t.memory && t.resources.files);
+        assert(!md_memory_buffers_prepare(t.memory,1,md_poll_bytes(1),0,0));
+        assert(!md_buffers_take(md_memory_buffers(t.memory),&t.fs.buffer));
+        struct md_buffer_span span; assert(!md_buffer_span(&t.fs.buffer,&span));
+        struct md_poll_frame *frame=span.data;
+        *frame=(struct md_poll_frame){.total=1,.count=1,.select=i,.items={{5,POLLIN,0}}};
+        owner->poll=md_poll_wait_new(1,i); owner->poll_count=1;
+        assert(owner->poll);
+        for (unsigned n=0;n<READINESS_QUEUES;++n) owner->loans[n].number=-1;
+        assert(md_fd_order_begin(t.resources.files,&owner->files,NULL)==1
+            && !md_fd_order_start(&owner->files));
+        t.execution.request.nr=calls[i];
+        thread_index[t.pid%THREAD_BUCKETS]=&t;
+        debug_stop_reply=&channel; debug_reply_outcome=MD_ENTRY_COMPLETED; debug_reply_value=MD_EPOLL_NATIVE;
+        readiness_poll_load(&t);
+        assert(!debug_stop_reply && owner->done && !owner->files.table && !t.entry.effect);
+        assert(!t.entry.waiting && !t.entry.stop.resume && !owner->native_caller);
+        assert(buffer_result_finish(&t,0,MD_CALL_NATIVE)==MD_CALL_NATIVE && !t.readiness && !t.fs.buffer.pool);
+        md_memory_release(t.memory); md_fd_origins_release(t.resources.files);
+        thread_index[t.pid%THREAD_BUCKETS]=NULL;
+    }
+    checkpoints.trace=checkpoint_native_trace;
+    debug_reply_outcome=MD_ENTRY_NEEDS_STOP; debug_reply_value=RESTART_SIGNAL;
+    puts("PASS resident native poll/select: classification retires without an effect, stop or retained transport");
+}
 static void readiness_transport_pressure(void) {
     struct readiness_owner *owner=calloc(1,sizeof(*owner)); assert(owner);
     struct thread t={.memory=md_memory_new(),.readiness=owner};
@@ -5621,6 +6101,245 @@ static void debugger_test_usage(pid_t pid,struct rusage *usage) {
 static void debugger_test_complete(pid_t pid,long value) {
     (void)pid; debugger_result=value;
 }
+static int debugger_index_failure;
+static unsigned debugger_index_option_calls;
+static unsigned debugger_index_translations;
+static unsigned debugger_index_lookups;
+static int debugger_index_retired;
+static unsigned long debugger_index_last_options;
+static unsigned debugger_index_candidates;
+static int debugger_index_children(pid_t pid,const struct seccomp_data *call,pid_t **candidates,size_t *count) {
+    if (!debugger_index_candidates) return wait_test_children(pid,call,candidates,count);
+    const pid_t selected[]={1000000000,1000000001,1000000520};
+    *count=debugger_index_candidates;
+    *candidates=malloc(*count*sizeof(**candidates)); assert(*candidates);
+    memcpy(*candidates,selected,*count*sizeof(**candidates));
+    return 1;
+}
+static pid_t debugger_index_visible(pid_t owner,pid_t pid) {
+    (void)owner; ++debugger_index_translations; return pid;
+}
+static pid_t debugger_index_native(pid_t owner,pid_t pid) {
+    (void)owner; ++debugger_index_lookups; return debugger_index_retired ? 0 : pid;
+}
+static int debugger_index_attachable(pid_t caller,pid_t target) {
+    (void)caller; return target>=1000000000;
+}
+static int debugger_index_observe(pid_t pid) { (void)pid; return debugger_index_failure==1 ? -EIO : 0; }
+static int debugger_index_options(pid_t pid,unsigned long options) {
+    (void)pid; ++debugger_index_option_calls; debugger_index_last_options=options;
+    return debugger_index_failure==2 ? -EIO : 0;
+}
+static int debugger_index_interrupt(pid_t pid) { (void)pid; return debugger_index_failure==3 ? -EIO : 0; }
+static void debugger_index_resume(pid_t pid,int signal,const struct md_signal_origin *origin,int delivery) {
+    (void)pid; (void)origin; (void)delivery; assert(!signal);
+}
+static void debugger_index_lifetime(void) {
+    enum { FIRST=1000000000, COUNT=520 };
+    struct md_debugger_host host={.group=debugger_test_group,.parent=debugger_test_parent,
+        .attachable=debugger_index_attachable,.observe=debugger_index_observe,.options=debugger_index_options,
+        .interrupt=debugger_index_interrupt,.resume=debugger_index_resume,.visible_pid=debugger_index_visible,
+        .native_pid=debugger_index_native,
+        .uid=debugger_test_uid,.usage=debugger_test_usage,.complete=debugger_test_complete,
+        .wait_children=debugger_index_children,.wait_admit=wait_test_admit,.wait=wait_test_run};
+    struct md_debugger *d=md_debugger_create(&host); assert(d);
+    pid_t owner=getpid();
+    struct seccomp_data call={.nr=SYS_ptrace};
+    for (unsigned i=0;i<COUNT;++i) {
+        call.args[0]=PTRACE_SEIZE; call.args[1]=FIRST+i;
+        assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+    }
+    for (unsigned i=0;i<COUNT;++i) assert(md_debugger_traced(d,FIRST+i) && md_debugger_owner(d,FIRST+i)==owner);
+    for (unsigned id=0;id<2;++id) {
+        siginfo_t info; memset(&info,0x5a,sizeof(info));
+        clock_t utime=info.si_utime,stime=info.si_stime;
+        call=id ? (struct seccomp_data){.nr=SYS_waitid,
+            .args={P_PID,FIRST,(uintptr_t)&info,WEXITED|WNOHANG,1}}
+            : (struct seccomp_data){.nr=SYS_wait4,.args={FIRST,1,WNOHANG|__WALL,1}};
+        debugger_index_lookups=0;
+        assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+        assert(debugger_index_lookups==1);
+        if (id) {
+            assert(!info.si_signo && !info.si_errno && !info.si_code && !info.si_pid && !info.si_uid
+                && !info.si_status && info.si_utime==utime && info.si_stime==stime);
+            call.args[2]=1;
+            assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && debugger_result==-EFAULT);
+            call.args[2]=0;
+        }
+        wait_test_hidden=0; wait_test_admitted=0;
+        call.args[id ? 3 : 2]|=WCONTINUED;
+        assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_CONTEXT);
+        call.args[id ? 3 : 2]^=WCONTINUED|__WNOTHREAD;
+        assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_CONTEXT);
+        call.args[id ? 3 : 2]=id ? WEXITED : 0;
+        assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_CONTEXT);
+        wait_test_admitted=1;
+    }
+    for (unsigned id=0;id<2;++id) {
+        siginfo_t info={0};
+        struct seccomp_data probe=id ? (struct seccomp_data){.nr=SYS_waitid,
+            .args={P_ALL,0,(uintptr_t)&info,WEXITED|WSTOPPED|WNOHANG}}
+            : (struct seccomp_data){.nr=SYS_wait4,.args={-1,0,__WALL|WNOHANG}};
+        for (unsigned count=2;count<=3;++count) {
+            debugger_index_candidates=count; wait_test_probe=(struct seccomp_data){0};
+            debugger_result=-1;
+            assert(md_debugger_call(d,owner,probe)==MD_DEBUG_CALL_HANDLED);
+            if (count==3) {
+                assert(wait_test_probe.nr==probe.nr && wait_test_probe.args[id ? 1 : 0]==FIRST+COUNT);
+                union md_process_wait empty={0};
+                md_debugger_wait_complete(d,owner,0,&empty);
+            } else assert(!wait_test_probe.nr);
+            assert(!debugger_result);
+        }
+        const unsigned native_options[]={WCONTINUED,__WNOTHREAD};
+        for (unsigned i=0;i<2;++i) {
+            struct seccomp_data native=probe; native.args[id ? 3 : 2]|=native_options[i];
+            assert(md_debugger_call(d,owner,native)==MD_DEBUG_CALL_HANDLED);
+            for (unsigned j=0;j<3;++j) {
+                assert(wait_test_probe.args[id ? 1 : 0]==(j==2 ? FIRST+COUNT : FIRST+j));
+                union md_process_wait empty={0};
+                md_debugger_wait_complete(d,owner,0,&empty);
+            }
+            assert(!debugger_result);
+        }
+    }
+    debugger_index_candidates=0;
+    puts("PASS debugger child selection: live tracees need no native probes; mixed and continued waits retain them");
+    /* The native parent can be distinct from the guest ptracer, including
+     * when the latter is itself another process supervisor. */
+    debugger_index_candidates=2;
+    for (unsigned id=0;id<2;++id) {
+        struct seccomp_data probe=id ? (struct seccomp_data){.nr=SYS_waitid,.args={P_ALL,0,0,WEXITED|WNOHANG}}
+            : (struct seccomp_data){.nr=SYS_wait4,.args={-1,0,__WALL|WNOHANG}};
+        wait_test_probe=(struct seccomp_data){0}; debugger_result=-1;
+        assert(md_debugger_call(d,owner+1,probe)==MD_DEBUG_CALL_HANDLED);
+        assert(!wait_test_probe.nr && !debugger_result);
+        probe.args[id ? 3 : 2]&=~WNOHANG;
+        assert(md_debugger_call(d,owner+1,probe)==MD_DEBUG_CALL_HANDLED);
+        assert(wait_test_action==MD_DEBUG_WAIT_PARK);
+        md_debugger_wait_resumed(d,owner+1,-EINTR);
+        assert(debugger_result==-EINTR);
+        probe.args[id ? 3 : 2]|=WUNTRACED|WNOHANG;
+        assert(md_debugger_call(d,owner+1,probe)==MD_DEBUG_CALL_HANDLED);
+        for (unsigned j=0;j<2;++j) {
+            assert(wait_test_probe.args[id ? 1 : 0]==FIRST+j);
+            union md_process_wait empty={0};
+            md_debugger_wait_complete(d,owner+1,0,&empty);
+        }
+        assert(!debugger_result);
+    }
+    debugger_index_candidates=0;
+    call=(struct seccomp_data){.nr=SYS_ptrace};
+    const pid_t ordered[]={FIRST+7,FIRST+3,FIRST+9};
+    for (unsigned i=0;i<3;++i) assert(md_debugger_stop(d,ordered[i],(SIGSTOP<<8)|0x7f,NULL,0));
+    siginfo_t notice={0};
+    struct seccomp_data observed={.nr=SYS_waitid,.args={P_ALL,0,(uintptr_t)&notice,WSTOPPED|WNOWAIT}};
+    for (unsigned i=0;i<2;++i) {
+        assert(md_debugger_call(d,owner,observed)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+        assert(notice.si_pid==ordered[0] && notice.si_status==SIGSTOP);
+    }
+    observed=(struct seccomp_data){.nr=SYS_wait4,.args={-1,1,WNOHANG|__WALL}};
+    assert(md_debugger_call(d,owner,observed)==MD_DEBUG_CALL_HANDLED && debugger_result==-EFAULT);
+    observed.args[0]=ordered[1]; observed.args[1]=0;
+    assert(md_debugger_call(d,owner,observed)==MD_DEBUG_CALL_HANDLED && debugger_result==ordered[1]);
+    /* Continuation without consuming the old notice must also unlink it. */
+    call.args[0]=PTRACE_CONT; call.args[1]=ordered[0];
+    assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+    observed.args[0]=-1;
+    assert(md_debugger_call(d,owner,observed)==MD_DEBUG_CALL_HANDLED && debugger_result==ordered[2]);
+    for (unsigned i=0;i<3;++i) assert(md_debugger_stop(d,ordered[i],(SIGTRAP<<8)|0x7f,NULL,0));
+    assert(md_debugger_stop(d,ordered[0],(SIGUSR1<<8)|0x7f,NULL,0));
+    for (unsigned i=1;i<=3;++i)
+        assert(md_debugger_call(d,owner,observed)==MD_DEBUG_CALL_HANDLED && debugger_result==ordered[i%3]);
+    puts("PASS debugger ready queue: event order, exact removal, WNOWAIT, failed copy and replacement");
+    for (unsigned i=1;i<=3;++i) {
+        debugger_index_failure=(int)i;
+        debugger_index_option_calls=0; debugger_index_last_options=0;
+        call.args[0]=i==3 ? PTRACE_ATTACH : PTRACE_SEIZE; call.args[1]=FIRST+COUNT;
+        call.args[3]=PTRACE_O_TRACEEXIT;
+        assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && debugger_result==-EIO);
+        assert(!md_debugger_traced(d,FIRST+COUNT));
+        assert(!debugger_index_last_options && debugger_index_option_calls==(i==1 ? 0 : 2));
+    }
+    call.args[3]=0;
+    call.args[0]=PTRACE_INTERRUPT; call.args[1]=FIRST;
+    assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && debugger_result==-EIO);
+    assert(!md_debugger_stop_pending(d,FIRST));
+    debugger_index_failure=0;
+    md_debugger_rekey(d,FIRST,FIRST+1);
+    assert(!md_debugger_traced(d,FIRST) && md_debugger_traced(d,FIRST+1));
+    md_debugger_rekey(d,FIRST+1,FIRST);
+    assert(md_debugger_traced(d,FIRST) && !md_debugger_traced(d,FIRST+1));
+    assert(md_debugger_stop(d,FIRST,(SIGSTOP<<8)|0x7f,NULL,0));
+    call.args[0]=PTRACE_DETACH; call.args[1]=FIRST;
+    assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+    assert(!md_debugger_traced(d,FIRST));
+    call.args[0]=PTRACE_SEIZE;
+    assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+    md_debugger_exit(d,FIRST,7<<8);
+    debugger_index_retired=1;
+    debugger_index_translations=0;
+    call=(struct seccomp_data){.nr=SYS_waitid,.args={P_ALL,0,0,WEXITED|WNOWAIT}};
+    assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+    assert(!debugger_index_translations);
+    call=(struct seccomp_data){.nr=SYS_wait4,.args={FIRST,0,WNOHANG|__WALL}};
+    assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && debugger_result==FIRST);
+    assert(!debugger_index_translations);
+    assert(!md_debugger_traced(d,FIRST));
+    debugger_index_retired=0;
+    for (unsigned i=2;i<COUNT;++i) assert(md_debugger_traced(d,FIRST+i));
+    md_debugger_exit(d,owner,0);
+    for (unsigned i=0;i<COUNT;++i) assert(!md_debugger_traced(d,FIRST+i));
+    assert(!__real_md_debugger_active(d));
+    md_debugger_destroy(d);
+    puts("PASS debugger PID index: collisions, admission rollback, exec rekey, detach/reuse, terminal reap and tracer exit");
+    d=md_debugger_create(&host); assert(d);
+    call=(struct seccomp_data){.nr=SYS_ptrace,.args={PTRACE_SEIZE,FIRST}};
+    assert(md_debugger_call(d,FIRST+COUNT,call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+    debugger_index_candidates=1;
+    siginfo_t empty; memset(&empty,0x5a,sizeof(empty));
+    clock_t time=empty.si_utime;
+    call=(struct seccomp_data){.nr=SYS_waitid,.args={P_ALL,0,(uintptr_t)&empty,WEXITED|WNOHANG}};
+    assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+    assert(!empty.si_signo && !empty.si_pid && !empty.si_uid && !empty.si_status && empty.si_utime==time);
+    call.args[2]=1;
+    assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED && debugger_result==-EFAULT);
+    debugger_index_candidates=0;
+    md_debugger_destroy(d);
+    puts("PASS debugger parent waitid: no-probe result clears defined fields and validates output");
+    for (unsigned id=0;id<2;++id) {
+        d=md_debugger_create(&host); assert(d);
+        call=(struct seccomp_data){.nr=SYS_ptrace,.args={PTRACE_SEIZE,FIRST}};
+        assert(md_debugger_call(d,FIRST+COUNT,call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+        debugger_index_candidates=1;
+        siginfo_t info={0};
+        call=id ? (struct seccomp_data){.nr=SYS_waitid,.args={P_ALL,0,(uintptr_t)&info,WEXITED}}
+            : (struct seccomp_data){.nr=SYS_wait4,.args={-1,0,__WALL}};
+        debugger_result=-1;
+        assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED);
+        assert(wait_test_action==MD_DEBUG_WAIT_PARK && debugger_result==-1);
+        md_debugger_wait_resumed(d,owner,0);
+        assert(wait_test_action==MD_DEBUG_WAIT_PARK && debugger_result==-1);
+        md_debugger_exit(d,FIRST,7<<8);
+        md_debugger_wait_resumed(d,owner,0);
+        assert(wait_test_action==MD_DEBUG_WAIT_REPROBE && wait_test_probe.args[id ? 1 : 0]==FIRST);
+        union md_process_wait result={0};
+        if (id) {
+            result.info.si_signo=SIGCHLD; result.info.si_pid=FIRST;
+            result.info.si_code=CLD_EXITED; result.info.si_status=7;
+        } else result.status=7<<8;
+        md_debugger_wait_complete(d,owner,id ? 0 : FIRST,&result);
+        assert(debugger_result==(id ? 0 : FIRST));
+        if (id) assert(info.si_pid==FIRST && info.si_code==CLD_EXITED && info.si_status==7);
+        md_debugger_wait_resumed(d,owner,-EINTR);
+        assert(debugger_result==(id ? 0 : FIRST));
+        call=(struct seccomp_data){.nr=SYS_wait4,.args={FIRST,0,WNOHANG|__WALL}};
+        assert(md_debugger_call(d,FIRST+COUNT,call)==MD_DEBUG_CALL_HANDLED && debugger_result==FIRST);
+        debugger_index_candidates=0;
+        md_debugger_destroy(d);
+    }
+    puts("PASS debugger parent wait: live retry stays parked, terminal child restores native probe, independent tracer reap");
+}
 static long debugger_quiesce_trace(int request,pid_t pid,void *address,void *data) {
     assert(pid==123 && !address && !data);
     if (request==PTRACE_INTERRUPT) ++debugger_interrupts;
@@ -5630,6 +6349,55 @@ static long debugger_quiesce_trace(int request,pid_t pid,void *address,void *dat
         ++debugger_continuations;
     }
     return 0;
+}
+static struct ptrace_syscall_info debugger_observation;
+static unsigned debugger_observed_queries,debugger_observed_peeks;
+static long debugger_observed_trace(int request,pid_t pid,void *address,void *data) {
+    assert(pid==123);
+    if (request==PTRACE_PEEKSIGINFO) {
+        ++debugger_observed_peeks; return 0;
+    }
+    assert(request==PTRACE_GET_SYSCALL_INFO && (uintptr_t)address==sizeof(debugger_observation));
+    memcpy(data,&debugger_observation,sizeof(debugger_observation));
+    ++debugger_observed_queries; return sizeof(debugger_observation);
+}
+static void debugger_observed_syscalls(void) {
+    struct md_debugger_host host={.group=debugger_test_group,.parent=debugger_test_parent,
+        .attachable=debugger_test_attachable,.observe=debugger_test_observe,.options=debugger_test_options,
+        .resume=debugger_index_resume,.uid=debugger_test_uid,.usage=debugger_test_usage,
+        .complete=debugger_test_complete};
+    for (int restricted=0;restricted<2;++restricted) {
+        assert(!debugger);
+        debugger=md_debugger_create(&host); assert(debugger);
+        struct seccomp_data call={.nr=SYS_ptrace,.args={PTRACE_SEIZE,123,0,PTRACE_O_TRACESYSGOOD}};
+        assert(md_debugger_call(debugger,getpid(),call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+        assert(md_debugger_stop(debugger,123,(SIGSTOP<<8)|0x7f,NULL,0));
+        struct thread t={.pid=123,.entered=1,.image.process_image=1,.signals.host=restricted};
+        checkpoints.trace=debugger_observed_trace;
+        debugger_observed_queries=debugger_observed_peeks=0;
+        for (unsigned event=0;event<2;++event) {
+            call=(struct seccomp_data){.nr=SYS_ptrace,.args={PTRACE_SYSCALL,123}};
+            assert(md_debugger_call(debugger,getpid(),call)==MD_DEBUG_CALL_HANDLED && !debugger_result);
+            debugger_observation=(struct ptrace_syscall_info){.op=event ? PTRACE_SYSCALL_INFO_EXIT : PTRACE_SYSCALL_INFO_ENTRY,
+                .arch=AUDIT_ARCH_AARCH64,.instruction_pointer=0x4004,.stack_pointer=0x8000};
+            if (event) debugger_observation.exit.rval=123;
+            else {
+                debugger_observation.entry.nr=SYS_getpid;
+                for (unsigned i=0;i<6;++i) debugger_observation.entry.args[i]=0x100+i;
+            }
+            struct rusage usage={0};
+            execution_syscall_event(&t,t.pid,((SIGTRAP|0x80)<<8)|0x7f,&usage);
+            assert(t.debug.call_active==!event);
+            struct ptrace_syscall_info result={0};
+            call=(struct seccomp_data){.nr=SYS_ptrace,.args={PTRACE_GET_SYSCALL_INFO,123,sizeof(result),(uintptr_t)&result}};
+            assert(md_debugger_call(debugger,getpid(),call)==MD_DEBUG_CALL_HANDLED && debugger_result>0);
+            assert(!memcmp(&result,&debugger_observation,(size_t)debugger_result));
+        }
+        assert(debugger_observed_queries==2 && debugger_observed_peeks==(unsigned)restricted);
+        md_debugger_destroy(debugger); debugger=NULL;
+    }
+    checkpoints.trace=checkpoint_native_trace;
+    puts("PASS debugger syscall observation: exact entry/exit metadata without GPR queries, native and host-restricted");
 }
 static unsigned terminal_capture_completions;
 static void borrowed_action_cleanup_race(void) {
@@ -5828,6 +6596,21 @@ static void quiescent_service_waits(void) {
     puts("PASS barrier service waits: IPC, sockets, epoll, debugger and resident journals retain their exact wake stop");
 }
 static void debugger_quiescence(void) {
+    for (int active=0;active<2;++active) for (int carrier=0;carrier<2;++carrier) {
+        struct thread t={.pid=123,.born=1,.initial_stop=1,.entered=1,.image.process_image=1,
+            .seccomp.trace.stage=GUEST_TRACE_DRAIN,.debug.call_active=active,.debug.adapter=active,
+            .signals.delivery.active=carrier};
+        assert(!debugger && !broker && !thread_index[t.pid%THREAD_BUCKETS]);
+        thread_index[t.pid%THREAD_BUCKETS]=&t;
+        checkpoints.trace=debugger_quiesce_trace; debugger_continuations=0;
+        resume(t.pid,0);
+        assert(debugger_continuations==1 && t.kernel_resume==PTRACE_SYSCALL);
+        assert(t.seccomp.trace.stage==GUEST_TRACE_DRAIN && t.debug.call_active==active && t.debug.adapter==active);
+        struct ptrace_syscall_info exit={.op=PTRACE_SYSCALL_INFO_EXIT};
+        assert(!guest_trace_syscall(&t,&exit,NULL) && t.seccomp.trace.stage==GUEST_TRACE_NONE);
+        assert(debugger_at_boundary(&t)==!carrier);
+        thread_index[t.pid%THREAD_BUCKETS]=NULL;
+    }
     const long calls[]={SYS_ptrace,SYS_wait4,SYS_waitid,SYS_read};
     for (unsigned shared=0;shared<2;++shared) for (unsigned i=0;i<sizeof(calls)/sizeof(*calls);++i) {
         struct md_entry_channel channel={0};
@@ -5871,8 +6654,12 @@ static void debugger_quiescence(void) {
         if (enabled) {
             struct user_pt_regs original={.regs={[8]=SYS_mount,[0]=17,[1]=19},.pc=0x4004,.sp=0x8000};
             struct seccomp_data call=syscall_description(&original);
+            struct seccomp_data retained;
+            assert(!md_debugger_syscall_entry(debugger,123,&retained));
             original.regs[8]=SYS_getpid;
             assert(md_debugger_seccomp(debugger,123,&call,original.sp,0x321));
+            assert(md_debugger_syscall_entry(debugger,123,&retained)
+                && !memcmp(&retained,&call,sizeof(call)));
             siginfo_t event={0};
             struct { uint64_t data[18], guard[16]; } usage;
             memset(&usage,0x5a,sizeof(usage));
@@ -5906,6 +6693,8 @@ static void debugger_quiescence(void) {
             request.regs[0]=PTRACE_SETOPTIONS; request.regs[2]=request.regs[3]=0;
             assert(md_debugger_call(debugger,getpid(),syscall_description(&request))==MD_DEBUG_CALL_HANDLED && !debugger_result);
             assert(!md_debugger_seccomp(debugger,123,&call,original.sp,0x322));
+            assert(md_debugger_stop(debugger,123,(SIGUSR1<<8)|0x7f,NULL,0));
+            assert(!md_debugger_syscall_entry(debugger,123,&retained));
         }
         md_debugger_destroy(debugger); debugger=NULL;
     }
@@ -6026,6 +6815,59 @@ static void debugger_resident_wait(void) {
     puts("PASS debugger resident waits: attach/seize cancel existing and future shared/native waits through their owner");
 }
 static int debugger_borrowed_signal,debugger_borrowed_interrupts;
+static unsigned debugger_boundary_queries;
+static long debugger_boundary_trace(int request,pid_t pid,void *address,void *data) {
+    assert(pid==123);
+    ++debugger_boundary_queries;
+    if (request==PTRACE_GETREGSET) {
+        assert((uintptr_t)address==NT_PRSTATUS);
+        struct iovec *io=data;
+        assert(io->iov_len==sizeof(struct user_pt_regs));
+        *(struct user_pt_regs *)io->iov_base=(struct user_pt_regs){.pc=0x1004,.sp=0x8000};
+    } else if (request==PTRACE_GETSIGINFO) {
+        *(siginfo_t *)data=(siginfo_t){.si_signo=SIGTRAP,.si_code=SIGTRAP|(PTRACE_EVENT_STOP<<8)};
+    } else {
+        assert(request==PTRACE_GET_SYSCALL_INFO);
+        *(struct ptrace_syscall_info *)data=(struct ptrace_syscall_info){.op=PTRACE_SYSCALL_INFO_NONE};
+    }
+    return 0;
+}
+static void debugger_boundary_demand(void) {
+    struct md_debugger_host host={.trace=native_trace,.group=debugger_test_group,.parent=debugger_test_parent,
+        .attachable=debugger_test_attachable,.observe=debugger_test_observe,
+        .options=debugger_test_options,.interrupt=debugger_interrupt,.complete=debugger_test_complete,
+        .uid=debugger_test_uid,.usage=debugger_test_usage};
+    struct thread t={.pid=123,.phase=IDLE,.kernel_stopped=1,.memory=md_memory_new()};
+    assert(t.memory);
+    struct md_svc_registry *r=md_svc_registry_new(MD_SVC_POOL_SIZE,0x4000,0x5000); assert(r);
+    r->disabled=1; r->pause_reasons=MD_SVC_PAUSE_DEBUGGER;
+    assert(!md_memory_svc_set(t.memory,r));
+    debugger=md_debugger_create(&host); assert(debugger);
+    thread_index[t.pid%THREAD_BUCKETS]=&t;
+    checkpoints.trace=debugger_boundary_trace; debugger_boundary_queries=0;
+    struct seccomp_data call={.nr=SYS_ptrace,.args={PTRACE_SEIZE,t.pid}};
+    assert(md_debugger_call(debugger,getpid(),call) && !debugger_result);
+    for (unsigned i=0;i<128;++i) assert(!debugger_boundary(&t));
+    assert(!debugger_boundary_queries && !md_debugger_stop_pending(debugger,t.pid));
+    call.args[0]=PTRACE_INTERRUPT;
+    assert(md_debugger_call(debugger,getpid(),call) && !debugger_result);
+    assert(md_debugger_stop_pending(debugger,t.pid));
+    assert(debugger_boundary(&t) && debugger_boundary_queries==3);
+    assert(md_debugger_stopped_by(debugger,t.pid,getpid()));
+    assert(!debugger_boundary(&t) && debugger_boundary_queries==3);
+    const int stops[]={(SIGTRAP|0x80)<<8|0x7f,(SIGUSR1<<8)|0x7f,
+        (PTRACE_EVENT_SECCOMP<<16)|(SIGTRAP<<8)|0x7f};
+    for (unsigned i=0;i<sizeof(stops)/sizeof(*stops);++i) {
+        assert(md_debugger_call(debugger,getpid(),call) && !debugger_result);
+        assert(!md_debugger_stopped_by(debugger,t.pid,getpid()));
+        assert(md_debugger_stop(debugger,t.pid,stops[i],NULL,0));
+        assert(md_debugger_stopped_by(debugger,t.pid,getpid()));
+    }
+    md_debugger_destroy(debugger); debugger=NULL;
+    thread_index[t.pid%THREAD_BUCKETS]=NULL; checkpoints.trace=NULL;
+    md_memory_release(t.memory);
+    puts("PASS debugger boundary: context observation only for a demanded stop, once before publication");
+}
 static void debugger_signal_delivery(void) {
     struct md_debugger_host host={.trace=native_trace,.group=debugger_test_group,.parent=debugger_test_parent,
         .attachable=debugger_test_attachable,.observe=debugger_test_observe,
@@ -6083,15 +6925,16 @@ static void debugger_borrowed_stop(void) {
         assert(debugger_borrowed_signal==(traced ? 0 : SIGSTOP));
         assert(debugger_borrowed_interrupts==(int)(traced && interruptible));
         assert(call.interrupt_requested==(int)(traced && interruptible));
-        assert(md_debugger_stop_pending(debugger,t.pid)==(int)traced);
-        if (traced) {
-            assert(md_debugger_boundary(debugger,t.pid));
-            assert(md_debugger_stopped_by(debugger,t.pid,getpid()));
-        }
+        assert(task_stop_pending(&t)==(int)traced);
+        assert(t.signals.delivery.stopping==(int)traced);
+        assert(!md_debugger_stop_pending(debugger,t.pid));
+        assert(!md_debugger_boundary(debugger,t.pid));
+        assert(!md_debugger_stopped_by(debugger,t.pid,getpid()));
+        md_signal_delivery_clear(&t.signals.delivery);
         md_debugger_destroy(debugger); debugger=NULL;
         checkpoints.trace=checkpoint_native_trace; thread_index[t.pid%THREAD_BUCKETS]=NULL;
     }
-    puts("PASS borrowed SIGSTOP: debugger owns delivery; interruptible calls cancel, ordinary job control stays native");
+    puts("PASS borrowed SIGSTOP: real delivery retained, interruptible calls cancel, ordinary job control stays native");
 }
 static void event_completion(void) {
     int previous=signal_fd,status=0x1234;
@@ -6127,8 +6970,15 @@ static void event_accounting(void) {
     task_wait.pending_count=1;
     assert(kernel_event(&status,NULL,0)==wait_result && !task_wait.count);
     task_wait.pending_count=0;
-    assert(kernel_event(&status,NULL,0)==wait_result && task_wait.count==1
+    assert(kernel_event(&status,NULL,0)==wait_result && !task_wait.count);
+    struct pollfd events[EVENT_SOURCES]={0};
+    progress_events(events);
+    assert(!task_wait.count);
+    events[0].revents=POLLIN;
+    progress_events(events);
+    assert(task_wait.count==1
         && task_wait.hints[task_wait.first]==456);
+    assert(kernel_event(&status,NULL,0)==wait_result && task_wait.count==1);
     task_wait=(struct md_task_wait){0};
     close(source[0]); close(source[1]); signal_fd=previous_signal_fd;
     puts("PASS supervisor accounting: absent, present, detach and deferred events survive debugger changes");
@@ -6323,6 +7173,20 @@ static void service_gate_admission(void) {
     struct md_interception_abi saved=abi;
     abi.adapter_native_return=0x1004; abi.buffer_admit=0x1104; abi.task_return=0x1204;
     abi.capture_gate=0x1304; abi.watch_return=0x1404; abi.code_begin=0x1000; abi.code_end=0x2000;
+    abi.raw_gate=0x1504; abi.native_return=0x1604; abi.done=0x1700;
+    struct md_interception_program base_code;
+    md_interception_program_build(&abi,&base_code);
+    struct sock_fprog base={base_code.count,base_code.code};
+    const struct { uintptr_t pc; int nr; uint32_t decision; } carriers[]={
+        {abi.adapter_native_return,SYS_read,SECCOMP_RET_TRACE|MD_INTERCEPT_TASK},
+        {abi.buffer_admit,SYS_gettid,SECCOMP_RET_USER_NOTIF},
+        {abi.task_return,SYS_gettid,SECCOMP_RET_USER_NOTIF},
+        {abi.task_return,SYS_getpid,SECCOMP_RET_TRACE|MD_INTERCEPT_TASK},
+        {abi.capture_gate,SYS_openat,SECCOMP_RET_TRACE|MD_INTERCEPT_CAPTURE},
+        {abi.watch_return,SYS_read,SECCOMP_RET_USER_NOTIF},
+        {abi.raw_gate,SYS_read,SECCOMP_RET_ALLOW},
+        {abi.native_return,SYS_openat,SECCOMP_RET_ALLOW},
+        {abi.done+4,SYS_gettid,SECCOMP_RET_TRACE|MD_INTERCEPT_CHECKPOINT}};
     struct md_seccomp_gate gates[FILTER_SERVICE_GATES];
     filter_service_gates(gates);
     struct sock_filter deny[]={BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_KILL_THREAD)};
@@ -6338,6 +7202,14 @@ static void service_gate_admission(void) {
         int size=md_seccomp_policy_route(policy,NULL,0,MD_INTERCEPT_TASK,code,256,&route);
         assert(size>0);
         struct sock_fprog routed={size,code};
+        for (unsigned i=0;i<sizeof(carriers)/sizeof(*carriers);++i) {
+            struct seccomp_data call={.arch=AUDIT_ARCH_AARCH64,.nr=carriers[i].nr,
+                .instruction_pointer=carriers[i].pc};
+            uint32_t original,overlay;
+            assert(!md_seccomp_program_eval(&base,&call,&original) && original==carriers[i].decision);
+            assert(!md_seccomp_program_eval(&routed,&call,&overlay) && overlay==SECCOMP_RET_ALLOW);
+            assert(md_seccomp_policy_merge(original,overlay)==original);
+        }
         for (unsigned capture=0;capture<2;++capture) {
             struct seccomp_data call={.arch=AUDIT_ARCH_AARCH64,
                 .nr=capture ? SYS_openat : SYS_read,
@@ -6357,14 +7229,99 @@ static void service_gate_admission(void) {
     abi=saved;
     puts("PASS service gate admission: Base, resident and fallback retain shared service admission before explicit/implicit guest denials");
 }
+static void selective_policy_admission(void) {
+    struct thread *saved=threads;
+    struct thread peer={.pid=124,.tgid=123};
+    struct thread t={.pid=123,.tgid=123,.next=&peer};
+    threads=&t;
+    const long calls[]={SYS_seccomp,SYS_prctl};
+    for (unsigned i=0;i<2;++i) {
+        t.execution.request=(struct seccomp_data){.nr=calls[i],
+            .args={i ? PR_SET_SECCOMP : SECCOMP_SET_MODE_FILTER,i ? SECCOMP_MODE_FILTER : 0}};
+        assert(filter_selectors_required(&t));
+        peer.pid=0; assert(!filter_selectors_required(&t)); peer.pid=124;
+        peer.tgid=124; assert(!filter_selectors_required(&t)); peer.tgid=123;
+        if (!i) {
+            t.execution.request.args[1]=SECCOMP_FILTER_FLAG_TSYNC;
+            assert(!filter_selectors_required(&t));
+            t.execution.request.args[1]|=SECCOMP_FILTER_FLAG_TSYNC_ESRCH;
+            assert(!filter_selectors_required(&t));
+        }
+    }
+    t.execution.request.nr=SYS_getpid;
+    assert(!filter_selectors_required(&t));
+    threads=saved;
+    puts("PASS selector preflight: single-threaded/TSYNC policies stay selective; thread-local divergence prepares shared FD admission");
+}
+static void typed_selector_admission(void) {
+    struct thread *saved=threads;
+    struct thread t={.pid=123,.tgid=123,.born=1}; threads=&t;
+    t.descriptors.selector=md_fd_selector_new(); assert(t.descriptors.selector);
+    const unsigned required=(1U<<MD_FD_SELECTOR_PROC)|(1U<<MD_FD_SELECTOR_EPOLL_TARGET)|(1U<<MD_FD_SELECTOR_POLL);
+    const struct user_pt_regs continuation={.pc=0x1004,.regs={[8]=SYS_seccomp}};
+    for (unsigned kind=0;kind<MD_FD_SELECTOR_KINDS;++kind) {
+        if (!(required&(1U<<kind))) continue;
+        /* Retain admission behind a busy owner, then acknowledge the exact
+         * requested selector without running a task-affine syscall here. */
+        task_action_releasing=1;
+        assert(selector_prepare(&t,required,0,MD_TASK_CALL_SECCOMP,&continuation,filter_listener_selected)==1);
+        task_action_releasing=0;
+        assert(t.action && t.action->kind==kind && t.action->number==0
+            && t.action->boundary==MD_TASK_CALL_SECCOMP && t.action->complete==filter_listener_selected);
+        assert(!memcmp(&t.action->continuation,&continuation,sizeof(continuation)));
+        task_action_discard(&t); retry_clear(&t,RETRY_TASK_ACTION);
+        assert(!t.action && !md_fd_selector_mark(t.descriptors.selector,kind,0));
+    }
+    assert(!selector_prepare(&t,required,0,MD_TASK_CALL_SECCOMP,&continuation,filter_listener_selected));
+    assert(!t.action && !md_fd_selector_has_mask(t.descriptors.selector,required,-1)
+        && !md_fd_selector_has_mask(t.descriptors.selector,required,1));
+    md_fd_selector_release(t.descriptors.selector); threads=saved;
+    puts("PASS typed selector admission: exact descriptor, retained continuation, cancellation and no all-FD preparation");
+}
+static void repeated_selector_admission(void) {
+    const struct md_fd_filter_gates internal={.raw=0x1004,.watch=0x1104,
+        .task=0x1204,.native=0x1304,.adapter=0x1404};
+    for (unsigned kind=0;kind<MD_FD_SELECTOR_KINDS;++kind) for (unsigned all=0;all<2;++all) {
+        struct md_fd_filter_program selector;
+        assert(!md_fd_filter_build(kind,all ? -1 : 13,&internal,&selector));
+        struct sock_filter code[2][512];
+        struct sock_fprog previous={selector.count,selector.code};
+        for (unsigned level=0;level<4;++level) {
+            struct md_seccomp_policy *policy=NULL;
+            assert(!md_seccomp_policy_capture(NULL,&previous,&policy));
+            uintptr_t first=UINT64_C(0x123400000000)+level*0x10000;
+            struct md_seccomp_gate gate={first,first+0x1000,-1,SECCOMP_RET_ALLOW};
+            struct md_seccomp_route route=filter_service_route(&gate,1,0);
+            int count=md_seccomp_policy_route(policy,NULL,0,MD_INTERCEPT_TASK,code[level%2],512,&route);
+            assert(count>0 && (!level || count<=previous.len+6));
+            struct sock_fprog current={count,code[level%2]};
+            const uintptr_t sites[]={0x1004,0x2004,first-4,first,first+4,first+0x1000};
+            for (unsigned nr=0;nr<=512;++nr) for (unsigned site=0;site<sizeof(sites)/sizeof(*sites);++site)
+                for (unsigned fd=12;fd<=13;++fd) {
+                    struct seccomp_data call={.nr=nr,.arch=AUDIT_ARCH_AARCH64,
+                        .instruction_pointer=sites[site],.args={fd,fd,fd,fd,fd,fd}};
+                    uint32_t original,result;
+                    assert(!md_seccomp_program_eval(&previous,&call,&original));
+                    if (sites[site]>=first && sites[site]<first+0x1000) original=SECCOMP_RET_ALLOW;
+                    assert(!md_seccomp_program_eval(&current,&call,&result) && result==original);
+                }
+            md_seccomp_policy_release(policy); previous=current;
+        }
+    }
+    puts("PASS selector policy composition: four admissions add only service ranges and preserve original FD decisions");
+}
 static void checkpoint_admission(void) {
+    for (unsigned resident=0;resident<2;++resident) {
     struct thread t={.pid=123,.memory=md_memory_new()}; assert(t.memory);
     assert(checkpoint_restricted(t.pid));
     thread_index[t.pid%THREAD_BUCKETS]=&t;
     assert(!checkpoint_restricted(t.pid));
     t.seccomp.application_filter=1; assert(checkpoint_restricted(t.pid));
     struct md_svc_registry *r=md_svc_registry_new(0x1000000,0x4000,0x5000); assert(r);
-    assert(!md_memory_svc_set(t.memory,r) && checkpoint_restricted(t.pid));
+    uint64_t image=r->image;
+    if (resident) assert(!md_memory_svc_set(t.memory,r));
+    else md_svc_registry_free(r);
+    assert(checkpoint_restricted(t.pid));
     struct sock_filter allow[]={BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};
     struct sock_fprog program={1,allow};
     struct md_seccomp_policy *parent=NULL,*child=NULL,*grandchild=NULL;
@@ -6372,21 +7329,22 @@ static void checkpoint_admission(void) {
     t.seccomp.policy=parent; assert(checkpoint_restricted(t.pid));
     struct md_seccomp_gate gates[FILTER_SERVICE_GATES];
     filter_service_gates(gates);
-    assert(!md_seccomp_policy_bind_entry(parent,r->image,gates,FILTER_SERVICE_GATES));
+    assert(!md_seccomp_policy_bind_entry(parent,resident ? image : 0,gates,FILTER_SERVICE_GATES));
     for (unsigned host=0;host<2;++host) {
         t.signals.host=host; assert(!checkpoint_restricted(t.pid));
     }
     assert(!md_seccomp_policy_capture(parent,&program,&child));
     t.seccomp.policy=child; assert(checkpoint_restricted(t.pid));
-    assert(!md_seccomp_policy_bind_entry(child,r->image+1,gates,FILTER_SERVICE_GATES));
+    assert(!md_seccomp_policy_bind_entry(child,resident ? image+1 : 0,gates,FILTER_SERVICE_GATES));
     assert(!checkpoint_restricted(t.pid));
     assert(!md_seccomp_policy_capture(child,&program,&grandchild));
     ++gates[0].first;
-    assert(!md_seccomp_policy_bind_entry(grandchild,r->image,gates,FILTER_SERVICE_GATES));
+    assert(!md_seccomp_policy_bind_entry(grandchild,resident ? image : 0,gates,FILTER_SERVICE_GATES));
     t.seccomp.policy=grandchild;
-    assert(md_seccomp_policy_entry_compatible(t.seccomp.policy,r->image) && checkpoint_restricted(t.pid));
+    assert(!!md_seccomp_policy_entry_compatible(t.seccomp.policy,image)==resident && checkpoint_restricted(t.pid));
     md_seccomp_policy_release(grandchild); md_seccomp_policy_release(child); md_seccomp_policy_release(parent);
     md_memory_release(t.memory); thread_index[t.pid%THREAD_BUCKETS]=NULL;
+    }
     puts("PASS checkpoint admission: stable inherited gates avoid emulation; changed and unbound gates retain it");
 }
 static unsigned checkpoint_trace_calls,checkpoint_op,checkpoint_broker_resumes;
@@ -6902,6 +7860,59 @@ static void descriptor_command_selection(void) {
     }
     puts("PASS descriptor command selection: shared app/shell filter, unsigned ioctl command and FD owner");
 }
+static void file_lock_selection(void) {
+    const unsigned commands[]={F_SETLK,F_SETLKW,F_OFD_SETLK,F_OFD_SETLKW};
+    struct md_interception_abi abi={.raw_gate=0x2000000040};
+    for (unsigned host=0;host<2;++host) {
+        abi.host_policy=host;
+        struct md_interception_program program;
+        md_interception_program_build(&abi,&program);
+        struct sock_fprog filter={program.count,program.code};
+        for (unsigned site=0;site<2;++site) for (unsigned i=0;i<4;++i) {
+            struct seccomp_data call={.nr=SYS_fcntl,.arch=AUDIT_ARCH_AARCH64,
+                .instruction_pointer=site ? abi.raw_gate : 0x1000,
+                .args={17,commands[i],~0UL}};
+            uint32_t result;
+            assert(!md_seccomp_program_eval(&filter,&call,&result));
+            assert(result==SECCOMP_RET_ALLOW);
+            unsigned long args[6]; memcpy(args,call.args,sizeof(args));
+            assert(md_domain_native_call(call.nr,args));
+            /* Lock queries can return a PID; descriptor mutations retain
+             * their publication owner instead of borrowing this fast path. */
+            call.args[1]=F_GETLK;
+            assert(!md_seccomp_program_eval(&filter,&call,&result));
+            assert(result==(SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE));
+            call.args[1]=F_DUPFD_CLOEXEC;
+            assert(!md_seccomp_program_eval(&filter,&call,&result));
+            assert(result==(SECCOMP_RET_TRACE|MD_INTERCEPT_FD));
+            call.nr=SYS_flock;
+            assert(!md_seccomp_program_eval(&filter,&call,&result));
+            assert(result==SECCOMP_RET_ALLOW);
+            assert(md_domain_native_call(call.nr,args));
+        }
+    }
+    puts("PASS file lock selection: native POSIX/OFD locks and flock, retained query/mutation owners");
+}
+static void file_effect_selection(void) {
+    struct md_interception_abi abi={.raw_gate=0x2000000040};
+    const long numbers[]={SYS_fchmod,SYS_fchmodat,SYS_fchmodat2,SYS_fchown,SYS_fchownat,
+        SYS_utimensat,SYS_fsync,SYS_fdatasync,SYS_syncfs};
+    for (unsigned host=0;host<2;++host) {
+        abi.host_policy=host;
+        struct md_interception_program program;
+        md_interception_program_build(&abi,&program);
+        struct sock_fprog filter={program.count,program.code};
+        for (unsigned n=0;n<sizeof(numbers)/sizeof(*numbers);++n) for (unsigned site=0;site<4;++site) {
+            struct seccomp_data call={.nr=numbers[n],.arch=AUDIT_ARCH_AARCH64,
+                .instruction_pointer=site==0 ? abi.raw_gate : site==1 ? abi.raw_gate+4
+                    : site==2 ? abi.raw_gate+(UINT64_C(1)<<32) : 0x1000};
+            uint32_t result;
+            assert(!md_seccomp_program_eval(&filter,&call,&result));
+            assert(result==(site ? SECCOMP_RET_TRACE|MD_INTERCEPT_DISPATCH : SECCOMP_RET_ALLOW));
+        }
+    }
+    puts("PASS admitted file effects: exact native gate only; original calls retain filesystem policy");
+}
 static void retained_child_selection(void) {
     struct thread parent={.pid=123,.tgid=100},caller={.pid=101,.tgid=100};
     struct retained_memory retained={.parent=&parent,.ready=1,.retained.actor=456};
@@ -6918,6 +7929,14 @@ static void retained_child_selection(void) {
     assert(private_child_matches(&selection,456)==1);
     selection.group=100;
     assert(!private_child_matches(&selection,456));
+    selection.group=0; retained.parent_exit_signal=SIGCHLD;
+    assert(!private_child_matches(&selection,456));
+    selection.options=__WALL;
+    assert(private_child_matches(&selection,456)==1);
+    selection.options=0;
+    assert(private_child_matches(&selection,456)==1);
+    retained.parent_exit_signal=0;
+    assert(!private_child_matches(&selection,456));
     selection.group=0; caller.tgid=200;
     assert(!private_child_matches(&selection,456));
     pid_t p,g; int signal;
@@ -6933,7 +7952,18 @@ static void retained_child_selection(void) {
     parent.pid=789; parent.tgid=789;
     assert(!retained_child_identity(&retained,&p,&g,&signal));
     retained_actors[bucket]=retained_memories=NULL;
-    puts("PASS retained child identity: native clone class, process group, parent lifetime and slot reuse");
+    struct thread child={.pid=1000000000,.tgid=1000000000,.parent=100,.born=1};
+    unsigned indexed=(unsigned)child.pid%THREAD_BUCKETS;
+    struct thread *saved=thread_index[indexed];
+    child.indexed=saved; thread_index[indexed]=&child;
+    caller.tgid=100; selection.options=__WALL; selection.group=0;
+    assert(private_child_matches(&selection,child.pid)==1);
+    caller.tgid=200;
+    assert(!private_child_matches(&selection,child.pid));
+    caller.tgid=100; child.born=0;
+    assert(!private_child_matches(&selection,child.pid));
+    thread_index[indexed]=saved;
+    puts("PASS retained child identity: native/adopted clone class, process group, parent lifetime and slot reuse");
 }
 static void descriptor_service_queries(void) {
 #define QUERY(name,value) {SYS_##name,value},
@@ -6997,6 +8027,112 @@ static void signal_operation_masks(void) {
         assert(md_signal_operation_copy_done(&op,-EFAULT)==1 && op.result==-EFAULT && !op.invoking);
     }
     puts("PASS signal operation: transport-independent mask effects, logical state, output and failed input");
+}
+static void signal_immediate_waits(void) {
+    uint64_t set=UINT64_C(1)<<(SIGUSR1-1),scratch[64];
+    struct md_signal_fd *file=md_signal_fd_new(); assert(file);
+    md_signal_fd_update(file,set);
+    for (unsigned vector=0;vector<2;++vector) for (unsigned empty=0;empty<2;++empty) {
+        struct md_signal_operation op;
+        struct signalfd_siginfo output[2]={0};
+        struct iovec vectors[]={{output,17},{(char *)output+17,sizeof(output)-17}};
+        struct seccomp_data call={.nr=vector ? SYS_readv : SYS_read,
+            .args={12,vector ? (uintptr_t)vectors : (uintptr_t)output,vector ? 2 : sizeof(output)}};
+        int blocked=0;
+        assert(md_signal_operation_begin(&op,&call,NULL,NULL,&blocked,NULL,NULL,
+            scratch,(uintptr_t)scratch,sizeof(scratch))==MD_SIGNAL_FD_ACQUIRE);
+        assert(!md_signal_operation_descriptor_admit(&op,file));
+        int state=0;
+        if (vector) {
+            assert(op.effect.number==SYS_fcntl && op.effect.value[1]==F_GETFL);
+            assert(md_signal_operation_effect_done(&op,O_NONBLOCK)==MD_SIGNAL_FD_RELEASE);
+            state=md_signal_operation_continue(&op);
+            assert(!state && op.copying && !op.transfer.writing);
+            memcpy(op.transfer.data,vectors,sizeof(vectors));
+            state=md_signal_operation_copy_done(&op,sizeof(vectors));
+        }
+        assert(!state && op.invoking && op.effect.number==SYS_rt_sigtimedwait);
+        assert(!op.wait_native && !op.wait_peer && !op.effect.flags);
+        assert(*(uint64_t *)op.effect.value[0]==set);
+        struct timespec *timeout=(void *)op.effect.value[2];
+        assert(timeout && !timeout->tv_sec && !timeout->tv_nsec);
+        if (!empty) {
+            *(siginfo_t *)op.effect.value[1]=(siginfo_t){.si_signo=SIGUSR1,.si_code=SI_USER};
+            state=md_signal_operation_effect_done(&op,SIGUSR1);
+            if (!vector) {
+                assert(state==MD_SIGNAL_FD_RELEASE);
+                state=md_signal_operation_continue(&op);
+            }
+            while (!state && op.copying) {
+                assert(op.transfer.writing);
+                memcpy((void *)op.transfer.address,op.transfer.data,op.transfer.size);
+                state=md_signal_operation_copy_done(&op,op.transfer.size);
+            }
+            assert(!state && op.invoking && !op.wait_native && !op.wait_peer);
+            assert(output[0].ssi_signo==SIGUSR1 && !output[1].ssi_signo);
+        }
+        state=md_signal_operation_effect_done(&op,-EAGAIN);
+        if (!vector && empty) {
+            assert(!state && op.invoking && op.effect.number==SYS_fcntl && op.effect.value[1]==F_GETFL);
+            assert(md_signal_operation_effect_done(&op,O_NONBLOCK)==MD_SIGNAL_FD_RELEASE);
+            state=md_signal_operation_continue(&op);
+        }
+        assert(state==1);
+        assert(op.result==(empty ? -EAGAIN : (long)sizeof(*output)));
+        md_signal_operation_dispose(&op);
+    }
+    for (unsigned mode=0;mode<4;++mode) {
+        struct md_signal_operation op;
+        struct signalfd_siginfo output;
+        struct seccomp_data call={.nr=SYS_read,.args={12,(uintptr_t)&output,sizeof(output)}};
+        int blocked=0;
+        md_signal_fd_update(file,mode==3 ? MD_SIGNAL_SYS_BIT : set);
+        assert(md_signal_operation_begin(&op,&call,NULL,NULL,&blocked,NULL,NULL,
+            scratch,(uintptr_t)scratch,sizeof(scratch))==MD_SIGNAL_FD_ACQUIRE);
+        assert(!md_signal_operation_descriptor_admit(&op,file));
+        if (mode==3) {
+            assert(op.effect.number==SYS_fcntl && op.effect.value[1]==F_GETFL);
+            assert(md_signal_operation_effect_done(&op,-EBADF)==MD_SIGNAL_FD_RELEASE);
+            assert(md_signal_operation_continue(&op)==1 && op.result==-EBADF);
+        } else {
+            assert(op.effect.number==SYS_rt_sigtimedwait);
+            int state=md_signal_operation_effect_done(&op,mode==1 ? -EINTR : -EAGAIN);
+            if (mode==1) {
+                assert(state==MD_SIGNAL_FD_RELEASE);
+                assert(md_signal_operation_continue(&op)==1 && op.result==-EINTR);
+            } else {
+                assert(!state && op.effect.number==SYS_fcntl && op.effect.value[1]==F_GETFL);
+                assert(md_signal_operation_effect_done(&op,mode==2 ? -EBADF : 0)==MD_SIGNAL_FD_RELEASE);
+                state=md_signal_operation_continue(&op);
+                if (mode==2) assert(state==1 && op.result==-EBADF);
+                else assert(state==MD_SIGNAL_WAIT_RELEASE && op.wait_native);
+            }
+        }
+        md_signal_operation_dispose(&op);
+    }
+    for (unsigned timed=0;timed<3;++timed) {
+        struct md_signal_operation op;
+        struct timespec timeout={.tv_nsec=timed==2};
+        struct seccomp_data call={.nr=SYS_rt_sigtimedwait,
+            .args={(uintptr_t)&set,0,timed ? (uintptr_t)&timeout : 0,8}};
+        int blocked=0;
+        assert(!md_signal_operation_begin(&op,&call,NULL,NULL,&blocked,NULL,NULL,
+            scratch,(uintptr_t)scratch,sizeof(scratch)));
+        memcpy(op.transfer.data,&set,8);
+        int state=md_signal_operation_copy_done(&op,8);
+        if (timed) {
+            assert(!state && op.copying);
+            memcpy(op.transfer.data,&timeout,sizeof(timeout));
+            state=md_signal_operation_copy_done(&op,sizeof(timeout));
+        }
+        if (timed==1) {
+            assert(!state && op.invoking && !op.wait_native && !op.wait_peer);
+            assert(md_signal_operation_effect_done(&op,-EAGAIN)==1 && op.result==-EAGAIN);
+        } else assert(state==MD_SIGNAL_WAIT_RELEASE && op.wait_native);
+        md_signal_operation_dispose(&op);
+    }
+    md_fd_object_release(md_signal_fd_object(file));
+    puts("PASS immediate signals: zero-time waits, nonblocking scalar/vector reads and partial results without parking");
 }
 static void signal_wait_selection(void) {
     struct md_interception_abi abi={.raw_gate=0x2000000040,.task_return=0x2000000080,
@@ -7307,11 +8443,14 @@ static void execution_completion(void) {
         assert(t.execution.stack==0x8000 && t.execution.mask==0x400);
         assert(!memcmp(&original,&t.execution.registers,sizeof(original)));
     }
-    for (int filter=0;filter<2;++filter) for (int error=0;error<2;++error) {
+    for (int filter=0;filter<2;++filter) for (int error=0;error<2;++error) for (int traced=0;traced<2;++traced) {
         struct thread t={.pid=123,.phase=DISPATCHING,.process_op.preflight=!filter,.seccomp.preflight=filter,
             .debug.call_active=1,.debug.adapter=1,.execution.stack=0x8000};
+        t.seccomp.trace.stage=traced ? GUEST_TRACE_ADMISSION : GUEST_TRACE_NONE;
+        assert(guest_trace_recheck(&t,&t.execution.request)==traced);
         assert(execution_complete(&t,error ? -EINVAL : 0)
             ==(error ? EXECUTION_PREFLIGHT_RETURN : EXECUTION_PREFLIGHT_REPLAY));
+        assert(t.seccomp.trace.stage==(!traced ? GUEST_TRACE_NONE : error ? GUEST_TRACE_DISPATCH : GUEST_TRACE_ADMISSION));
         assert(!t.process_op.preflight && !t.seccomp.preflight && t.entry.registration_revoked==filter);
         assert(t.debug.replay_entry==!error && t.debug.adapter==error);
         assert(!t.resume_lost && t.phase==DISPATCHING && t.execution.stack==0x8000);
@@ -7465,9 +8604,33 @@ static void entry_mapping_cancellation(void) {
     }
     puts("PASS entry mapping: queued channel/client expansion, ready cancellation and successor progress without a helper");
 }
+static void signal_sender_credentials(void) {
+    struct thread sender={.pid=123,.born=1,.identity=md_identity_new(1234,1234)};
+    struct thread observer={.identity=md_identity_new(0,0)};
+    unsigned bucket=sender.pid%THREAD_BUCKETS;
+    assert(!thread_index[bucket]); thread_index[bucket]=&sender;
+    uid_t supplied=native_uid==54321 ? 54322 : 54321;
+    assert(process_signal_uid(&observer,sender.pid,native_uid)==1234);
+    assert(process_signal_uid(&observer,sender.pid,supplied)==supplied);
+    const int codes[]={SI_USER,SI_TKILL,CLD_EXITED};
+    for (unsigned i=0;i<sizeof(codes)/sizeof(*codes);++i) {
+        siginfo_t info={.si_signo=i==2 ? SIGCHLD : SIGUSR1,.si_code=codes[i]};
+        info.si_pid=sender.pid; info.si_uid=supplied;
+        signal_wait_info(&observer,&info);
+        assert(info.si_uid==supplied && info.si_pid==sender.pid);
+        info.si_uid=native_uid;
+        signal_wait_info(&observer,&info);
+        assert(info.si_uid==1234);
+    }
+    thread_index[bucket]=NULL;
+    md_identity_release(&sender.identity); md_identity_release(&observer.identity);
+    puts("PASS signal sender credentials: native substitution and explicit debugger UID retained for live PID");
+}
 int main(void) {
     setvbuf(stdout,NULL,_IOLBF,0);
+    native_uid=getuid();
     md_page_size=(size_t)sysconf(_SC_PAGESIZE);
+    signal_sender_credentials();
     terminal_cleanup_broker();
     deferred_continuations();
     entry_mapping_cancellation();
@@ -7487,6 +8650,7 @@ int main(void) {
     borrowed_interrupt();
     borrowed_continuations();
     native_child_membership();
+    retained_retirement_shared_parent();
     private_wait_selection();
     private_wait_buffer_cancel();
     parked_checkpoint_ownership();
@@ -7499,15 +8663,24 @@ int main(void) {
     direct_signal_query();
     signal_buffer_pressure();
     external_signal_target();
+    debugger_delivery_mask();
     policy_signal_observation();
     signal_descriptor_rollback();
     relocated_service_sites();
     descriptor_command_selection();
+    file_lock_selection();
+    file_effect_selection();
     descriptor_service_queries();
     retained_child_selection();
     signal_operation_masks();
+    signal_immediate_waits();
+    debugger_boundary_demand();
+    debugger_index_lifetime();
+    group_listen_publication();
+    native_terminal_journal();
+    debugger_observed_syscalls();
     signal_wait_selection();
-    pending_queue_scan(); pending_signal_ownership(); signalfd_information();
+    pending_queue_scan(); pending_signal_ownership(); debugger_pending_queues(); signalfd_information();
     debug_host_exit();
     cancel_stopped_child();
     cancellation_owner_boundary();
@@ -7528,10 +8701,12 @@ int main(void) {
     resident_loan_retirement();
     resident_loan_abandonment();
     readiness_local_duplicate();
+    readiness_resident_native();
     readiness_transport_pressure();
     signal_shield_ownership();
     typed_transfer_ownership();
     metadata_mask_mutation();
+    metadata_policy_wait();
     metadata_replay_completion();
     metadata_policy_delivery();
     readiness_publication_eviction();
@@ -7550,9 +8725,11 @@ int main(void) {
     receive_layouts();
     native_capture();
     duplicate_retirement_order();
+    fd_native_admission();
     fd_native_retirement();
     duplicate_prepared_admission();
     fd_shared_mutations(); pidfd_shared_birth(); process_shared_waits(); process_remote_repair(); close_shared_completion();
+    process_signal_admission();
     duplicate_close_transport();
     native_ioctl_route();
     readiness_ignored_effect();
@@ -7573,6 +8750,7 @@ int main(void) {
     signal_group_resource();
     thread_exit_target();
     stopped_call_context();
+    proc_call_context();
     image_entry_identity();
     for (unsigned order=0;order<6;++order) for (int descriptor=0;descriptor<2;++descriptor)
         completed_notification_orders(order,descriptor);
@@ -7589,6 +8767,9 @@ int main(void) {
     retirement_preparation_blocked();
     admission_quiescence();
     service_gate_admission();
+    selective_policy_admission();
+    repeated_selector_admission();
+    typed_selector_admission();
     checkpoint_admission();
     checkpoint_quiescence();
     quiescent_task_ownership(); quiescent_event_custody(); quiescent_service_waits();

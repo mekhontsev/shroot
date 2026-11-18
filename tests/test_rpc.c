@@ -874,6 +874,7 @@ static void descriptor_stress(unsigned count) {
     for (unsigned i = 0; i < count; i++) {
         struct md_fs_response out = call(s.endpoint, MD_FS_FSTAT, fd, NULL, -1, NULL, 0, 0, 0);
         CHECK(out.result.info.size == 4 && S_ISREG(out.result.info.mode));
+        if ((i+1)%1000==0) printf("descriptor RPC: %u/%u complete\n",i+1,count);
     }
     close(fd); stop(&s, 0);
     printf("PASS %u descriptor RPC exchanges without response loss\n", count);
@@ -1089,6 +1090,12 @@ static void request_contract(void) {
         .capture={{"/proc/123/fdinfo/3",O_CLOEXEC}}};
     CHECK(md_fs_operation_data_inputs(fdinfo.operation)==2);
     CHECK(!md_fs_request_validate(&fdinfo));
+    fdinfo.directory[1]=-1;
+    fdinfo.capture[1]=(struct md_fs_task_capture){"/proc/123/fd/3",O_PATH|O_CLOEXEC};
+    CHECK(!md_fs_request_validate(&fdinfo));
+    fdinfo.capture[1].path="/proc/123/fd/3/child";
+    CHECK(md_fs_request_validate(&fdinfo)==-EINVAL);
+    fdinfo.capture[1]=(struct md_fs_task_capture){0}; fdinfo.directory[1]=3;
     fdinfo.capture[0].path="/proc/123/fd/3";
     CHECK(md_fs_request_validate(&fdinfo)==-EINVAL);
     struct md_fs_request peer={.operation=MD_FS_IOCTL,.directory={3,-1},
@@ -1290,6 +1297,7 @@ static void service_lifecycle(void) {
     puts("PASS filesystem loop lifecycle: readiness order, shared work, pause, stop priority and borrowed resources");
 }
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IOLBF, 0);
     if (argc == 3 && !strcmp(argv[1], "stress")) {
         CHECK(argv[2][0] == '/' && strlen(argv[2]) < sizeof(root)); strcpy(root, argv[2]);
         CHECK(mkdir(root, 0700) == 0);

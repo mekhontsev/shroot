@@ -180,6 +180,13 @@ object with O_PATH and reuse the ordinary namespace FD contract, preserving
 virtual link counts, even after all names have been unlinked. Entry/no-follow
 operations retain the proc symlink's own identity. `/dev/stdin` readlink still
 returns the native link text, rather than pretending it is a proc magic link.
+This boundary also applies to foreign `exe`, `cwd` and `root` links, including
+relative opens through a retained process-directory FD. Typed proc directories
+remain traversable; only terminal proc objects reject a directory suffix.
+An alias of an O_PATH symlink descriptor selects that symlink, not its target.
+Reopening it with O_PATH preserves its inode and readlink text without requiring
+O_NOFOLLOW again; data opens return ELOOP. Native and stored symlinks use the
+same rule, and stored socket nodes reject data reopening with ENXIO.
 
 Current-thread cwd/FD captures retain their mount origin under the corresponding
 resource queue through native open and descriptor publication. Captures retain

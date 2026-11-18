@@ -60,7 +60,6 @@ static void describe_notification_call(struct thread *t,const char *owner,uint64
         const struct seccomp_data *call);
 static _Noreturn void notification_conflict(struct thread *t,const char *reason,
         const struct seccomp_notif *request,const struct md_broker_completion *incoming,int line);
-static void metadata_restart_enter(struct thread *t);
 static int metadata_instruction(struct thread *t,uintptr_t pc,uint32_t word);
 
 void completed_event_discard(struct thread *t) {
@@ -504,12 +503,13 @@ void metadata_restart_return(struct thread *t,long value) {
     CHECK(completed_event_resume(t));
 }
 
-static void metadata_restart_enter(struct thread *t) {
+void metadata_restart_retry(struct thread *t) {
     struct metadata_restart *r=t->metadata_restart;
     struct user_pt_regs regs=r->saved;
     /* Use the stable gate even if the original page now contains a lazy-entry
      * branch. The syscall-entry stop restores its PC before kernel seccomp. */
     regs.pc=RAW_GATE-4; r->stage=METADATA_ENTRY;
+    t->phase=IDLE;
     if (set_registers(t->pid,&regs)) resume(t->pid,0);
 }
 
@@ -523,7 +523,7 @@ static void metadata_instruction_complete(struct thread *t,int error) {
     if (error || !metadata_instruction(t,r->saved.pc,r->instruction)) {
         CHECK(completed_event_resume(t)); return;
     }
-    metadata_restart_enter(t);
+    metadata_restart_retry(t);
 }
 
 int interrupted_metadata_event(struct thread *t,int status,const struct rusage *usage,
@@ -559,6 +559,15 @@ int interrupted_metadata_event(struct thread *t,int status,const struct rusage *
      * cancellation must retain the same metadata replay as the original SVC;
      * it is not an application's interruptible native wait. */
     if (site) regs.pc=site->direct.svc;
+    if (t->seccomp.application_filter) {
+        struct seccomp_data call=syscall_description(&regs); call.instruction_pointer+=4;
+        uint32_t decision;
+        CHECK(!md_seccomp_policy_eval(admission_policy(t),&call,&decision));
+        unsigned action=decision&SECCOMP_RET_ACTION_FULL;
+        /* A guest listener or tracer makes even metadata an interruptible
+         * wait. Replaying it under a shield can deadlock its controller. */
+        if (action==SECCOMP_RET_USER_NOTIF || action==SECCOMP_RET_TRACE) return 0;
+    }
     uint32_t instruction=UINT32_C(0xd4000001);
     const struct md_private_memory_access *access=md_memory_private_access(t->memory);
     ssize_t copied=site ? (ssize_t)sizeof(instruction) : md_task_read_memory(t->pid,regs.pc,
@@ -583,7 +592,7 @@ int interrupted_metadata_event(struct thread *t,int status,const struct rusage *
     if (copied!=sizeof(instruction))
         transfer_begin(t,&regs,regs.pc,&restart->instruction,sizeof(restart->instruction),
             MD_TRANSFER_READ,metadata_instruction_complete);
-    else metadata_restart_enter(t);
+    else metadata_restart_retry(t);
     return 1;
 }
 
@@ -633,7 +642,7 @@ int metadata_restart_event(struct thread *t,int status) {
         if (md_syscall_restarting(info.exit.rval)) {
             /* SIGSTOP and internal ptrace interruptions can still restart the
              * shielded read. Never expose a kernel restart code to userspace. */
-            metadata_restart_enter(t);
+            metadata_restart_retry(t);
             return 1;
         }
         metadata_restart_return(t,(long)regs.regs[0]);

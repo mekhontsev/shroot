@@ -37,4 +37,7 @@ struct md_task_filter_image {
  * No installation, allocation or pointers into another address space. */
 int md_fd_filter_build(enum md_fd_selector_kind,int fd,
     const struct md_fd_filter_gates *,struct md_fd_filter_program *);
+/* Kernel path accounting uses converted BPF, not the input cBPF length.
+ * This estimate covers the instruction subset emitted by this constructor. */
+unsigned md_fd_filter_instructions(const struct md_fd_filter_program *);
 #endif

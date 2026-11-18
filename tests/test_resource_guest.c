@@ -2389,7 +2389,7 @@ int test_cgroup_guest(int);
 int test_cgroup_namespace_guest(void);
 int test_device_nodes_guest(void);
 int test_keyring_guest(int, char **);
-int test_native_metadata_guest(void);
+int test_native_metadata_guest(const char *);
 int test_mutation_signal_guest(const char *, int, int);
 int test_shared_memory_guest(const char *, int, int);
 int test_fd_result_guest(const char *, int);
@@ -2434,7 +2434,8 @@ int main(int argc, char **argv) {
     if (argc==2 && !strcmp(argv[1],"device-nodes")) return test_device_nodes_guest();
     if (argc==2 && !strcmp(argv[1],"cgroup-pid")) return test_cgroup_guest(1);
     if (argc==2 && !strcmp(argv[1],"cgroup-namespace")) return test_cgroup_namespace_guest();
-    if (argc==2 && !strcmp(argv[1],"native-metadata")) return test_native_metadata_guest();
+    if ((argc==2 || argc==3) && !strcmp(argv[1],"native-metadata"))
+        return test_native_metadata_guest(argc==3 ? argv[2] : ".");
     if (argc==2 && !strcmp(argv[1],"ipc-namespace")) { test_ipc_namespace_guest(); return 0; }
     setbuf(stdout, NULL); alarm(40);
     if (argc==4 && !strcmp(argv[1],"metadata-signal")) {

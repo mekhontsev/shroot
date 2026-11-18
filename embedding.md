@@ -78,8 +78,8 @@ CPack produces a stripped, versioned `tar.gz` and SHA-256 checksum for the selec
 Only the Shroot install component is included, not fixture executables or source
 caches. Client-only archives have a `-client` filename suffix and no execution
 engine. A third-party shared SQLite remains the integrator's packaging obligation.
-The `bundle` test installs and relocates the default static-dependency package,
-audits its ELF dependencies and executes the shared native client/CLI workflow.
+The `bundle_*` tests install and relocate the default static-dependency package,
+audit its ELF dependencies and execute the shared native client/CLI workflow.
 Cross-built archives use the same layout audit without executing target code:
 
 ```sh
@@ -167,7 +167,7 @@ The image management worker always uses the host's dynamic libc for platform
 DNS integration. `SHROOT_STATIC_RUNTIME` controls execution helpers, not that
 host utility; its curl, TLS and compression code remain statically linked.
 
-Run the same `database` and `client_runtime` tests for each shipped provider.
+Run the same `database` and `client_runtime_*` tests for each shipped provider.
 The standalone `tests/sqlite` project also accepts `SQLITE_AMALGAMATION`,
 `SQLITE_KIND` and `SQLITE_FEATURES` to test a supplied target. `TEST_RUNTIME=ON`
 embeds the complete Shroot project; otherwise it runs only the shared storage

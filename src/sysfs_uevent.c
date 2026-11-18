@@ -117,7 +117,7 @@ int md_sysfs_uevent(struct md_provider_tree *tree,struct md_device_events *event
     int owned=md_provider_tree_private(tree,fd);
     if (owned<=0) return owned;
     char path[PATH_MAX];
-    int error=md_provider_tree_path(tree,fd,path,sizeof(path));
+    int error=md_provider_tree_path(tree,fd,&st,path,sizeof(path));
     if (error) return error;
     size_t length=strlen(path);
     if (strncmp(path,"/devices/",9) || length<16 || strcmp(path+length-7,"/uevent")) return 0;

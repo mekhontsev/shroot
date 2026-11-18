@@ -687,7 +687,11 @@ static void readiness_poll_load(struct thread *t) {
         if (f->count>MD_POLL_CHUNK) f->count=MD_POLL_CHUNK;
         buffer_reply(t,MD_POLL_LOAD); return;
     }
-    if (!t->entry.execution && !md_poll_wait_virtual(o->poll) && !(t->signals.host && f->wait.masked)) {
+    if (!md_poll_wait_virtual(o->poll) && !(t->signals.host && f->wait.masked)
+            && (!t->entry.execution || !checkpoint_restricted(t->pid))) {
+        /* The resident driver's native journal owns signals and restart too.
+         * Retire classification before entering a wholly native wait; policy
+         * restrictions and logical masks still retain their readiness owner. */
         readiness_reply(t,MD_EPOLL_NATIVE); return;
     }
     o->native_caller=1;
@@ -1055,7 +1059,7 @@ int readiness_native_event(struct thread *t,int status) {
      * but asks for original context, not a readiness resample. */
     if (!(event==MD_TASK_CHECKPOINT_EVENT || (!event && signal==(SIGTRAP|0x80))
             || (event==PTRACE_EVENT_STOP && signal==SIGTRAP && (t->io.socket_waking
-                || (t->phase==EPOLL_WAIT && md_debugger_stop_pending(debugger,t->pid)))))) return 0;
+                || (t->phase==EPOLL_WAIT && task_stop_pending(t)))))) return 0;
     if (!registers(t->pid,&regs)) return 1;
     if (event==PTRACE_EVENT_STOP && t->phase==EPOLL_CALL && regs.pc==abi.task_call) {
         struct readiness_owner *o=t->readiness;
@@ -1078,6 +1082,12 @@ int readiness_native_event(struct thread *t,int status) {
         t->pid,value,waking,t->readiness->wait.virtual_count,t->readiness->wait.blocking);
     readiness_wait_cancel(t);
     if (!event && signal==(SIGTRAP|0x80) && (restart || value==-EINTR) && !waking) {
+        /* A tracer observes even ignored signals. Retire at this real exit,
+         * before delivery, so its injected signal remains a kernel enqueue
+         * rather than replacing the signal which interrupted the wait. */
+        if (t->debug.call_active && md_debugger_traced(debugger,t->pid)) {
+            readiness_interrupted(t); return 1;
+        }
         /* EVENT_WAIT: the delivery stop precedes the adapter checkpoint. Do
          * not retire the owner before learning whether the signal is ignored.
          * With no delivery, the checkpoint completes this same interruption. */

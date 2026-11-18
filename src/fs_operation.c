@@ -47,12 +47,15 @@ int md_fs_request_validate(const struct md_fs_request *q) {
             int fdinfo=q->operation==MD_FS_FDINFO && !i
                 && proc.kind==MD_PROC_FOREIGN && proc.foreign_kind==MD_PROC_FDINFO
                 && !*proc.tail && q->capture[i].flags==O_CLOEXEC;
+            int fdinfo_target=q->operation==MD_FS_FDINFO && i==1
+                && proc.kind==MD_PROC_FOREIGN && proc.foreign_kind==MD_PROC_FD
+                && !*proc.tail && q->capture[i].flags==(O_PATH|O_CLOEXEC);
             int mounts=q->operation==MD_FS_MOUNT_TABLE && !i
                 && proc.kind==MD_PROC_FOREIGN
                 && proc.foreign_kind==(q->mode ? MD_PROC_MOUNTINFO : MD_PROC_MOUNTS)
                 && !*proc.tail && q->capture[i].flags==O_CLOEXEC;
             if (q->directory[i]!=-1 || q->object[i] || q->origin[i]
-                    || (md_fs_operation_data_inputs(q->operation)&(1U<<i))
+                    || ((md_fs_operation_data_inputs(q->operation)&(1U<<i)) && !fdinfo_target)
                     || !*q->capture[i].path || strnlen(q->capture[i].path,PATH_MAX)==PATH_MAX
                     || (!(q->capture[i].flags&O_PATH) && !fdinfo && !mounts)
                     || q->capture[i].flags&~(O_PATH|O_CLOEXEC|O_DIRECTORY|O_NOFOLLOW)) return -EINVAL;
@@ -150,7 +153,8 @@ int md_fs_request_validate(const struct md_fs_request *q) {
             || (q->value_size && q->value_size!=sizeof(struct mount_attr))
             || q->capacity || q->offset ? -EINVAL : 0;
     if (q->operation==MD_FS_FDINFO)
-        return descriptors!=3 || (q->directory[0]<0 && !q->capture[0].path) || q->directory[1]<0 || *a || *b || q->mode || q->capacity
+        return descriptors!=3 || (q->directory[0]<0 && !q->capture[0].path)
+            || (q->directory[1]<0 && !q->capture[1].path) || *a || *b || q->mode || q->capacity
             || q->offset<0 || (q->flags&~(O_PATH|O_CLOEXEC)) ? -EINVAL : 0;
     if (q->operation==MD_FS_FSMOUNT)
         return descriptors!=1 || q->directory[0]<0 || *a || *b || (q->flags&~(O_PATH|O_CLOEXEC))

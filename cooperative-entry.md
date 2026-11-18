@@ -101,12 +101,19 @@ offered calls as follows:
 
 | Route | Ownership |
 | --- | --- |
-| Worker | Stat/statx/statfs, directory reads, readlink, mkdir/unlink/rename/link/symlink, access/ownership/mode/timestamp operations and path/link/FD xattrs use the existing filesystem dispatcher and checked task-memory copying. |
+| Worker | Stat/statx/statfs, directory reads, readlink, mkdir/unlink/rename/link/symlink, access/ownership/mode/timestamp operations, synchronization and path/link/FD xattrs use the existing filesystem dispatcher and checked task-memory copying. |
 | Value | Scalar UID/GID reads use owner-published atomic values with the same user-namespace translation as the ordinary supervisor path. Publication is valid only after the complete namespace-map chain is immutable; an unfinished map retains registry-backed execution. |
 | FD | Existing regular-file/directory `openat` and `openat2`, including O_PATH and writable/append/truncate flags, can use a checked native plan. Known ordinary-file close, dup/dup3, lseek and supported fcntl commands share that protocol and the existing file-table owner. Other open/fsopen calls retain their exact kernel publication carrier. |
 | Memory | The resident SVC driver can execute private untracked `munmap`/nonfixed `mremap`, ordinary-range `mprotect` and anonymous private `MAP_FIXED` replacement directly in the caller, using a supervisor-published exclusion snapshot. Other mappings use ordered native effects through the common memory owner. Original-context operations retain explicit admission below. |
 | Task | Default route. The guest evaluates the shared interception programs against the published selector inventory, choosing native execution, a direct error or the common owner request. The supervisor retains shared process/resource state and explicitly requests any original context it needs. |
 | Readiness | An unmasked epoll call checks the original guest policy, then the shared native route admits its zero-time probe locally when possible. Native poll/select classification can finish before a terminal kernel wait. Virtual queues retain their readiness owner; an empty infinite-wait probe continues to the real interruptible wait. |
+
+Descriptor metadata and synchronization on a known writable native attachment
+can use a journaled caller effect directly after worker admission. The retained
+origin supplies current mount policy under the file-table turn; no second OFD
+capture or supervisor request is needed. The kernel checks the actual FD and
+arguments, including O_PATH rejection. Inode-store durability, readonly mounts,
+special providers and unknown provenance retain the normal filesystem dispatcher.
 
 An original-context task route, failed registration and a worker's explicit pre-execution decline
 invoke the kernel continuation and return `COMPLETED`. The callback receives the
@@ -511,8 +518,11 @@ executor operation or an explicit context requirement, never an ambiguous
 Existing worker/FD/value fast paths do not acquire an extra supervisor
 round trip.
 
-Epoll/poll/select adapters, including temporary signal masks, retain their readiness owner and use this
-same native-effect journal, without syscall-entry/exit stops for each wait.
+Poll/select classification retires into the terminal native journal when the
+selected descriptors are wholly native, service gates are admitted and no
+logical temporary mask is needed. Remaining epoll/poll/select adapters retain
+their readiness owner and use the same native-effect journal, without
+syscall-entry/exit stops for each wait.
 The resident frame marks an owned effect separately from a terminal native call:
 an actual signal first retires the operation, then restores the original
 application boundary. The common owner retains deadlines, virtual readiness,
@@ -531,6 +541,9 @@ terminal cleanup reconcile the same receipt used by loan retirement; an unknown
 allocation never authorizes closing a guessed slot. Exclusive tables retain the
 no-duplicate path. Base and unavailable service gates retain descriptor capture;
 supervisor-owned virtual queues still use their existing loan transport.
+Death or exec can replace a borrowed continuation before its journal is restored.
+An unclassifiable in-flight effect then retires as unknown, without replay or
+terminal register mutation; an already published completion remains authoritative.
 
 Completed preparation advances directly to the wait owner when no caller-side
 work remains: exclusive-table admission, local duplication and poll/select
@@ -852,7 +865,10 @@ blocking calls continue to wait in their guest thread, not in the shared worker.
 
 The FD request has a distinct pending state: speculative worker scans never
 execute it. The listener matches task, sequence, number and all six arguments
-before adoption. A kernel denial before admission withdraws only that request;
+before adoption. Pending FD requests retain whether an older native effect still
+owns retirement. Publication, withdrawal and that owner's completion update this
+state atomically; withdrawal cannot declare the channel idle while the older
+effect retains its resource turns. A kernel denial before admission withdraws only that request;
 at admission, a receipt retires the now-copied shared request record while the original
 kernel continuation supplies the authoritative FD or errno. Interruption never
 replays creation or truncation. Native-leaf eligible births instead use the
@@ -1410,8 +1426,9 @@ Current device qualification and its scope are recorded in the
 `nativeReadiness` count admitted native plans/flag
 queries, not necessarily successful effects (a stop can cancel a plan).
 `nativeDeferred` counts completed effects whose caller returned before the
-worker's receipt; a concurrent 1000-iteration contract verifies that retirement
-cannot erase the following shared-memory or kernel-carried request.
+worker's receipt. Component contracts cover every withdrawal/retirement order
+and concurrent next-request publication and repeated withdrawal: neither side
+may erase the other's ownership or a following request.
 `test_cooperative_libc.py BUILD STOCK_FIXTURE --rounds 7` uses real libc calls, verifies
 that enabled/disabled modes have different direct-completion counters, and compares
 relative/absolute/dirfd stat, create/rename/unlink, readonly opens with/without

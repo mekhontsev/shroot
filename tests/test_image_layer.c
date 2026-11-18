@@ -85,7 +85,9 @@ static void dependency_paths(const char *base) {
         if (test==2) entry(a,"forbidden","dir",NULL);
         assert(archive_write_close(a)==ARCHIVE_OK); archive_write_free(a);
         uint64_t bytes=0,entries=0;
+        struct md_inode_statistics stats={0}; md_inode_measure(s,&stats);
         assert(md_image_rootfs(s,fd,&bytes,&entries)==(test==1 ? -ENOENT : test==2 ? -EPERM : 0));
+        assert(!s->directory_sync_batch && stats.sync_directory.calls==(test ? 0 : 1));
         close(fd);
         struct stat st;
         if (test) assert(md_inode_stat(s,-1,"result",0,&st)==-ENOENT);

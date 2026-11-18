@@ -41,7 +41,8 @@ static long execute_files(const struct md_fs *fs,const struct md_guest_execution
     if (nr==SYS_seccomp || nr==SYS_prctl) {
         md_cooperative_revoke();
         long result=md_adapter_readonly_install();
-        return result ? result : md_fd_filter_prepare_sandbox();
+        return result || !(call->policy&MD_DISPATCH_FILTER_SELECTORS)
+            ? result : md_fd_filter_prepare_sandbox();
     }
     if (nr==SYS_unshare || nr==SYS_clone) return md_pid_filter_install();
     if (nr==SYS_setns) return md_setns(args);

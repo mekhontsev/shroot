@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 struct md_debugger;
+struct ptrace_syscall_info;
 union md_process_wait;
 enum md_debugger_wait_action {
     MD_DEBUG_WAIT_PROBE, MD_DEBUG_WAIT_REPROBE, MD_DEBUG_WAIT_NATIVE,
@@ -64,7 +65,6 @@ enum md_debugger_call_result { MD_DEBUG_CALL_NATIVE, MD_DEBUG_CALL_HANDLED, MD_D
  * completion/restart transport; inferior registers are separately observed. */
 int md_debugger_call(struct md_debugger *,pid_t,struct seccomp_data);
 int md_debugger_stop(struct md_debugger *, pid_t, int, const siginfo_t *, unsigned long);
-int md_debugger_defer_stop(struct md_debugger *, pid_t, const siginfo_t *);
 int md_debugger_exec(struct md_debugger *, pid_t, pid_t);
 int md_debugger_birth(struct md_debugger *, pid_t, pid_t, unsigned);
 int md_debugger_event(struct md_debugger *, pid_t, unsigned, unsigned long);
@@ -86,7 +86,9 @@ int md_debugger_boundary(struct md_debugger *, pid_t);
 int md_debugger_newborn(struct md_debugger *, pid_t);
 int md_debugger_syscall_mode(struct md_debugger *, pid_t);
 int md_debugger_syscall_emulated(struct md_debugger *, pid_t);
-int md_debugger_syscall(struct md_debugger *, pid_t, const struct user_pt_regs *, int);
+int md_debugger_syscall_observed(struct md_debugger *,pid_t,const struct ptrace_syscall_info *);
+/* Retained kernel entry arguments, before a result overwrites x0. */
+int md_debugger_syscall_entry(struct md_debugger *,pid_t,struct seccomp_data *);
 /* Optional captured result when the application supplied no output pointer. */
 void md_debugger_wait_complete(struct md_debugger *,pid_t,long,const union md_process_wait *);
 /* Zero means event wake; -512 requests kernel-owned restart/signal delivery. */

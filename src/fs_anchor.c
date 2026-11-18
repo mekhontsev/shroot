@@ -40,6 +40,10 @@ unsigned md_fs_anchor_policy(const struct md_fs_anchor *p) {
     const struct md_view_mount *mount=p->mount ? p->mount : &p->view->base;
     return md_view_policy_flags(mount);
 }
+int md_fs_anchor_native_metadata(const struct md_fs_anchor *p) {
+    return p && !p->child && p->mount && p->mount->backing==MD_MOUNT_NATIVE
+        && !md_view_readonly(p->mount);
+}
 struct md_cgroup_view *md_fs_anchor_cgroup(const struct md_fs_anchor *p) {
     return p && p->mount ? p->mount->cgroup : NULL;
 }
@@ -145,7 +149,7 @@ void md_view_capture(struct md_filesystem *fs, struct md_mount_namespace *view,
     if (!r && transfer) fd=out->fd;
     else if (!r) {
         char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",out->fd);
-        fd=open(proc,O_PATH|O_CLOEXEC);
+        fd=S_ISLNK(st.st_mode) ? fcntl(out->fd,F_DUPFD_CLOEXEC,3) : open(proc,O_PATH|O_CLOEXEC);
         if (fd<0) r=-errno;
     }
     struct md_fs_anchor *p=r ? NULL : md_view_anchor_new(md_inode_store_lifetime(fs->store),

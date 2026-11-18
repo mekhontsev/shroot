@@ -16,6 +16,7 @@ struct retained_memory {
     struct md_task_robust cleanup;
     struct md_resource_order order;
     struct thread *creator, *terminal, *parent;
+    int parent_exit_signal;
     unsigned members,pending;
     int ready, cleaning, retiring, dead, checkpoint_suspended, killed, exit_held,queued;
     long error;

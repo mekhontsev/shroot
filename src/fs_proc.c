@@ -181,7 +181,7 @@ int md_fs_proc_capture_open(struct md_filesystem *fs,struct md_mount_namespace *
     else if (fstat(fd,&st)) return 0;
     if (!S_ISDIR(st.st_mode)) return 0;
     char path[PATH_MAX];
-    if (md_procfs_path(mount,fd,path,sizeof(path))) return 0;
+    if (md_procfs_path(mount,fd,&st,path,sizeof(path))) return 0;
     struct md_proc_path ref=md_proc_path_for(path,0,0);
     struct md_task_snapshot target={0};
     if (!ref.process || md_task_registry_proc(fs->tasks,ref.process,&target)) return 0;
@@ -251,7 +251,7 @@ int md_fs_proc_operation(struct md_filesystem *fs,struct md_mount_namespace *vie
         struct md_fs_result *out,const struct md_fs_output *output) {
     if (!mount || mount->backing!=MD_MOUNT_PROC || fd<0 || !fs->actor) return 0;
     char path[PATH_MAX];
-    int r=md_procfs_path(mount,fd,path,sizeof(path));
+    int r=md_procfs_path(mount,fd,metadata,path,sizeof(path));
     if (r) { out->error=r; return 1; }
     struct md_proc_path ref=md_proc_path_for(path,0,0);
     enum md_proc_file_kind kind=(enum md_proc_file_kind)(ref.kind-MD_PROC_UID_MAP);

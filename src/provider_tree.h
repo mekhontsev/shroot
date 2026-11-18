@@ -40,7 +40,9 @@ struct md_provider_tree_ops {
 };
 /* A retained private provider over a read-through host tree. Opaque subtrees
  * and the optional visibility policy hide lower entries. Admitted lookup stays
- * live, including sysfs entries added after launch. No host file is copied. */
+ * live, including sysfs entries added after launch. No host file is copied.
+ * Creation/import takes context ownership only on success, through retain
+ * when supplied, otherwise by transfer. Failure leaves it with the caller. */
 struct md_provider_tree *md_provider_tree_new(int parent,int lower,const char *const *opaque,
     unsigned opaque_count,const struct md_provider_tree_ops *,void *);
 /* Retain a validated transient-root capability and its kernel lease. The
@@ -51,13 +53,15 @@ int md_provider_tree_matches(const struct md_provider_tree *,const struct md_pro
 struct md_provider_tree *md_provider_tree_retain(struct md_provider_tree *);
 void md_provider_tree_release(struct md_provider_tree *);
 int md_provider_tree_root(struct md_provider_tree *);
-int md_provider_tree_step(struct md_provider_tree *,int directory,const char *);
-/* Select the retained host tree without exposing another namespace's private
- * attachment points. The same path, visibility and cursor rules still apply. */
-int md_provider_tree_host_step(struct md_provider_tree *,int directory,const char *);
-int md_provider_tree_lookup(struct md_provider_tree *,int directory,const char *,
+/* Reuse a provider-relative directory resolved in this same operation. It is
+ * not a persistent path cache. Host selection skips private attachment points;
+ * both selections retain the common traversal and visibility rules. */
+int md_provider_tree_step_path(struct md_provider_tree *,const char *directory,const char *,int host);
+int md_provider_tree_lookup(struct md_provider_tree *,int directory,const struct stat *,const char *,
     const struct md_control_actor *,struct md_provider_lookup **);
-int md_provider_tree_path(struct md_provider_tree *,int fd,char *,size_t);
+/* Optional metadata must describe this same retained FD. Root identities are
+ * stable for the tree's lifetime; other paths are resolved on demand. */
+int md_provider_tree_path(struct md_provider_tree *,int fd,const struct stat *,char *,size_t);
 ssize_t md_provider_tree_getdents(struct md_provider_tree *,int fd,void *,size_t);
 ssize_t md_provider_tree_host_getdents(struct md_provider_tree *,int fd,void *,size_t);
 int md_provider_tree_control(struct md_provider_tree *,int fd,struct md_control_file *);

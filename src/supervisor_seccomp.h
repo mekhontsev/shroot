@@ -18,6 +18,7 @@ struct filter_install {
     struct sock_fprog program;
     struct sock_filter code[BPF_MAXINSNS];
     unsigned stage;
+    unsigned selectors;
     int checkpoint_suspended, virtual_listener, source, admitted, native_completed, retiring;
     long error;
 };
@@ -36,7 +37,7 @@ extern struct md_task_quiesce *policy_barrier;
 extern struct thread *policy_installer;
 
 struct md_seccomp_policy *admission_policy(const struct thread *t);
-enum { FILTER_SERVICE_GATES=6 };
+enum { FILTER_SERVICE_GATES=1 };
 void filter_service_gates(struct md_seccomp_gate gates[FILTER_SERVICE_GATES]);
 
 int guest_trace_begin(struct thread *,const struct seccomp_data *,const struct user_pt_regs *,
@@ -45,6 +46,8 @@ void guest_trace_promoted(struct thread *,const struct user_pt_regs *);
 int guest_trace_recheck(struct thread *,const struct seccomp_data *);
 int guest_trace_resume(struct thread *,int signal);
 int guest_trace_syscall(struct thread *,const struct ptrace_syscall_info *,struct user_pt_regs *);
+int guest_trace_execution(struct thread *,struct ptrace_syscall_info *,struct user_pt_regs *);
+int guest_trace_execution_begin(struct thread *,const struct seccomp_data *,struct user_pt_regs *);
 void guest_notification_discard(struct thread *t);
 int guest_notification_begin(struct thread *t,const struct seccomp_data *data,
         const struct user_pt_regs *regs,const struct seccomp_notif *kernel,const siginfo_t *host_signal);
@@ -65,6 +68,7 @@ void filter_install_fail(struct thread *t,int error);
 int filter_listener_notification(struct thread *t,const struct seccomp_notif *q);
 
 void policy_sync_progress(void);
+int filter_selectors_required(const struct thread *t);
 void filter_install_progress(struct thread *t);
 int filter_install_event(struct thread *t,int status);
 void filter_install_begin(struct thread *t,const struct seccomp_data *call,const struct user_pt_regs *r);

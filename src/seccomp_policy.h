@@ -34,7 +34,8 @@ int md_seccomp_policy_may_notify(const struct md_seccomp_policy *);
 /* A new kernel alias preserves the complete decision only when no ancestor
  * reads its instruction address. Existing mirrored aliases need no such test. */
 int md_seccomp_policy_address_independent(const struct md_seccomp_policy *);
-/* Entry binding may inherit a portable original policy from another image.
+/* Image zero binds only service gates, including Base and size fallback.
+ * Entry binding may inherit a portable original policy from another image.
  * It does not prove that all kernel filters admit this image's helper gates. */
 uint64_t md_seccomp_policy_entry_image(const struct md_seccomp_policy *);
 int md_seccomp_policy_bind_entry(struct md_seccomp_policy *,uint64_t image,
@@ -79,7 +80,7 @@ struct md_seccomp_route {
     /* Zero delegates selected numbers at every PC. An owned service gate
      * leaves the original filter authoritative at application call sites. */
     uint64_t delegation_pc;
-    /* Owned service gates. Without resident entry, only non-ALLOW exits consult
+    /* Owned service gates. Without entry_first, only non-ALLOW exits consult
      * them. The caller must own every gate and validate admission before any
      * guest effect. Constant-ALLOW paths stay cacheable by the kernel. */
     const struct md_seccomp_gate *gates;

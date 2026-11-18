@@ -23,4 +23,8 @@ int md_task_filter_event(struct md_task_filter *,int status);
  * actor is the group's only kernel task and exclude births for this call.
  * Per-thread success never substitutes for an unsynchronized group. */
 int md_task_filter_retry_thread(struct md_task_filter *);
+/* A completed ENOMEM can reflect inherited filter-budget pressure. Retry a
+ * strictly smaller all-FD selector with the same gates and installation API. */
+int md_task_filter_retry_all(struct md_task_filter *,struct md_task_filter_image *,
+    enum md_fd_selector_kind,const struct md_fd_filter_gates *);
 #endif

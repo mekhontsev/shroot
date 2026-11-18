@@ -778,6 +778,13 @@ int process_call(struct thread *t,const struct seccomp_data *call,struct user_pt
             t->memory_op.remote=md_memory_fork(target->memory,1); CHECK(t->memory_op.remote);
         }
     }
+    /* Signal admission has no result-side state. Preserve native errors and
+     * delivery without a second exchange or syscall-exit stop. Translated
+     * arguments still need retirement to restore the caller's original view. */
+    if (signaling && !memcmp(native.args,call->args,sizeof(native.args))) {
+        native_continue(t);
+        return 1;
+    }
     if (entry_pending(t)) {
         t->execution.request=*call;
         uint64_t args[6]; memcpy(args,native.args,sizeof(args));
@@ -837,7 +844,12 @@ void freezer_progress(void) {
 static int private_child_matches(struct private_child_selection *s,pid_t pid) {
     pid_t known_parent,group; int signal;
     int known=retained_child_identity(retained_actor(pid),&known_parent,&group,&signal);
-    long parent=known ? known_parent : md_task_parent(pid);
+    struct thread *child=known ? NULL : find_thread(pid);
+    /* An admitted wait proves the caller's group is alive. Its published
+     * child cannot be reparented away until that group exits. Other parents
+     * may have died/adopted children, so their relation still needs a query. */
+    int owned=child && child->born && child->parent==s->caller->tgid;
+    long parent=known ? known_parent : owned ? child->parent : md_task_parent(pid);
     if (parent==-ENOENT || parent==-ESRCH) return 0;
     if (parent<0) return (int)parent;
     if (parent!=s->caller->tgid) return 0;
@@ -1310,6 +1322,7 @@ void task_exec_event(struct thread *t,pid_t pid,unsigned event) {
     /* Exec retires the old syscall instruction. Its completion belongs
      * to the executing thread, not a replaced leader's interrupted call. */
     t->debug.replay_entry=0;
+    t->debug.host_completed_pc=0;
     t->seccomp.trace.stage=GUEST_TRACE_NONE;
     t->debug.adapter=t->debug.call_active;
     CHECK(!t->close.closed.first); t->close.closed=exec_closed;

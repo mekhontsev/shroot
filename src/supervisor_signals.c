@@ -82,7 +82,9 @@ static void signal_mask_record(struct thread *t,uint64_t mask) {
 }
 
 uid_t process_signal_uid(struct thread *observer,pid_t sender,uid_t fallback) {
-    const struct md_identity *identity=proc_owner(sender).identity;
+    /* PTRACE_SETSIGINFO may supply an arbitrary sender UID. Only the actual
+     * executor credential is a kernel identity needing guest substitution. */
+    const struct md_identity *identity=fallback==native_uid ? proc_owner(sender).identity : NULL;
     return md_identity_visible_id(&observer->identity,0,identity ? identity->uid.real : fallback);
 }
 
@@ -94,13 +96,17 @@ void signal_origin_capture(void *context,const siginfo_t *info,struct md_signal_
     if (!md_signal_origin_matches(saved,info)) saved=t->signals.delivery.child_origin;
     if (!md_signal_origin_matches(saved,info)) saved=md_signal_pending_origin(t->signals.pending,info);
     if (saved) { *out=*saved; return; }
-    if (md_task_registry_signal_origin(tasks,info,out)) return;
+    if (md_task_registry_signal_origin(tasks,info,out)) {
+        if (info->si_uid!=native_uid) { out->uid=info->si_uid; out->reboot_signal=0; }
+        return;
+    }
     struct proc_owner owner=proc_owner(info->si_pid);
     if (!owner.identity) return;
     struct md_pid_identity *pid=owner.resources ? owner.resources->pid
         : md_task_registry_retired(tasks,info->si_pid).pid;
-    *out=(struct md_signal_origin){.info=*info,.uid=owner.identity->uid.real,.valid=1,
-        .reboot_signal=md_pid_identity_reboot_signal(pid)};
+    int native=info->si_uid==native_uid;
+    *out=(struct md_signal_origin){.info=*info,.uid=native ? owner.identity->uid.real : info->si_uid,.valid=1,
+        .reboot_signal=native ? md_pid_identity_reboot_signal(pid) : 0};
     out->count=md_pid_identity_export(pid,out->numbers);
 }
 
@@ -234,23 +240,46 @@ static int signal_debugger_admit(struct thread *t,int sig,struct md_task_signal_
         if (sig==SIGSTOP) stop->has_regs=0;
         if (!signal_observe(t,stop,0)) return 1;
         if (t->debug.call_active && t->debug.adapter && debug_syscall_exit(t,NULL)) {
-            CHECK(md_debugger_defer_stop(debugger,t->pid,&stop->info));
+            CHECK(!md_signal_delivery_defer_stop(&t->signals.delivery,&stop->info));
             return 1;
         }
         return md_debugger_stop(debugger,t->pid,(sig<<8)|0x7f,&stop->info,0);
     }
     if (sig!=SIGSTOP) return 0;
     if (!signal_observe(t,stop,0)) return 1;
-    CHECK(md_debugger_defer_stop(debugger,t->pid,&stop->info));
+    CHECK(!md_signal_delivery_defer_stop(&t->signals.delivery,&stop->info));
     /* EVENT_WAIT: the operation's cancellation/completion restores the guest
      * boundary. Native delivery here would group-stop its resource owners. */
     resume(t->pid,0); return 1;
+}
+
+static int signal_logical_receive(struct thread *t,int sig,struct md_task_signal_stop *stop) {
+    if (sig!=SIGSYS || !t->signals.host || !t->entered) return 0;
+    if (!signal_observe(t,stop,0)) return 1;
+    const siginfo_t *info=&stop->info;
+    if (info->si_signo!=sig || info->si_code==SYS_SECCOMP) return 0;
+    if (t->signals.host_blocked) {
+        /* A delivery carrier may predate a debugger's new mask. Recheck the
+         * logical mask just as the kernel rechecks a blocked ptrace delivery.
+         * Delivery has selected this task; retain that target, not SI_QUEUE's
+         * ambiguous process/thread generation scope. */
+        CHECK(md_signal_pending_put(t->signals.pending,MD_SIGNAL_PRIVATE,info)>=0);
+        resume(t->pid,0); return 1;
+    }
+    struct md_kernel_action action;
+    if (!md_debugger_traced(debugger,t->pid)
+            && !md_signal_actions_read(t->signals.actions,SIGSYS,&action)
+            && action.handler==(uintptr_t)SIG_IGN) {
+        resume(t->pid,0); return 1;
+    }
+    return 0;
 }
 
 static void signal_deliver(pid_t pid,int sig,int restored,struct md_task_signal_stop *stop) {
     struct thread *t=thread(pid);
     struct md_task_signal_stop local;
     if (!stop) { md_task_signal_stop_init(&local,native_trace); stop=&local; }
+    if (signal_logical_receive(t,sig,stop)) return;
     if (sig && sig!=SIGSTOP && !t->signals.delivery.active
             && ((!restored && md_signal_delivery_pending(&t->signals.delivery))
                 || t->signals.shielded || t->metadata_restart)) {
@@ -305,8 +334,17 @@ void deliver_signal(pid_t pid,int sig,int restored,struct md_task_signal_stop *s
 void resume_signal(pid_t pid,int sig,const struct md_signal_origin *origin,int delivery_stop) {
     /* Debugger release has already passed ordinary signal admission. */
     struct thread *t=thread(pid);
+    if (diagnostics && sig) {
+        struct ptrace_syscall_info call={0};
+        siginfo_t info={0};
+        long call_state=native_trace(PTRACE_GET_SYSCALL_INFO,pid,(void *)sizeof(call),&call);
+        long signal_state=native_trace(PTRACE_GETSIGINFO,pid,NULL,&info);
+        SUPERVISOR_TRACE("PROBE debugger-release pid=%d signal=%d delivery=%d phase=%d call-state=%ld op=%u signal-state=%ld signo=%d code=%d\n",
+            pid,sig,delivery_stop,t->phase,call_state,call.op,signal_state,info.si_signo,info.si_code);
+    }
     if (t->terminal_stop) { resume(pid,0); return; }
-    if (guest_trace_resume(t,sig)) return;
+    if (guest_trace_resume(t,sig)) { t->debug.registers_written=0; return; }
+    if (debugger_resume_entry(t,sig)) return;
     if (!delivery_stop) { resume(pid,sig); return; }
     if (origin && origin->valid) t->signals.origin=*origin;
     signal_deliver(pid,sig,1,NULL);
@@ -387,7 +425,7 @@ long signal_logical_send(struct thread *from,const struct seccomp_data *call,con
     if (supplied && (supplied->si_code>=0 || supplied->si_code==SI_TKILL) && pid!=from->pid) return -EPERM;
     if (init_signal_suppressed(from,to,SIGSYS)) return 0;
     siginfo_t info=supplied ? *supplied : (siginfo_t){.si_signo=SIGSYS,.si_code=directed ? SI_TKILL : SI_USER};
-    if (!supplied) { info.si_pid=from->tgid; info.si_uid=getuid(); }
+    if (!supplied) { info.si_pid=from->tgid; info.si_uid=native_uid; }
     info.si_signo=SIGSYS;
     return signal_logical_enqueue(to,directed ? MD_SIGNAL_PRIVATE : MD_SIGNAL_SHARED,&info);
 }
@@ -411,7 +449,7 @@ long signal_process_next(struct thread *from,pid_t selector,int signal,pid_t aft
     struct thread *to=selection.next ? find_thread(selection.next) : NULL;
     if (signal==SIGSYS && to && to->signals.host && !selection.suppressed) {
         siginfo_t info={.si_signo=SIGSYS,.si_code=SI_USER};
-        info.si_pid=from->tgid; info.si_uid=getuid();
+        info.si_pid=from->tgid; info.si_uid=native_uid;
         int error=signal_logical_enqueue(to,MD_SIGNAL_SHARED,&info);
         if (error) return error;
         selection.suppressed=1;
@@ -608,23 +646,13 @@ static void signal_descriptor_selected(struct thread *t,long error) {
         } else signal_control_finish(t,error<0 ? (int)error : -EAGAIN);
         return;
     }
-    unsigned required=md_fd_object_selectors(owner->descriptor);
-    while (owner->selector<MD_FD_SELECTOR_KINDS) {
-        unsigned kind=owner->selector++;
-        if (!(required&(1U<<kind))) continue;
-        int selected=selector_has(t,kind,(int)owner->descriptor_result);
-        if (selected<0) { signal_descriptor_selected(t,selected); return; }
-        if (selected) continue;
-        if (owner->checkpoint_suspended) {
-            md_task_checkpoint_restore(&checkpoints,t->pid); owner->checkpoint_suspended=0;
-        }
-        struct task_action *action=task_action_new(t);
-        if (!action) { signal_descriptor_selected(t,-ENOMEM); return; }
-        action->continuation=t->execution.registers; action->boundary=owner->control.boundary;
-        action->kind=(enum md_fd_selector_kind)kind; action->number=(int)owner->descriptor_result;
-        action->complete=signal_descriptor_selected;
-        task_action_start(t); return;
+    if (owner->checkpoint_suspended) {
+        md_task_checkpoint_restore(&checkpoints,t->pid); owner->checkpoint_suspended=0;
     }
+    int selected=selector_prepare(t,md_fd_object_selectors(owner->descriptor),(int)owner->descriptor_result,
+        owner->control.boundary,&t->execution.registers,signal_descriptor_selected);
+    if (selected<0) signal_descriptor_selected(t,selected);
+    if (selected) return;
     md_fd_origins_release_custody(&owner->publication);
     md_fd_origins_finish(&owner->publication,(int)owner->descriptor_result);
     if ((int)t->execution.request.args[0]>=0)
@@ -1291,14 +1319,26 @@ void signals_buffer_control(struct thread *t,const struct supervisor_control_req
     buffer_reply(t,result); adapter_progress();
 }
 
+void signal_host_fatal(struct thread *t) {
+    struct md_kernel_action action;
+    if (!md_signal_actions_read(t->signals.actions,SIGSYS,&action)) {
+        action.handler=(uintptr_t)SIG_DFL;
+        CHECK(!md_signal_actions_commit(t->signals.actions,SIGSYS,&action));
+    }
+    t->signals.host_blocked=0;
+    t->signals.handler_mask_known=0;
+}
+
 void signals_event(struct thread *t,pid_t pid,int sig,struct md_task_signal_stop *signal_stop,int restored_signal) {
-    SUPERVISOR_TRACE("PROBE signal stop pid=%d signal=%d phase=%d\n",pid,sig,t->phase);
+    SUPERVISOR_TRACE("PROBE signal stop pid=%d signal=%d phase=%d trace=%d call=%d adapter=%d\n",
+        pid,sig,t->phase,t->seccomp.trace.stage,t->debug.call_active,t->debug.adapter);
     if (sig==SIGSYS && !restored_signal) {
         int error=md_svc_machine_seccomp(md_memory_svc(t->memory),pid,signal_stop);
         if (error==-ESRCH) { t->resume_lost=1; return; }
         CHECK(!error);
     }
     if (sig==SIGSYS && !restored_signal && host_policy_signal(t,signal_stop)) return;
+    if (signal_logical_receive(t,sig,signal_stop)) return;
     if (signal_debugger_admit(t,sig,signal_stop)) return;
     struct user_pt_regs regs={0};
     if (sig == SIGSYS || sig == SIGSEGV || sig == SIGBUS || sig == SIGABRT || sig == SIGILL

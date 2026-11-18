@@ -5,6 +5,7 @@
 #include "task_status.h"
 #include "process_owner.h"
 #include "mqueue_view.h"
+#include "private_tree.h"
 #include <assert.h>
 #include "uts_view.h"
 #include <dirent.h>
@@ -125,6 +126,18 @@ static int descriptors(void) {
     int count = 0;
     while (readdir(dir)) count++;
     closedir(dir); return count;
+}
+static void prepare_descriptor_baseline(void) {
+    /* A hosting runtime may admit its table-owned O_PATH return channel on
+     * the first promoted-directory cleanup. Prepare filesystem transport, not
+     * the IPC/resource owners whose exact descriptor balance is measured. */
+    char path[]="md-fd-baseline-XXXXXX"; assert(mkdtemp(path));
+    int parent=open(path,O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(parent>=0);
+    assert(!mkdirat(parent,"child",0700));
+    int fd=openat(parent,"file",O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600); assert(fd>=0);
+    assert(!close(fd) && !unlinkat(parent,"child",AT_REMOVEDIR));
+    fd=openat(parent,"file",O_PATH|O_CLOEXEC); assert(fd>=0);
+    assert(!close(fd) && !close(parent) && !md_private_tree_discard(AT_FDCWD,path));
 }
 static void status_signal_handler(int signal) { (void)signal; }
 static void signal_dispositions(void) {
@@ -594,29 +607,8 @@ void test_network_ipv6(void);
 void test_network_tun(void);
 void test_task_registry_exit(void);
 void test_task_mapping(void);
-int main(int argc,char **argv) {
-    /* Model the service's descriptor budget, including simultaneous native
-     * clients in the publication tests. Never raise the host hard limit. */
-    assert(!md_process_service_nofile());
-    signal_dispositions();
-    uts_publication();
-    alarm(60);
-    if(argc==2 && !strcmp(argv[1],"--tun")) { test_network_tun(); return 0; }
-    if(argc==2 && !strcmp(argv[1],"--nft")) { test_network_nft(); return 0; }
-    test_task_mapping();
-    test_ipc_database();
-    test_task_registry_exit();
-    test_network_model();
-    test_network_route();
-    test_network_route_lifetimes();
-    test_socket_filter();
-    test_network_ethernet();
-    test_network_tc();
-    test_network_endpoint();
-    test_network_nft();
-    test_network_launch();
-    test_network_ipv6();
-    test_network_tun();
+static void ownership(void) {
+    prepare_descriptor_baseline();
     struct md_identity identity=md_identity_new(0,0);
     struct md_task_resources r; assert(!md_resources_init(&r,NULL));
     struct md_resource_change change;
@@ -692,6 +684,33 @@ int main(int argc,char **argv) {
     test_control_poll();
     test_descriptor_inode();
     puts("PASS resource ownership, transactional unshare, retained roots and descriptor lifetime");
+}
+int main(int argc,char **argv) {
+    setvbuf(stdout,NULL,_IOLBF,0);
+    /* Model the service's descriptor budget, including simultaneous native
+     * clients in the publication tests. Never raise the host hard limit. */
+    assert(!md_process_service_nofile());
+    alarm(60);
+    const char *selected=NULL;
+    if (argc==3 && !strcmp(argv[1],"--case")) selected=argv[2];
+    else if (argc==2 && (!strcmp(argv[1],"--tun") || !strcmp(argv[1],"--nft"))) selected=argv[1]+2;
+    else assert(argc==1);
+    const struct { const char *name; void (*run)(void); } cases[]={
+        {"signals",signal_dispositions},{"uts",uts_publication},
+        {"mapping",test_task_mapping},{"ipc",test_ipc_database},
+        {"registry",test_task_registry_exit},{"network",test_network_model},
+        {"route",test_network_route},{"route-lifetimes",test_network_route_lifetimes},
+        {"socket-filter",test_socket_filter},{"ethernet",test_network_ethernet},
+        {"tc",test_network_tc},{"endpoint",test_network_endpoint},
+        {"nft",test_network_nft},{"launch",test_network_launch},
+        {"ipv6",test_network_ipv6},{"tun",test_network_tun},{"ownership",ownership}};
+    unsigned executed=0;
+    for (unsigned i=0;i<sizeof(cases)/sizeof(*cases);++i) {
+        if (selected && strcmp(selected,cases[i].name)) continue;
+        printf("CHECK resources: %s\n",cases[i].name);
+        cases[i].run(); ++executed;
+    }
+    assert(executed && (!selected || executed==1));
     alarm(0);
     return 0;
 }

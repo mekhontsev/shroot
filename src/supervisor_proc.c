@@ -394,9 +394,16 @@ int control_file_capture(pid_t actor,const char *path,struct md_fd_object **out)
     if (!target || !target->born) return kind==MD_PROC_FD ? 0 : -ENOENT;
     struct md_proc_file *file=NULL;
     if (kind==MD_PROC_FD) {
-        file=proc_file_capture(target,selected.descriptor);
-        if (!file) return 0;
-        if (target!=t && !proc_allowed(t->pid,target->pid)) { md_proc_file_release(file); return -EACCES; }
+        if (target!=t && !proc_allowed(t->pid,target->pid)) return -EACCES;
+        struct md_fd_object *object=md_fd_origins_object(target->resources.files,selected.descriptor,NULL);
+        if (!object) return 0;
+        file=md_proc_file_from_object(object);
+        if (!file) {
+            /* A tracked object is selected before a concurrent close can
+             * retire it. Its retained anchor owns both dentry and mount. */
+            if (!*selected.tail && md_fs_anchor_from_object(object)) { *out=object; return 1; }
+            md_fd_object_release(object); return 0;
+        }
         if (*selected.tail && control_mount_path(file)) { md_proc_file_release(file); return 0; }
         if (*selected.tail) { md_proc_file_release(file); return -ENOTDIR; }
     } else {
@@ -635,6 +642,18 @@ static void proc_file_request(struct thread *t, const struct md_proc_open_reques
     buffer_reply(t,reply.error ? reply.error : reply.val);
 }
 
+static int proc_retained_syscall(const struct thread *target,struct md_proc_syscall_view *view) {
+    /* Only an owned substitute wait needs a logical view. NATIVE_WAIT keeps
+     * the application's actual syscall in the kernel and retains no request. */
+    if (!target || entry_pending(target) || !(task_parked(target)
+            || target->phase==DEBUG_PARK_EXIT || signal_control_parked(target))) return 0;
+    *view=(struct md_proc_syscall_view){.number=target->execution.request.nr,
+        .stack=target->execution.registers.sp,
+        .instruction=target->execution.request.instruction_pointer};
+    memcpy(view->args,target->execution.request.args,sizeof(view->args));
+    return 1;
+}
+
 void proc_io_progress(struct thread *t) {
     retry_clear(t,RETRY_PROC_IO);
     if (t->proc.waiting==2) {
@@ -669,15 +688,7 @@ void proc_io_progress(struct thread *t) {
             /* A task-affine wait can execute a different syscall on behalf of
              * the retained application call. No ptrace or new stop is needed
              * to publish that already-owned boundary. */
-            int known=target && !entry_pending(target) && (task_parked(target)
-                || target->phase==DEBUG_PARK_EXIT || target->phase==NATIVE_WAIT
-                || signal_control_parked(target));
-            if (known) {
-                view=(struct md_proc_syscall_view){.number=target->execution.request.nr,
-                    .stack=target->execution.registers.sp,
-                    .instruction=target->execution.request.instruction_pointer};
-                memcpy(view.args,target->execution.request.args,sizeof(view.args));
-            }
+            int known=proc_retained_syscall(target,&view);
             md_proc_file_syscall_state(t->proc.io.file,known ? &view : NULL);
         }
         if (md_proc_file_kind(t->proc.io.file)==MD_PROC_FILE_STATUS) {

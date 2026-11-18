@@ -26,17 +26,33 @@ static int portable_nodes(struct md_filesystem *fs,struct md_provider_tree *dev,
     }
     return error;
 }
-static int attach_nodes(struct md_filesystem *fs,struct md_inode_store *store) {
+static int attach_nodes(struct md_filesystem *fs,struct md_inode_store *store,
+        const struct md_mount_source *shm) {
     const char *path; uint64_t device;
+    unsigned nodes=0;
+    while (md_open_device_node(nodes,&path,&device)) ++nodes;
+    unsigned count=nodes+1;
+    struct md_mount_source sources[count];
+    struct md_view_location targets[count];
+    struct md_mount_attachment items[count];
+    for (unsigned i=0;i<count;++i) {
+        sources[i]=(struct md_mount_source){.fd=-1,.backing=MD_MOUNT_INODE,
+            .storage=md_inode_store_lifetime(store),.policy=MD_MOUNT_NOSUID|MD_MOUNT_NOEXEC};
+        targets[i]=(struct md_view_location){.fd=-1,.parent=-1};
+        items[i]=(struct md_mount_attachment){&sources[i],&targets[i]};
+    }
+    sources[nodes]=*shm;
     int error=0;
     for (unsigned i=0;!error && md_open_device_node(i,&path,&device);++i) {
-        struct md_view_location target={.fd=-1,.parent=-1};
         int fd=md_inode_open(store,MD_INODE_ROOT,path+5,O_PATH|O_CLOEXEC,0);
-        error=fd<0 ? fd : md_view_walk(fs,-1,NULL,path,1,0,MD_VIEW_MOUNT_TARGET,&target);
-        struct md_mount_source source={.fd=fd,.backing=MD_MOUNT_INODE,
-            .storage=md_inode_store_lifetime(store),.policy=MD_MOUNT_NOSUID|MD_MOUNT_NOEXEC};
-        if (!error) error=md_view_attach_source(fs,&source,&target,NULL);
-        md_view_location_close(&target); if (fd>=0) close(fd);
+        sources[i].fd=fd;
+        error=fd<0 ? fd : md_view_walk(fs,-1,NULL,path,1,0,MD_VIEW_MOUNT_TARGET,&targets[i]);
+    }
+    if (!error) error=md_view_walk(fs,-1,NULL,"/dev/shm",1,0,MD_VIEW_MOUNT_TARGET,&targets[nodes]);
+    if (!error) error=md_view_attach_sources(fs,items,count,NULL);
+    for (unsigned i=0;i<count;++i) {
+        md_view_location_close(&targets[i]);
+        if (i<nodes && sources[i].fd>=0) close(sources[i].fd);
     }
     return error;
 }
@@ -66,16 +82,14 @@ int md_fs_devices_prepare(struct md_filesystem *fs,int hide_native_input,struct 
         if (!error) error=md_device_tree_publish(dev,path,fs->render_device);
     }
     /* /dev/shm keeps its inode namespace, independently of device discovery. */
-    struct md_view_location shm={.fd=-1,.parent=-1},target={.fd=-1,.parent=-1};
+    struct md_view_location shm={.fd=-1,.parent=-1};
     if (!error) error=md_view_walk(fs,-1,NULL,"/dev/shm",1,0,0,&shm);
     if (!error && !md_view_inode(shm.mount)) error=-EOPNOTSUPP;
     struct md_mount_source source={.fd=shm.fd,.backing=MD_MOUNT_INODE,
         .storage=shm.mount && shm.mount->storage ? shm.mount->storage : md_inode_store_lifetime(fs->store)};
     if (!error) error=md_fs_provider_mount(fs,dev,"/dev");
-    if (!error) error=attach_nodes(fs,nodes);
-    if (!error) error=md_view_walk(fs,-1,NULL,"/dev/shm",1,0,MD_VIEW_MOUNT_TARGET,&target);
-    if (!error) error=md_view_attach_source(fs,&source,&target,NULL);
-    md_view_location_close(&target); md_view_location_close(&shm);
+    if (!error) error=attach_nodes(fs,nodes,&source);
+    md_view_location_close(&shm);
     md_inode_store_close(nodes);
     if (error) md_provider_tree_release(dev); else *out=dev;
     return error;

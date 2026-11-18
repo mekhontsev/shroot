@@ -252,7 +252,9 @@ int md_image_launch(enum md_image_command kind, int argc, char **argv) {
     if (!r) r = program_path(&fs, first, working, search, executable);
     if (!r) {
         ssize_t n = readlink("/proc/self/exe", runner, sizeof(runner)-1);
-        if (n <= 0 || n >= (ssize_t)sizeof(runner)-1) r = -ENAMETOOLONG;
+        if (n < 0) r = -errno;
+        else if (!n) r = -EIO;
+        else if (n >= (ssize_t)sizeof(runner)-1) r = -ENAMETOOLONG;
         else {
             runner[n] = 0; char *last = strrchr(runner, '/');
             if (!last || (size_t)(last-runner)+sizeof("/libshroot_guest_run.so") > sizeof(runner)) r = -ENAMETOOLONG;

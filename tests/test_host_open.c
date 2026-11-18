@@ -16,9 +16,11 @@ static int unavailable;
 static int native_oracle;
 static int race_directory=-1,race_fd=-1,raced;
 static int temporary_error,entropy_error,entropy_calls,collision;
+static int chmod_error;
 static char temporary_name[45];
 long __real_md_raw(long,long,long,long,long,long,long);
 long __wrap_md_raw(long nr,long a,long b,long c,long d,long e,long f) {
+    if (chmod_error && nr==SYS_fchmodat) return -chmod_error;
     if (temporary_error && nr==SYS_openat && (c&O_TMPFILE)==O_TMPFILE) return -temporary_error;
     if (temporary_error && nr==SYS_getrandom) {
         ++entropy_calls;
@@ -92,6 +94,21 @@ static void compare(int directory,const char *path,unsigned flags) {
         close(native); close(fallback);
     }
 }
+static void retained_mode(int directory) {
+    int fd=openat(directory,"dir/file",O_PATH|O_CLOEXEC); assert(fd>=0);
+    assert(!md_host_chmod_fd(fd,0640));
+    struct stat st; assert(!fstat(fd,&st) && (st.st_mode&0777)==0640);
+    chmod_error=EACCES;
+    assert(md_host_chmod_fd(fd,0600)==-EACCES);
+    chmod_error=0;
+    assert(!fstat(fd,&st) && (st.st_mode&0777)==0640);
+    close(fd);
+    fd=openat(directory,"linkfile",O_PATH|O_NOFOLLOW|O_CLOEXEC); assert(fd>=0);
+    assert(md_host_chmod_fd(fd,0600)==-EOPNOTSUPP);
+    assert(!fstatat(directory,"dir/file",&st,0) && (st.st_mode&0777)==0640);
+    close(fd);
+    assert(md_host_chmod_fd(-1,0600)==-EBADF);
+}
 int main(void) {
     pid_t probe=fork(); assert(probe>=0);
     if (!probe) {
@@ -108,6 +125,7 @@ int main(void) {
     assert(!mkdirat(directory,"dir",0700));
     int file=openat(directory,"dir/file",O_CREAT|O_WRONLY|O_CLOEXEC,0600); assert(file>=0); close(file);
     assert(!symlinkat("dir",directory,"linkdir") && !symlinkat("dir/file",directory,"linkfile"));
+    retained_mode(directory);
     const char *paths[]={"", ".", "./", "dir", "dir/", "dir//file", "dir/../dir/file",
         "missing/file", "dir/file/child", "linkdir/file", "linkfile", "linkdir/", "linkdir"};
     const unsigned flags[]={O_RDONLY,O_DIRECTORY,O_PATH,O_PATH|O_NOFOLLOW,O_PATH|O_DIRECTORY};

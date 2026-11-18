@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -123,15 +124,20 @@ static void event_loop(void) {
     close(native); close(ep); md_control_cursor_close(&c); md_control_event_release(source);
     puts("PASS mixed native wakeups and coalesced generations, no hot-path allocations (100000 rounds)");
 }
-int main(void) {
+int main(int argc,char **argv) {
+    setvbuf(stdout,NULL,_IOLBF,0);
+    assert(argc==1 || (argc==3 && !strcmp(argv[1],"--case")));
     extern void test_control_epoll(void);
     extern void test_fd_weak(void);
     extern void test_fd_filter_program(void);
     extern void test_control_readiness(void);
-    test_fd_filter_program();
-    independent_opens(); publication_races(); event_loop();
-    test_control_epoll();
-    test_fd_weak();
-    test_control_readiness();
+    const struct { const char *name; void (*run)(void); } cases[]={
+        {"filters",test_fd_filter_program},{"cursors",independent_opens},
+        {"races",publication_races},{"events",event_loop},{"epoll",test_control_epoll},
+        {"weak",test_fd_weak},{"readiness",test_control_readiness}};
+    unsigned completed=0;
+    for (unsigned i=0;i<sizeof(cases)/sizeof(*cases);++i)
+        if (argc==1 || !strcmp(argv[2],cases[i].name)) { cases[i].run(); ++completed; }
+    assert(completed);
     return 0;
 }
