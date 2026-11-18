@@ -6216,7 +6216,7 @@ static void debugger_index_lifetime(void) {
         assert(!wait_test_probe.nr && !debugger_result);
         probe.args[id ? 3 : 2]&=~WNOHANG;
         assert(md_debugger_call(d,owner+1,probe)==MD_DEBUG_CALL_HANDLED);
-        assert(wait_test_action==MD_DEBUG_WAIT_PARK);
+        assert(wait_test_action==MD_DEBUG_WAIT_PARK_INITIAL);
         md_debugger_wait_resumed(d,owner+1,-EINTR);
         assert(debugger_result==-EINTR);
         probe.args[id ? 3 : 2]|=WUNTRACED|WNOHANG;
@@ -6317,7 +6317,7 @@ static void debugger_index_lifetime(void) {
             : (struct seccomp_data){.nr=SYS_wait4,.args={-1,0,__WALL}};
         debugger_result=-1;
         assert(md_debugger_call(d,owner,call)==MD_DEBUG_CALL_HANDLED);
-        assert(wait_test_action==MD_DEBUG_WAIT_PARK && debugger_result==-1);
+        assert(wait_test_action==MD_DEBUG_WAIT_PARK_INITIAL && debugger_result==-1);
         md_debugger_wait_resumed(d,owner,0);
         assert(wait_test_action==MD_DEBUG_WAIT_PARK && debugger_result==-1);
         md_debugger_exit(d,FIRST,7<<8);
@@ -7083,6 +7083,8 @@ static void provider_wait_boundaries(void) {
         pid_t pid=fork(); assert(pid>=0);
         if (!pid) {
             pid_t expected=getpid();
+            sigset_t mask; sigemptyset(&mask); sigaddset(&mask,SIGUSR1);
+            assert(!sigprocmask(SIG_BLOCK,&mask,NULL));
             assert(!ptrace(PTRACE_TRACEME,0,NULL,NULL));
             raise(SIGSTOP);
             struct sock_filter code[]={
@@ -7107,17 +7109,29 @@ static void provider_wait_boundaries(void) {
         struct thread t={.pid=pid,.phase=phases[p],.signals.host=md_app_uid_active};
         assert(!thread_index[(unsigned)pid%THREAD_BUCKETS]);
         thread_index[(unsigned)pid%THREAD_BUCKETS]=&t;
-        assert(registers(pid,&t.execution.registers) && skip(pid));
+        assert(registers(pid,&t.execution.registers));
         t.fs.registers=t.close.registers=t.execution.registers;
-        if (!pending_exit) {
+        int initial_park=phases[p]==DEBUG_PARK_ENTRY && pending_exit;
+        if (initial_park) {
+            struct seccomp_data call=syscall_description(&t.execution.registers);
+            debugger_wait(pid,&call,MD_DEBUG_WAIT_PARK_INITIAL);
+            assert(t.debug.wait_mask&(UINT64_C(1)<<(SIGUSR1-1)));
+        } else {
+            assert(skip(pid));
+            if (!pending_exit) {
+                assert(!ptrace(PTRACE_SYSCALL,pid,NULL,NULL));
+                assert(waitpid(pid,&status,0)==pid && WSTOPSIG(status)==(SIGTRAP|0x80));
+            }
+            struct user_pt_regs poll=wait_poll_registers(&t,t.phase);
+            assert(set_registers(pid,&poll));
             assert(!ptrace(PTRACE_SYSCALL,pid,NULL,NULL));
-            assert(waitpid(pid,&status,0)==pid && WSTOPSIG(status)==(SIGTRAP|0x80));
         }
-        struct user_pt_regs poll=wait_poll_registers(&t,t.phase);
-        assert(set_registers(pid,&poll));
-        assert(!ptrace(PTRACE_SYSCALL,pid,NULL,NULL));
         assert(waitpid(pid,&status,0)==pid && WSTOPSIG(status)==(SIGTRAP|0x80));
         if (pending_exit) {
+            if (initial_park) {
+                long result;
+                assert(stopped_result(&t,&result) && result!=pid);
+            }
             assert(!wait_poll_entry(&t) && t.phase==phases[p]);
             assert(!ptrace(PTRACE_SYSCALL,pid,NULL,NULL));
             assert(waitpid(pid,&status,0)==pid && WSTOPSIG(status)==(SIGTRAP|0x80));

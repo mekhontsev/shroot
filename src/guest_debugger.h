@@ -13,7 +13,7 @@ struct ptrace_syscall_info;
 union md_process_wait;
 enum md_debugger_wait_action {
     MD_DEBUG_WAIT_PROBE, MD_DEBUG_WAIT_REPROBE, MD_DEBUG_WAIT_NATIVE,
-    MD_DEBUG_WAIT_PARK, MD_DEBUG_WAIT_RESTART
+    MD_DEBUG_WAIT_PARK_INITIAL, MD_DEBUG_WAIT_PARK, MD_DEBUG_WAIT_RESTART
 };
 struct md_debugger_host {
     /* Register mutations must notify the host's continuation decoder. */

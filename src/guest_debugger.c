@@ -761,13 +761,18 @@ int md_debugger_call(struct md_debugger *d,pid_t pid,struct seccomp_data call) {
     if (filtered<0) { free(candidates); d->host.complete(pid,filtered); return 1; }
     if (!children && !filtered) { free(candidates); return 0; }
     if (!children && filtered && !count && !live) { free(candidates); d->host.complete(pid,-ECHILD); return 1; }
+    if (filtered && !count && (options&WNOHANG)) {
+        free(candidates); wait_empty(d,pid,&call,0); return MD_DEBUG_CALL_HANDLED;
+    }
     if (d->host.wait_admit && !d->host.wait_admit(pid)) { free(candidates); return MD_DEBUG_CALL_CONTEXT; }
     struct waiting *w=malloc(sizeof(*w));
     if (!w) { free(candidates); d->host.complete(pid,-ENOMEM); return 1; }
     *w=(struct waiting){.next=d->waiters,.pid=pid,.call=call,.probing=1,
         .filtered=filtered,.candidates=candidates,.count=count,.native_children=live}; d->waiters=w;
-    if (filtered && !count) md_debugger_wait_complete(d,pid,-ECHILD,NULL);
-    else wait_probe(d,w,MD_DEBUG_WAIT_PROBE);
+    if (filtered && !count) {
+        w->probing=0;
+        d->host.wait(pid,&call,MD_DEBUG_WAIT_PARK_INITIAL);
+    } else wait_probe(d,w,MD_DEBUG_WAIT_PROBE);
     /* EVENT_WAIT: a guest trace stop or actual child exit resumes this wait.
      * Launch cancellation/timeout still owns both debugger and inferior. */
     return 1;

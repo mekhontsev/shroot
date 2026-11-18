@@ -350,11 +350,12 @@ void debugger_wait(pid_t pid,const struct seccomp_data *call,enum md_debugger_wa
     struct thread *t=find_thread(pid);
     if (!t) return;
     int shared=entry_pending(t);
+    int park=action==MD_DEBUG_WAIT_PARK_INITIAL || action==MD_DEBUG_WAIT_PARK;
     if (shared) {
         CHECK(t->phase==IDLE || t->phase==DEBUG_WAIT_BUFFER);
         t->phase=IDLE;
         if (action==MD_DEBUG_WAIT_RESTART) { entry_restart(t,RESTART_SIGNAL); return; }
-        if (action==MD_DEBUG_WAIT_PARK) {
+        if (park) {
             CHECK(entry_wait_begin(t,INT64_MAX,debugger_entry_woken)); return;
         }
         if (action==MD_DEBUG_WAIT_NATIVE) {
@@ -400,11 +401,15 @@ void debugger_wait(pid_t pid,const struct seccomp_data *call,enum md_debugger_wa
     struct user_pt_regs regs=*original;
     regs.regs[8]=call->nr; memcpy(regs.regs,args,sizeof(args));
     if (action==MD_DEBUG_WAIT_RESTART) { restart_call(t,original,t->debug.wait_mask,RESTART_SIGNAL); return; }
-    if (action==MD_DEBUG_WAIT_PARK) {
+    if (park) {
         /* EVENT_WAIT: native interruptible poll delivers arbitrary guest
          * signals. Inferior events cancel it with INTERRUPT; no periodic wake
          * or descriptor is needed, and ordinary execution never enters here. */
         t->debug.wait_waking=0;
+        /* Without a native probe the original wait is still pending; changing
+         * x8 alone does not cancel the syscall latched by the kernel. */
+        if (action==MD_DEBUG_WAIT_PARK_INITIAL
+                && (!save_signal_mask(t,&t->debug.wait_mask,"debug-wait-mask") || !skip(pid))) return;
         if (!shield(t)) return;
         wait_poll_start(t,DEBUG_PARK_ENTRY);
         return;
