@@ -903,12 +903,46 @@ static void device_origin(const char *base) {
     assert(descriptors()==before);
     puts("PASS device origin: cold import after sender teardown, unlinked metadata, native IO and reopen");
 }
+static void tmpfile_origin(const char *base) {
+    unsigned before=descriptors();
+    struct source s=source(base,1);
+    message_close(&s); s.messages=NULL;
+    struct md_fs_anchor *a=NULL;
+    struct md_fs_request open={.operation=MD_FS_OPEN,.path={"/outer"},.directory={-1,-1},
+        .flags=O_TMPFILE|O_RDWR,.mode=0600};
+    struct md_fs_result data;
+    md_fs_execute(&s.fs,&open,&data,&(struct md_fs_output){.origin=&a});
+    assert(!data.error && a && data.fd>=0 && write(data.fd,"A",1)==1);
+    char store[PATH_MAX]; path(store,base,"store");
+    struct md_fs_anchor *entries[]={a,s.anchor[1]};
+    publish(&s,store,entries,2);
+    struct md_fs_origin_parcel parcel={0};
+    assert(!md_fs_origin_export(s.message,&parcel));
+    struct md_fd_message_route route=s.route;
+    md_fs_anchor_release(a); source_close(&s);
+    struct md_fs_origin_imports *i=imports(base);
+    struct md_fs_origin_vector *v=NULL;
+    assert(!md_fs_origin_import(i,&route,&parcel,&v));
+    struct md_fs_anchor *const *objects=md_fs_origin_vector_entries(v);
+    struct md_filesystem fs={0};
+    assert(!md_inode_store_open(store,0,&fs.store) && !md_fs_mounts_open(&fs,NULL,0));
+    struct md_fs_request link={.operation=MD_FS_LINK,.flags=AT_SYMLINK_FOLLOW,.mode=MD_FS_LINK_PROC_FD,
+        .directory={objects[0]->fd,objects[1]->fd},.origin={objects[0],objects[1]},.path={"","published"}};
+    struct md_fs_result r;
+    md_fs_execute(&fs,&link,&r,NULL);
+    assert(!r.error && write(data.fd,"B",1)==1);
+    contents(&fs,objects[1],"published","AB");
+    close(data.fd); md_fs_mounts_close(&fs); md_inode_store_close(fs.store);
+    md_fs_origin_vector_free(v); md_fs_origin_imports_free(i);
+    assert(descriptors()==before);
+    puts("PASS bind tmpfile: unpublished inode survives sender exit, published by receiver without replacing its FD");
+}
 void test_origin_transfer(const char *base) {
     alarm(120); bundles();
     const char *names[]={"origin-local","origin-faults","origin-processes","origin-unknown",
         "origin-capsules","origin-capsules-unknown","origin-capsules-discard","origin-storage","origin-mount-pins",
         "origin-typed-capsules","origin-anonymous-capsules","origin-private-view-capsules","origin-device",
-        "origin-placed-capsules"}; char name[PATH_MAX];
+        "origin-placed-capsules","origin-bind-tmpfile"}; char name[PATH_MAX];
     for (unsigned n=0;n<sizeof(names)/sizeof(*names);++n) {
         path(name,base,names[n]); assert(!mkdir(name,0700));
         if (!n) local(name); else if (n==1) failures(name); else if (n==2) processes(name);
@@ -917,6 +951,7 @@ void test_origin_transfer(const char *base) {
         else if (n==10) anonymous_capsules(name); else if (n==11) typed_capsules(name,1);
         else if (n==12) device_origin(name);
         else if (n==13) typed_capsules(name,2);
+        else if (n==14) tmpfile_origin(name);
         else capsules(name,(int)n-4);
     }
     alarm(0); puts("PASS portable message origins");

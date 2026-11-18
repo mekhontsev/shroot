@@ -49,6 +49,7 @@ enum { MD_FS_STAT_MOUNT = 1, MD_FS_STAT_CANONICAL = 2 };
 /* A proc magic-link description may name another mount tree. It is display
  * text, not an executable identity or a path known to resolve in the caller. */
 enum { MD_FS_PATH_DISPLAY = 1 };
+enum { MD_FS_LINK_PROC_FD = 1 };
 enum { MD_FS_REOPEN_MUTABLE=1, MD_FS_REOPEN_NATIVE=2, MD_FS_REOPEN_EXECUTE=4 };
 enum { MD_FS_OBJECT_EXECUTE=1 };
 enum { MD_FS_IMAGE_INTERPRETER=1 };

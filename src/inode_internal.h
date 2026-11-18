@@ -73,6 +73,7 @@ struct md_inode_store {
     int objects, watch_presence, locked, recording, readonly, reflink_unavailable;
     int mount_readonly, super_readonly, super_checked, nodev;
     int native_files;
+    int tmpfile_parent_collected;
     sqlite3_int64 super_version;
     struct md_inode_lifetime *lifetime;
     const struct md_identity *identity;

@@ -284,7 +284,10 @@ long md_namespace_paths_resolve(const struct md_fs *fs,const struct md_fs_reques
         /* Entry mutations must retain the final name, not follow it and
          * mutate a proc magic link's target. Only directory suffixes enter
          * the guest namespace; proc entries themselves remain unsupported. */
-        if (entries && ((kind!=MD_PROC_FD && kind!=MD_PROC_CWD && kind!=MD_PROC_ROOT)
+        int link_fd=q->operation==MD_FS_LINK && index==0 && (q->flags&AT_SYMLINK_FOLLOW)
+            && kind==MD_PROC_FD && ref.tail && !*ref.tail;
+        if (link_fd) q->mode=MD_FS_LINK_PROC_FD;
+        if (entries && !link_fd && ((kind!=MD_PROC_FD && kind!=MD_PROC_CWD && kind!=MD_PROC_ROOT)
                 || !ref.tail || !*ref.tail)) return -EOPNOTSUPP;
         int fd=-1;
         if (md_namespace_proc_borrow(&ref,&fd)) {
@@ -303,7 +306,7 @@ long md_namespace_paths_resolve(const struct md_fs *fs,const struct md_fs_reques
             if (r<0) return r;
             q->directory[index]=AT_FDCWD; q->path[index]=relative[index];
         } else {
-            int directory=entries || ((kind==MD_PROC_FD || kind==MD_PROC_CWD || kind==MD_PROC_ROOT)
+            int directory=(entries && !link_fd) || ((kind==MD_PROC_FD || kind==MD_PROC_CWD || kind==MD_PROC_ROOT)
                 && ref.tail && *ref.tail);
             const char *tail=directory ? ref.tail : "";
             while (*tail=='/') ++tail;

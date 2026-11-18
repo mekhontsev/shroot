@@ -7,16 +7,17 @@
 #include "mount_graph.h"
 #include "sealed_manifest.h"
 #include "fd_receipt.h"
+#include "temporary_directory.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-enum { MAGIC=0x4d444f56U, VERSION=7, MAX=MD_FD_RECEIPT_MAX };
+enum { MAGIC=0x4d444f56U, VERSION=8, MAX=MD_FD_RECEIPT_MAX };
 struct span { uint32_t start, count; struct md_fd_identity identity; };
 struct origin { uint32_t view, owner, mount, descriptor; struct md_fd_identity identity; uint64_t generation;
-    struct md_fd_identity endpoint; char fifo_channel[32]; uint64_t dentry; uint32_t native_leaf,reserved; };
+    struct md_fd_identity endpoint; char fifo_channel[32]; uint64_t dentry; uint32_t native_leaf,tmpfile; };
 struct manifest {
     uint32_t magic, version, count, origins, views, owners, rights, reserved;
     struct md_fd_message_route route;
@@ -150,6 +151,7 @@ int md_fs_origin_export_entries(const struct md_fd_message *message, struct md_f
         o->identity=(struct md_fd_identity){a->device,a->inode}; o->mount=view_slot(a);
         o->endpoint=a->endpoint;
         o->dentry=a->dentry; o->native_leaf=a->native_leaf;
+        if (a->tmpfile_lease>=0) { o->tmpfile=1; ++rights; }
         r=fifo_channel(a,o->fifo_channel);
         if (r) return r;
         o->generation=a->mount->generation;
@@ -200,6 +202,10 @@ int md_fs_origin_export_entries(const struct md_fd_message *message, struct md_f
         if (!r) {
             int pin=md_mount_graph_acquire_pin(anchors[i]->view,anchors[i]->mount);
             if (pin<0) r=pin; else candidate.fd[candidate.count++]=pin;
+        }
+        if (!r && data.origin[i].tmpfile) {
+            int lease=fcntl(anchors[i]->tmpfile_lease,F_DUPFD_CLOEXEC,3);
+            if (lease<0) r=-errno; else candidate.fd[candidate.count++]=lease;
         }
     }
     data.rights=candidate.count;
@@ -289,11 +295,22 @@ static int validate(struct md_fs_origin_imports *s, const struct md_fd_message_r
     for (unsigned i=0;!r && i<m->origins;++i) {
         struct origin *o=&m->origin[i]; struct md_fd_identity actual;
         if (o->view>=m->views || o->owner>=m->owners || o->descriptor!=next || next>=p->count
-                || o->reserved || o->native_leaf>1 || o->dentry>INT64_MAX) return -EPROTO;
+                || o->tmpfile>1 || o->native_leaf>1 || o->dentry>INT64_MAX) return -EPROTO;
         r=path_identity(p->fd[next++],&actual);
         if (!r && !md_fd_identity_same(actual,o->identity)) r=-EPROTO;
         if (!r) {
             if (next>=p->count) r=-EPROTO; else ++next;
+        }
+        if (!r && o->tmpfile) {
+            if (next>=p->count) return -EPROTO;
+            int lease=p->fd[next++];
+            r=md_temporary_directory_check(lease);
+            struct stat expected,parent;
+            int backing=r ? r : md_bind_tmpfile_parent(s->root,0);
+            if (backing<0) return backing;
+            if (fstat(backing,&expected) || fstatat(lease,"..",&parent,AT_SYMLINK_NOFOLLOW)) r=-errno;
+            close(backing);
+            if (!r && !md_view_same(&expected,&parent)) r=-EXDEV;
         }
     }
     if (!r && next!=p->count) r=-EPROTO;
@@ -362,6 +379,7 @@ static int import(struct md_fs_origin_imports *s, const struct md_fd_message_rou
         a->dentry=o->dentry; a->native_leaf=o->native_leaf;
         take(p,o->descriptor);
         take(p,o->descriptor+1);
+        if (o->tmpfile) a->tmpfile_lease=take(p,o->descriptor+2);
         anchors[i]=a;
         if (o->fifo_channel[0]) {
             char channel[33]={0}; memcpy(channel,o->fifo_channel,32);

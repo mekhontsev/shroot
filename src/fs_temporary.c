@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "fs_mount_internal.h"
 #include "inode_internal.h"
+#include "temporary_directory.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -96,13 +97,7 @@ int md_fs_temporary_reconfigure(const char *options,const struct md_identity *id
     return parse(options,id,01777,&parsed);
 }
 int md_fs_private_mounts_parent(struct md_inode_store *s) {
-    if (mkdirat(s->lifetime->root,"mounts",0700) && errno!=EEXIST) return -errno;
-    int fd=openat(s->lifetime->root,"mounts",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
-    if (fd<0) return -errno;
-    struct stat st;
-    int r=fstat(fd,&st) ? -errno : st.st_uid!=getuid() || (st.st_mode&0077) ? -EACCES : 0;
-    if (r) close(fd);
-    return r ? r : fd;
+    return md_private_directory_open(s->lifetime->root,"mounts",1);
 }
 int md_fs_mount_temporary(struct md_filesystem *fs, const struct md_fs_request *q,
         struct md_mount_source *out) {

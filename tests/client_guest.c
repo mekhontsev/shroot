@@ -7,7 +7,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <linux/netlink.h>
+#include <linux/capability.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -68,6 +70,48 @@ int main(int argc, char **argv) {
         umask(mask);
         printf("[%d,%d]\n", errors[0], errors[1]);
         return 0;
+    }
+    if (argc == 3 && !strcmp(argv[1], "publish-tmpfile")) {
+        int dir=open(argv[2],O_DIRECTORY|O_RDONLY|O_CLOEXEC);
+        int fd=openat(dir,".",O_TMPFILE|O_RDWR|O_CLOEXEC,0600);
+        struct stat before,after;
+        if (fd<0 || fstat(fd,&before) || before.st_nlink || write(fd,"A",1)!=1) {
+            perror("prepare tmpfile"); return 37;
+        }
+        pid_t child=fork();
+        if (!child) {
+            char proc[64];
+            snprintf(proc,sizeof(proc),"/proc/self/fd/%d",fd);
+            if (!linkat(AT_FDCWD,proc,AT_FDCWD,"/native-alias/escaped",AT_SYMLINK_FOLLOW)
+                    || errno!=EXDEV) { perror("publish across attachments"); _exit(38); }
+            if (!linkat(AT_FDCWD,proc,dir,"nofollow",0)) _exit(38);
+            if (!linkat(AT_FDCWD,proc,dir,"token",AT_SYMLINK_FOLLOW) || errno!=EEXIST) {
+                perror("publish to occupied name"); _exit(38);
+            }
+            if (linkat(AT_FDCWD,proc,dir,"published",AT_SYMLINK_FOLLOW)) {
+                perror("publish tmpfile"); _exit(39);
+            }
+            _exit(0);
+        }
+        int status;
+        if (child<0 || waitpid(child,&status,0)!=child || status) return 38;
+        if (fstat(fd,&after) || after.st_nlink!=1 || write(fd,"B",1)!=1 ||
+                fstatat(dir,"published",&after,AT_SYMLINK_NOFOLLOW) ||
+                after.st_ino!=before.st_ino || after.st_dev!=before.st_dev) return 39;
+        int exclusive=openat(dir,".",O_TMPFILE|O_EXCL|O_RDWR,0600);
+        if (exclusive<0) return 39;
+        char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",exclusive);
+        if (!linkat(AT_FDCWD,proc,dir,"exclusive",AT_SYMLINK_FOLLOW) || close(exclusive)) return 39;
+        int direct=openat(dir,".",O_TMPFILE|O_RDWR,0600);
+        struct __user_cap_header_struct header={.version=_LINUX_CAPABILITY_VERSION_3};
+        struct __user_cap_data_struct caps[2];
+        if (direct<0 || syscall(SYS_capget,&header,caps)) return 39;
+        int rc=linkat(direct,"",dir,"direct",AT_EMPTY_PATH);
+        if (caps[0].effective&(1U<<CAP_DAC_READ_SEARCH)) {
+            if (rc || unlinkat(dir,"direct",0)) { perror("privileged empty-path link"); return 39; }
+        } else if (!rc || errno!=ENOENT) { perror("unprivileged empty-path link"); return 39; }
+        if (fstat(direct,&after) || after.st_nlink || close(direct)) return 39;
+        return close(fd) || close(dir);
     }
     if (argc == 2 && !strcmp(argv[1], "limits")) {
         struct rlimit limit;

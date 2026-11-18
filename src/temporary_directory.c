@@ -14,6 +14,15 @@
 #include <unistd.h>
 
 static const char prefix[]=".md-transient-", marker[]=MD_TEMPORARY_DIRECTORY_MARKER;
+int md_private_directory_open(int parent,const char *name,int create) {
+    if (create && mkdirat(parent,name,0700) && errno!=EEXIST) return -errno;
+    int fd=openat(parent,name,O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+    if (fd<0) return -errno;
+    struct stat st;
+    int r=fstat(fd,&st) ? -errno : st.st_uid!=getuid() || (st.st_mode&0077) ? -EACCES : 0;
+    if (r) close(fd);
+    return r ? r : fd;
+}
 struct identity { uint32_t magic, version; uint64_t device, inode; };
 static int temporary_name(const char *name) {
     return strlen(name)==sizeof(prefix)-1+32 && !strncmp(name,prefix,sizeof(prefix)-1)
@@ -76,9 +85,12 @@ int md_temporary_directory_collect(int parent) {
     int r=collect(fd); close(fd); return r;
 }
 int md_temporary_directory_new(int parent) {
+    return md_temporary_directory_create(parent,1);
+}
+int md_temporary_directory_create(int parent,int collect_abandoned) {
     int gate=parent_lock(parent);
     if (gate<0) return gate;
-    int r=collect(gate), root=-1, created=0;
+    int r=collect_abandoned ? collect(gate) : 0, root=-1, created=0;
     unsigned char random[16]; char name[sizeof(prefix)+32];
     if (!r) {
         ssize_t n=getrandom(random,sizeof(random),0);

@@ -466,14 +466,24 @@ int main(int argc, char **argv) {
     for (unsigned exclusive=0;exclusive<2;++exclusive) {
         unsigned flags=O_TMPFILE|O_RDWR|O_CLOEXEC|(exclusive ? O_EXCL : 0);
         for (unsigned relative=0;relative<2;++relative) {
-            struct md_fs_result temporary=call(&fs,MD_FS_OPEN,relative ? directory : -1,
-                relative ? "." : "/volume",flags,0600,NULL,0);
+            struct md_fs_anchor *origin=NULL;
+            struct md_fs_output capture={.origin=&origin};
+            struct md_fs_request open_tmp={.actor=123,.operation=MD_FS_OPEN,
+                .directory={relative ? directory : -1,-1},.path={relative ? "." : "/volume"},
+                .flags=flags,.mode=0600};
+            struct md_fs_result temporary;
+            md_fs_execute(&fs,&open_tmp,&temporary,&capture);
             if (temporary.error) fprintf(stderr,"native tmpfile exclusive=%u relative=%u error=%d\n",exclusive,relative,temporary.error);
             assert(!temporary.error && temporary.fd>=0);
-            assert(!fstat(temporary.fd,&st) && S_ISREG(st.st_mode) && !st.st_nlink);
+            struct md_fs_request query={.actor=123,.operation=MD_FS_FSTAT,
+                .directory={temporary.fd,-1},.origin={origin}};
+            struct md_fs_result metadata;
+            md_fs_execute(&fs,&query,&metadata,NULL);
+            assert(!metadata.error && S_ISREG(metadata.info.mode) && !metadata.info.links);
             assert(write(temporary.fd,"temporary",9)==9);
             assert(fcntl(temporary.fd,F_GETFD)&FD_CLOEXEC);
             close(temporary.fd);
+            md_fs_anchor_release(origin);
         }
         struct md_fs_result ro_tmp=call(&fs,MD_FS_OPEN,-1,"/readonly",flags,0600,NULL,0);
         assert(ro_tmp.error==-EROFS && ro_tmp.fd==-1);

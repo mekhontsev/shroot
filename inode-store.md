@@ -293,6 +293,15 @@ the caller's scratch directory and unlinks it before returning the descriptor.
 Access failures do not trigger fallback. This internal anonymous-file contract
 does not add guest `O_TMPFILE` or link-after-creation support to the inode provider.
 
+On writable native directory attachments, a guest can publish an `O_TMPFILE`
+once using `linkat` (including a followed `/proc/self/fd/N` source). Shroot
+keeps its unpublished name in private storage and renames it without replacing
+an existing target. The host sees the same inode; open descriptors continue
+to read and write it directly. The private backing must be on the same host
+mount with compatible creation permissions, ACL and SELinux label. Otherwise
+publication-capable creation is unsupported. `O_TMPFILE|O_EXCL` remains a
+native anonymous file and cannot be published.
+
 Eligible guest creation uses native leaves by default. The parent must be
 attached, local, have
 virtual permissions and no default ACL. The store probes user-xattr metadata on

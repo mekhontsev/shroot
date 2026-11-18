@@ -105,6 +105,8 @@ def main():
         if args.case in (None, 'attachments'):
             attachment = root / 'attachment'
             attachment.mkdir()
+            other = root / 'other-attachment'
+            other.mkdir()
             (attachment / 'token').write_text('read-only')
             native_tmpfile = json.loads(subprocess.check_output(
                 [str(build / 'client-guest'), 'native-tmpfile', str(attachment)],
@@ -126,6 +128,17 @@ def main():
                                             '--', '/bin/client-guest', 'native-tmpfile', '/native',
                                             *map(str, native_tmpfile)],
                                    check=True, timeout=30)
+                    if not native_tmpfile[0]:
+                        subprocess.run(launch + ['--bind-create', str(attachment), '/native',
+                                                '--bind-ro-create', str(other), '/native-alias',
+                                                '--env', 'SHROOT_MACHINE_ENTRY=' + entry,
+                                                '--', '/bin/client-guest', 'publish-tmpfile', '/native'],
+                                       check=True, timeout=30)
+                        assert (attachment / 'token').read_bytes() == b'read-only'
+                        assert (attachment / 'published').read_bytes() == b'AB'
+                        (attachment / 'published').unlink()
+                        assert {p.name for p in attachment.iterdir()} == {'token'}
+                        assert not list((instance / 'mounts' / 'tmpfiles').iterdir())
         if args.case in (None, 'lifetime'):
             parent_lifetime(cli, instance)
             for command in ([*cli, 'exec', str(instance)], [str(runtime / 'libshroot_guest_run.so'), '--store', str(instance)]):

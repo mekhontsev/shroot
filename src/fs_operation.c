@@ -287,7 +287,9 @@ int md_fs_request_validate(const struct md_fs_request *q) {
             || (q->mode && q->operation != MD_FS_CREATE && q->operation != MD_FS_MKDIR && q->operation != MD_FS_OPEN
                 && !((q->operation==MD_FS_STAT || q->operation==MD_FS_FSTAT)
                     && !(q->mode&~(MD_FS_STAT_MOUNT|MD_FS_STAT_CANONICAL)))
-                && !(q->operation==MD_FS_PATH && q->mode==MD_FS_PATH_DISPLAY))
+                && !(q->operation==MD_FS_PATH && q->mode==MD_FS_PATH_DISPLAY)
+                && !(q->operation==MD_FS_LINK && q->mode==MD_FS_LINK_PROC_FD
+                    && !*a && (descriptors&1) && (q->flags&AT_SYMLINK_FOLLOW)))
             || (q->flags && q->operation != MD_FS_OPEN && q->operation != MD_FS_LINK
                 && q->operation != MD_FS_RENAME && q->operation != MD_FS_UNLINK && q->operation != MD_FS_STAT)
             || ((q->operation == MD_FS_FSTAT || q->operation == MD_FS_PATH) && *a)

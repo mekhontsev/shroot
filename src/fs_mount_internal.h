@@ -169,7 +169,7 @@ struct md_fs_anchor {
      * It is an exact path anchor, not a claim on a matching mounted inode. */
     struct md_mount_namespace *view;
     struct md_view_mount *mount;
-    int fd, mount_pin;
+    int fd, mount_pin, tmpfile_lease;
     dev_t device;
     ino_t inode;
     unsigned kind, native_leaf;
@@ -185,6 +185,10 @@ static inline int md_view_same(const struct stat *a,const struct stat *b) {
     return a->st_dev==b->st_dev && a->st_ino==b->st_ino;
 }
 struct md_view_mount *md_view_root_mount(struct md_filesystem *);
+int md_bind_tmpfile_open(struct md_inode_store *,int,int,mode_t,int *);
+int md_bind_tmpfile_parent(int store,int create);
+int md_bind_tmpfile_pending(const struct md_fs_anchor *);
+int md_bind_tmpfile_publish(const struct md_fs_anchor *,int,const char *);
 int md_view_root_fd(struct md_filesystem *);
 int md_view_record(struct md_filesystem *, int fd, struct md_view_mount *, struct md_view_object **);
 int md_view_backing_contains(struct md_filesystem *,const struct md_view_mount *,int root,int object);

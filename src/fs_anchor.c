@@ -3,6 +3,7 @@
 #include "inode_lifetime.h"
 #include "inode_fifo.h"
 #include "mount_graph.h"
+#include "temporary_directory.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@ static void destroy(struct md_fd_object *object) {
     struct md_fs_anchor *p=(void *)object;
     close(p->fd);
     if (p->mount_pin>=0) close(p->mount_pin);
+    if (p->tmpfile_lease>=0) md_temporary_directory_release(p->tmpfile_lease);
     md_inode_fifo_release(p->fifo_custody);
     if (p->mount && atomic_fetch_sub_explicit(&p->mount->anchors,1,memory_order_acq_rel)==1)
         md_mount_family_retire(p->view);
@@ -41,7 +43,7 @@ unsigned md_fs_anchor_policy(const struct md_fs_anchor *p) {
     return md_view_policy_flags(mount);
 }
 int md_fs_anchor_native_metadata(const struct md_fs_anchor *p) {
-    return p && !p->child && p->mount && p->mount->backing==MD_MOUNT_NATIVE
+    return p && p->tmpfile_lease<0 && !p->child && p->mount && p->mount->backing==MD_MOUNT_NATIVE
         && !md_view_readonly(p->mount);
 }
 struct md_cgroup_view *md_fs_anchor_cgroup(const struct md_fs_anchor *p) {
@@ -79,6 +81,7 @@ static struct md_fs_anchor *create(struct md_inode_lifetime *lifetime,
     md_fd_object_init(&p->object,&type);
     p->lifetime=md_inode_lifetime_retain(lifetime); p->view=md_mount_namespace_retain(view);
     p->mount=mount; p->fd=fd; p->mount_pin=pin; p->device=device; p->inode=inode;
+    p->tmpfile_lease=-1;
     if (mount) atomic_fetch_add_explicit(&mount->anchors,1,memory_order_relaxed);
     return p;
 }

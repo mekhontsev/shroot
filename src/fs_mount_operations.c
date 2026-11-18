@@ -10,6 +10,7 @@
 #include "filesystem_ioctl.h"
 #include "fs_continuation.h"
 #include "fuse_view.h"
+#include "temporary_directory.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/openat2.h>
@@ -226,6 +227,14 @@ static void mount_metadata(const struct md_view_mount *mount,int fd,
 }
 static int anchor_path(struct md_filesystem *fs,const struct md_fs_anchor *origin,void *data,size_t capacity) {
     if (!data || !capacity) return -ERANGE;
+    if (origin->tmpfile_lease>=0) {
+        int pending=md_bind_tmpfile_pending(origin);
+        if (pending<0) return pending;
+        if (pending) {
+            int n=snprintf(data,capacity,"#%llu (deleted)",(unsigned long long)origin->inode);
+            return n<0 || (size_t)n>=capacity ? -ERANGE : 0;
+        }
+    }
     int error=md_view_dentry_path(fs,origin->fd,origin->mount,origin->dentry,origin->native_leaf,data,capacity);
     if (!error && origin->child) {
         char *path=data;
@@ -316,6 +325,11 @@ static int descriptor(struct md_filesystem *fs, const struct md_fs_request *q,
             ? -EROFS : -EXDEV; break;
     case MD_FS_FSTAT:
         result_stat(out,q->directory[0],p->mount);
+        if (!out->error && origin && origin->tmpfile_lease>=0) {
+            int pending=md_bind_tmpfile_pending(origin);
+            if (pending<0) out->error=pending;
+            else if (pending) out->info.links=0;
+        }
         mount_metadata(p->mount,q->directory[0],q,out); break;
     case MD_FS_STATFS: md_fs_statfs_result(q->directory[0],md_mount_policy_flags(&p->mount->policy),NULL,out,output); break;
     case MD_FS_READLINK: {
@@ -328,7 +342,12 @@ static int descriptor(struct md_filesystem *fs, const struct md_fs_request *q,
     }
     case MD_FS_REOPEN:
         r = reopen(fs,owner.mounts,p, (int)q->flags, !!(q->mode&MD_FS_REOPEN_MUTABLE),q,out,output);
-        if (r >= 0) { out->fd = r; r = 0; md_view_capture(fs,owner.mounts,p->mount,out,output); }
+        if (r >= 0) {
+            out->fd=r; r=0;
+            if (origin && origin->tmpfile_lease>=0 && output && output->origin)
+                *output->origin=md_fs_anchor_retain((struct md_fs_anchor *)origin);
+            else md_view_capture(fs,owner.mounts,p->mount,out,output);
+        }
         break;
     case MD_FS_OBJECT_ID:
         if (!data || capacity < sizeof(p->id)) r = -ERANGE;
@@ -536,11 +555,17 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
         if (flags&MD_O_TMPFILE_BIT) {
             if (!(flags&O_DIRECTORY) || !(flags&MD_O_ACCMODE)) { r=-EINVAL; break; }
             if (output && output->native_open_plan) { r=-EXDEV; break; }
-            /* Creation belongs to the selected directory, not its parent or
-             * a proc-FD reopen. Kernel checks retain native filesystem limits. */
-            int fd=openat(a->fd,".",flags|O_CLOEXEC,q->mode&~q->attributes.creation_mask);
-            r=record(&owner,fd,a->mount,out,!output || !output->origin);
+            int lease=-1;
+            if (!(flags&O_EXCL) && (!output || !output->origin || a->mount->backing!=MD_MOUNT_NATIVE)) {
+                r=-EOPNOTSUPP; break;
+            }
+            int fd=md_bind_tmpfile_open(fs->store,a->fd,flags,q->mode&~q->attributes.creation_mask,&lease);
+            r=fd<0 ? fd : record(&owner,fd,a->mount,out,!output || !output->origin);
             if (!r) md_view_capture(fs,a->view,a->mount,out,output);
+            if (lease>=0) {
+                if (r || out->error) md_temporary_directory_release(lease);
+                else (*output->origin)->tmpfile_lease=lease;
+            }
             break;
         }
         if (output && output->native_open_plan) {
@@ -630,7 +655,9 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
     case MD_FS_UNLINK: if (unlinkat(a->parent, a->name, (int)q->flags)) r = -errno; break;
     case MD_FS_RENAME: r=(int)md_host_rename(a->parent,a->name,b->parent,b->name,q->flags); break;
     case MD_FS_LINK:
-        if (q->flags & ~AT_SYMLINK_FOLLOW) r = -EINVAL;
+        if (q->origin[0] && q->origin[0]->tmpfile_lease>=0 && q->path[0] && !*q->path[0])
+            r=md_bind_tmpfile_publish(q->origin[0],b->parent,b->name);
+        else if (q->flags & ~AT_SYMLINK_FOLLOW) r = -EINVAL;
         else if (linkat(a->parent, a->name, b->parent, b->name, 0)) r = -errno;
         break;
     default: r = -EOPNOTSUPP; break;
@@ -761,6 +788,17 @@ static void mounts_execute(struct md_filesystem *fs, const struct md_fs_request 
         struct md_fs_result *out, const struct md_fs_output *output,struct path_operation *resume) {
     *out = (struct md_fs_result){.fd=-1};
     if (resume) goto paths;
+    int fd_link=q->operation==MD_FS_LINK && q->path[0] && !*q->path[0];
+    if (fd_link) {
+        const struct md_fs_anchor *o=q->origin[0];
+        int err=q->flags&~(AT_EMPTY_PATH|AT_SYMLINK_FOLLOW) ? -EINVAL : 0;
+        if (!err && q->mode!=MD_FS_LINK_PROC_FD && (!(q->flags&AT_EMPTY_PATH)
+                || !fs->store->identity || !md_identity_capable(fs->store->identity,CAP_DAC_READ_SEARCH)))
+            err=-ENOENT;
+        if (!err && (!o || o->tmpfile_lease<0)) err=-EOPNOTSUPP;
+        if (!err) err=md_view_anchor_check(fs,q->directory[0],o);
+        if (err) { out->error=err; return; }
+    }
     if (q->operation==MD_FS_PATH && q->mode==MD_FS_PATH_DISPLAY && q->origin[0]
             && q->origin[0]->view) {
         out->error=md_view_anchor_check(fs,q->directory[0],q->origin[0]);
@@ -795,7 +833,7 @@ static void mounts_execute(struct md_filesystem *fs, const struct md_fs_request 
     }
     /* A same-view inode origin does not introduce a mount crossing. Let the
      * inode engine perform its one authoritative walk after origin validation. */
-    int local=local_inode_view(fs,q);
+    int local=fd_link ? 0 : local_inode_view(fs,q);
     if (local) {
         if (local<0) { out->error=local; return; }
         struct mdi_mount_boundary guard={.context=fs->mounts,.contains=base_mount_contains,
@@ -814,6 +852,7 @@ static void mounts_execute(struct md_filesystem *fs, const struct md_fs_request 
     }
     int pause_error=md_inode_operation_window_pause(fs->store);
     if (pause_error) { out->error=pause_error; return; }
+    if (fd_link) goto paths;
     if (q->operation == MD_FS_OPEN_OBJECT) {
         struct md_view_object *p=md_view_object(fs,q->path[0]);
         if (p) {
@@ -892,7 +931,12 @@ paths:;
      * Never resolve self/fd against the filesystem worker's descriptor table. */
     uint64_t resolve=q->resolve|MD_VIEW_TASK_PATH;
     int r=0;
-    if (!operand) {
+    if (!operand && q->operation==MD_FS_LINK && q->path[0] && !*q->path[0]) {
+        const struct md_fs_anchor *o=q->origin[0];
+        a.view=o->view; a.mount=o->mount;
+        a.fd=fcntl(o->fd,F_DUPFD_CLOEXEC,3);
+        if (a.fd<0) r=-errno;
+    } else if (!operand) {
         r=pending ? md_view_walk_resume(fs,pending,&a,observer_ptr)
             : md_view_walk_async(fs,q->directory[0],q->origin[0],q->path[0],
                 follow(q),missing(q),resolve,&a,observer_ptr,output && output->continuation ? &pending : NULL);
