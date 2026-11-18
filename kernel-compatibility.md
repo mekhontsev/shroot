@@ -1,8 +1,16 @@
 # Kernel Compatibility
 
-- [Baseline](#baseline)
-- [Newer Interfaces](#newer-interfaces)
-- [Validation Limits](#validation-limits)
+Use this register when adding a syscall, flag or behavior newer than the
+supported baseline. Each entry identifies its owner, fallback or explicit
+failure, and the checks that exercise it.
+
+| Looking for | Start here |
+| --- | --- |
+| Required behavior on Linux 5.15 | [Baseline](#baseline) |
+| A newer operation and its fallback | [Newer interfaces](#newer-interfaces) |
+| Address-space and process interfaces | [Task-affine calls](#task-affine-calls-and-checkpoints), [process birth](#process-birth-and-proc-views), [memory and JIT](#memory-and-jit-repair) |
+| Guest filesystem and network interfaces | [Mount policies](#mount-policies-and-graphs), [network configuration](#network-configuration), [cgroups](#cgroups-and-device-policy) |
+| Profile masking versus real hardware coverage | [Host kernel profiles](#host-kernel-profiles), [validation limits](#validation-limits) |
 
 ## Baseline
 

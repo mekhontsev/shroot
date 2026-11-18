@@ -1,10 +1,11 @@
 # Guest Syscall Interception
 
-One native supervisor owns each explicitly launched guest tree. It uses seccomp
-TRACE stops for adaptation and USER_NOTIF for descriptor metadata, selected path
-operations, selected watch reads and the image-entry protocol. It never attaches to Android tasks.
-The guest retains the selected real UID; neither the supervisor nor the filesystem
-service changes SELinux policy or acquires root.
+Shroot supervises only the guest tree it launches. Ordinary unselected calls
+run in the kernel. Calls that need adaptation reach shared operation handlers:
+Base uses selective seccomp TRACE and USER_NOTIF; [lazy SVC](cooperative-entry.md)
+can send eligible calls from the guest thread without a ptrace stop. Descriptor
+publication and operations requiring a stopped task retain their native control
+paths. Neither entry mode changes the executor's real UID or SELinux policy.
 
 - [Execution And State](#execution-and-state)
 - [Guest Kernel Interfaces](#guest-kernel-interfaces)

@@ -60,5 +60,8 @@ processes and files. Never reboot a device without immediate user confirmation.
 
 Maintain documentation about current behavior, limitations, ownership and usage;
 keep experiment chronology in artifacts and Git. Release notes own versioned
-changes. All substantive source edits use apply_patch; mechanical relocation or
+changes. Keep host-independent probes and engine contracts here. The integrating
+project owns its installer, graphical recipes and corresponding test payloads;
+link there for application-specific setup instead of duplicating its manual.
+All substantive source edits use apply_patch; mechanical relocation or
 bulk path rewrites may use appropriate tooling.

@@ -827,57 +827,21 @@ selects only these native publication boundaries.
 
 ## Optional Parcel Experiments
 
-The separate `--case fd-parcel` experiment queues the original rights inside a
-private Unix socket, then transfers its endpoint in an outer message. It checks
-253 rights, including O_PATH, over stream/datagram/seqpacket transports, sender
-exit, stable SO_COOKIE, repeated inner peeks, retained outer peeks, peek discard,
-truncation, partial/complete ordinary reads, queue closure and failed sends.
-The remaining endpoint observes POLLHUP after the last parcel reference
-disappears; pipe EOF checks release of enclosed writable descriptions. Native
-self-references and two-socket parcel cycles both reach EOF in the tested kernel's
-Unix GC. An expired GC observation is reported as unobserved, not collected.
+The opt-in `--case fd-parcel` compares private socket parcels with native
+SCM_RIGHTS under descriptor pressure. It checks payload order, O_PATH, sender
+exit, peeks, truncation, EOF, cycles and failed-send cleanup. An expired GC
+observation is inconclusive. These variants are controls, not selectable
+production transports.
 
-Transport variants have different resource requirements, measured separately
-from native controls under actual UID 2000:
-
-| Candidate | Verified boundary |
+| Control | What it distinguishes |
 | --- | --- |
-| Direct parcel unwrap | The endpoint consumes one receiving slot; native SCM_RIGHTS delivers one more original FD under the same pressure. |
-| Preconnected broker relay | Exporting the endpoint frees the receiver slot, but that reverse send can fail with ETOOMANYREFS where native receive succeeds. |
-| Receiver-local reserved slot | Moving the endpoint with dup3 avoids reverse export and preserves the available payload prefix, provided an owned slot already exists below the receiver's FD limit. A retained slot above a lowered limit is rejected with EBADF. |
-| pidfd_getfd pull | Dumpable providers supply regular, O_PATH and pipe FDs even to a nondumpable receiver. Protected providers return EPERM on the tested device. |
-| io_uring registered-file candidate | io_uring_setup returns EACCES on the tested shell executor. The isolated probe also reports SIGSYS denial; this API is not a runtime dependency. |
+| Direct unwrap | The parcel endpoint consumes one receiver slot that native SCM_RIGHTS can use for data. |
+| Broker relay | Sending back the endpoint can hit the real UID's in-flight rights quota. |
+| Reserved receiver slot | Preserves the payload prefix only if the slot remains valid below the receiver's current FD limit. |
+| pidfd or registered-file variants | Depend on host authority; rejection does not imply a missing guest descriptor. |
 
-The local-slot fixture receives 253 rights with 0, 1, 2, 3, 4, 252, 253 or 254
-free slots. It checks distinct origins, O_PATH, protected receivers, outer peeks,
-wrong-cookie rejection, pipe EOF and terminal loss before/after dup3, temporary
-close and payload receive. Kernel-written outer and payload receipts survive
-receiver exit; cleanup distinguishes the old endpoint number from its reuse by
-an installed application FD. A queued table mutation remains blocked until
-publication and private cleanup finish. The fixture preallocates its slot and
-receipts: slot ownership across guest close_range, exec, table sharing and lowered
-limits is not implemented by the adapter.
-
-Admitted relay deliveries cover the same payload prefix, protected receivers,
-terminal publication, cookie rejection and EOF. With 253 queued rights and 1-4
-free receiver slots, the reverse export hits the native in-flight quota. The
-[Linux Unix-socket check](https://github.com/torvalds/linux/blob/v6.12/net/unix/af_unix.c#L1731-L1747)
-compares the real UID's in-flight rights against the sending task's RLIMIT_NOFILE.
-Source-side controls also expose the extra send: with limits 64 and 252, direct
-native sending of 253 rights succeeds, while enclosing those rights succeeds but
-exporting the endpoint fails with ETOOMANYREFS. Limits 253 and 254 admit both on
-this device. Failed-export cleanup must release the enclosed pipe writer. UID-wide
-background traffic can invalidate a control; such a case is reported as
-unobserved, not transport equivalence. Neither raising limits nor changing the
-sender identity is used to bypass these comparisons.
-
-These are native fixtures, not an application protocol. The fixture supplies
-peer/cookie binding; native peers, cross-launch origin ownership, lazy admission
-and full quota equivalence remain unestablished. pidfd_getfd additionally needs
-a pidfd and terminal publication beyond its scalar syscall result. No candidate
-changes application bytes, socket queues or limits in the shipped adapter.
-The experiment is outside the default regression suite, and its report lists
-limitations separately from successful assertions.
+The fixture does not raise limits or change identity to hide these differences.
+For the shipped protocol, see [Unix ancillary transport](ipc-credentials.md#application-ancillary-transport).
 
 ## Message-Origin Association Candidate
 
@@ -957,7 +921,8 @@ in `md_ipc_binding`. It is immutable across aliases and owner changes; accept
 inherits the selected format instead of changing an existing queue's meaning.
 Carrier operations require both an `ORIGINS_V1` binding and a verified private
 peer agreement. A native connection cannot be upgraded by control negotiation.
-Production owners declare `NATIVE` until application adapters own that format.
+The filesystem service offers `ORIGINS_V1`; ordinary native peers retain kernel
+SCM_RIGHTS. See the [production transport contract](ipc-credentials.md#application-ancillary-transport).
 
 `test_task_resources` checks allocation/EMFILE rollback, wrong connection sides,
 duplicate cookies, stale events, malformed monitors, bounded batch retirement

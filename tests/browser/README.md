@@ -104,7 +104,7 @@ supply these explicitly; they are not downloaded by the runtime.
 
 ## Video And Input Measurement
 
-`benchmark.py` runs the installed Chromium in headless software mode with its
+The application driver `$APP_TESTS/benchmark_browser.py` runs the installed Chromium in headless software mode with its
 ordinary sandbox. It serves a supplied local WebM, waits for actual video frames,
 then alternates Base/lazy runs with fresh owned profiles. It requires the host
 Python `websocket-client` package. Root observes host thread CPU counters only;

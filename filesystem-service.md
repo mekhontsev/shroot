@@ -255,8 +255,8 @@ namespace lifetime. See [process ownership](process-lifetime.md).
 
 ## Verification
 
-`build.sh` links the client/wire/raw primitives into a freestanding object and
-requires zero undefined symbols. Host and actual shell-UID Debian fixtures cover:
+The [native suite](tests/README.md#standalone-native-checks) covers the client,
+wire protocol and worker lifecycle. Host and shell-UID Debian fixtures check:
 
 - Shared native inode/data/FD/mmap/flock identity, link counts, open-unlinked
   lifetime, symlinks and directory moves with retained FDs.

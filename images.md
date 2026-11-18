@@ -108,6 +108,11 @@ adapter uses this for XKB data without extracting or guessing the store layout.
 
 ## Import Boundary
 
+Each OCI layer is one storage transaction. The importer creates implicit parent
+directories only when an intermediate component is missing. It keeps individual
+data barriers and flushes the shared backing directory before committing the
+layer; batching that directory flush does not make a partial layer visible.
+
 `image_oci.c` selects descriptors, `image_json.c` uses the existing SQLite JSON
 parser, `image_io.c` verifies SHA-256 and bounded archive streams, and
 `image_layer.c` applies names through the inode API. Libarchive, zlib, Zstandard
@@ -388,7 +393,7 @@ public API/CLI independently of an APK. They cover names, dependency cleanup,
 locking, redirect credentials, TLS validation, digest failures, cancellation,
 execution and backup/restore using disposable local inputs.
 
-The optional MagicDesk integration, `tests/test_environment_cli.py`, exercises the installed APK's
+The optional [MagicDesk CLI fixture](https://github.com/mekhontsev/magicdesk/blob/develop/tests/shroot/test_environment_cli.py) exercises the installed APK's
 named CLI through actual UID 2000: public Alpine/Debian pulls, independent stores,
 run/exec/login, writable/readonly directory attachments, portable backup/restore
 and dependency-aware prune followed by execution of the independent restore.

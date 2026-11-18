@@ -343,6 +343,13 @@ finishes, retaining the same journal.
 
 ## Qualifying Evidence
 
+For a quick comparison, use the [distribution matrix](validation-matrix.md#current-release-qualification).
+The sections below identify the exact workflows and receipts for each User installation:
+[SteamOS](#steamos-user-open-work), [Debian](#debian-user), [Arch](#arch-user),
+[Fedora](#fedora-user), [Ubuntu](#ubuntu-user), [openSUSE](#opensuse-user),
+[Deepin](#deepin-user), [Manjaro](#manjaro-user), [openKylin](#openkylin-user),
+[NixOS](#nixos-user), [Armtix](#armtix-user), [Void](#void-user) and [Alpine](#alpine-user).
+
 Device coverage is on NX809J, Android 16/API 36, target SDK 37, kernel 6.12.23,
 with the real untrusted application UID and no capabilities. It does not prove
 other firmware or physical kernel-5.15 compatibility.

@@ -12,8 +12,8 @@ use Shell unless explicitly stated. Additional App-UID acceptance is recorded
 in [host execution](host-execution.md). Neither executor's results certify the
 other, the minimum supported kernel 5.15, other firmware or Android root execution.
 
-- [Current Release Qualification](#current-release-qualification)
 - [Reading Results](#reading-results)
+- [Current Release Qualification](#current-release-qualification)
 - [Linux 5.15 Capability Profile](#linux-515-capability-profile)
 - [Installation And Init](#installation-and-init)
 - [Containers And Virtual Machines](#containers-and-virtual-machines)
@@ -22,6 +22,58 @@ other, the minimum supported kernel 5.15, other firmware or Android root executi
 - [Added System Workloads](#added-system-workloads)
 - [K3s](#k3s)
 - [Evidence And Open Work](#evidence-and-open-work)
+
+## Reading Results
+
+Each paired cell is **Shroot (lazy SVC) / Shroot Base**, with independent
+results, not a ratio. `P/N` means Shroot passed and Base was not run;
+`N/N` means neither mode has a qualifying result for that scenario.
+
+| Code | Meaning |
+| --- | --- |
+| - | Outside the selected test scope for this distribution; no compatibility claim |
+| N | Not run; includes fixtures that still need implementation |
+| P | Passed the named scenario in the recorded run, not necessarily the latest build |
+| I | Incomplete: some assertions passed, but acceptance remains open |
+| F | Observed failure not attributed to a confirmed upstream defect; retain its reproduction until a qualifying rerun passes |
+| U | Observed failure attributed to a confirmed upstream defect; not a pass or a resolved limitation |
+| B | Blocked by a named prerequisite; not a pass or proof of an application defect |
+| H | Historical coverage only; current acceptance and exact entry-mode evidence need reconciliation |
+| NA | Not applicable, with an explicit distribution/package/hardware reason |
+
+An N in the Base position means there is no qualifying Base receipt here; it
+does not assert that nobody has ever run that workflow. H is not a pass in that
+entry mode. Do not infer NA from a distribution's init choice or an unattempted
+package install. Record unavailable distribution packages separately from a
+Shroot implementation failure; do not silently substitute another userspace.
+
+The current scope selects Snap browsers on Ubuntu and Steam/game workflows on
+SteamOS only. Other distributions are not required to run those workloads to
+complete their selected matrix. A single `-` excludes both entry modes from
+that scope; it is not NA (unsupported/not applicable), N (pending coverage),
+or a pass. Preserve existing failure evidence when changing scope. All other
+N cells remain uncovered unless their scope is explicitly changed.
+
+Use U only with an exact package version, failing receipt and diagnostic evidence:
+a published upstream defect/fix, or an isolated reproduction outside Shroot
+matching the upstream source. A similar symptom alone remains F.
+Keep unaffected checks separate; an upstream fix or lab-patched pass does not
+promote the installed package to P without a qualifying rerun. Most current
+application receipts exercise Shroot only, so Base often remains N; shared code
+and unit-test coverage do not establish an unrun Base application result.
+
+Missing workload packages or dependencies (for example Podman or aardvark-dns)
+must not add source-build fallbacks to `install_linux.sh`. Lab-only source builds
+may test Shroot compatibility, but their receipts must identify the upstream
+version, provenance and locally built components. Such a pass does not establish
+availability from that distribution's repositories or the installer. The
+explicit Turnip build remains a separate graphics recipe, not a general license
+to compile missing applications during installation.
+
+P applies only to the native hashes, package versions and configuration in its
+receipt. Staged native builds do not certify the installed APK. Rerun affected
+cells after common runtime changes; do not promote older receipts to the new
+build or use aggregate unit-test success as application acceptance.
 
 ## Current Release Qualification
 
@@ -612,58 +664,6 @@ retained in `ubuntu-service-config/`, `ubuntu-empty-stop/`,
 [Podman stop command](https://github.com/containers/podman/blob/v4.9.3/contrib/systemd/system/podman-restart.service.in)
 and [LXC empty-list verdict](https://github.com/lxc/lxc/blob/lxc-5.0.3/src/lxc/tools/lxc_autostart.c).
 No units were disabled and the shutdown assertion remains strict.
-
-## Reading Results
-
-Each paired cell is **Shroot (lazy SVC) / Shroot Base**, with independent
-results, not a ratio. `P/N` means Shroot passed and Base was not run;
-`N/N` means neither mode has a qualifying result for that scenario.
-
-| Code | Meaning |
-| --- | --- |
-| - | Outside the selected test scope for this distribution; no compatibility claim |
-| N | Not run; includes fixtures that still need implementation |
-| P | Passed the named scenario in the recorded run, not necessarily the latest build |
-| I | Incomplete: some assertions passed, but acceptance remains open |
-| F | Observed failure not attributed to a confirmed upstream defect; retain its reproduction until a qualifying rerun passes |
-| U | Observed failure attributed to a confirmed upstream defect; not a pass or a resolved limitation |
-| B | Blocked by a named prerequisite; not a pass or proof of an application defect |
-| H | Historical coverage only; current acceptance and exact entry-mode evidence need reconciliation |
-| NA | Not applicable, with an explicit distribution/package/hardware reason |
-
-An N in the Base position means there is no qualifying Base receipt here; it
-does not assert that nobody has ever run that workflow. H is not a pass in that
-entry mode. Do not infer NA from a distribution's init choice or an unattempted
-package install. Record unavailable distribution packages separately from a
-Shroot implementation failure; do not silently substitute another userspace.
-
-The current scope selects Snap browsers on Ubuntu and Steam/game workflows on
-SteamOS only. Other distributions are not required to run those workloads to
-complete their selected matrix. A single `-` excludes both entry modes from
-that scope; it is not NA (unsupported/not applicable), N (pending coverage),
-or a pass. Preserve existing failure evidence when changing scope. All other
-N cells remain uncovered unless their scope is explicitly changed.
-
-Use U only with an exact package version, failing receipt and diagnostic evidence:
-a published upstream defect/fix, or an isolated reproduction outside Shroot
-matching the upstream source. A similar symptom alone remains F.
-Keep unaffected checks separate; an upstream fix or lab-patched pass does not
-promote the installed package to P without a qualifying rerun. Most current
-application receipts exercise Shroot only, so Base often remains N; shared code
-and unit-test coverage do not establish an unrun Base application result.
-
-Missing workload packages or dependencies (for example Podman or aardvark-dns)
-must not add source-build fallbacks to `install_linux.sh`. Lab-only source builds
-may test Shroot compatibility, but their receipts must identify the upstream
-version, provenance and locally built components. Such a pass does not establish
-availability from that distribution's repositories or the installer. The
-explicit Turnip build remains a separate graphics recipe, not a general license
-to compile missing applications during installation.
-
-P applies only to the native hashes, package versions and configuration in its
-receipt. Staged native builds do not certify the installed APK. Rerun affected
-cells after common runtime changes; do not promote older receipts to the new
-build or use aggregate unit-test success as application acceptance.
 
 ## Linux 5.15 Capability Profile
 

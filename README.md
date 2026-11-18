@@ -13,7 +13,8 @@ into another project. Both use the same runtime, environment catalog and storage
 [Build](#build) |
 [Embed](embedding.md) |
 [Architecture](architecture.md) |
-[Test matrix](tests/validation-matrix.md)
+[Host tests](tests/README.md#qualified-hosts) |
+[Distribution matrix](tests/validation-matrix.md)
 
 ## What It Runs
 
@@ -32,8 +33,8 @@ into another project. Both use the same runtime, environment catalog and storage
 These are supported workflows, not a claim that every package works on every
 host. The [distribution matrix](tests/validation-matrix.md) records application
 coverage by distribution, executor and entry mode, including outstanding limits.
-[Host coverage](tests/README.md#qualified-hosts) includes Android and Raspberry Pi 5
-with 16 KiB pages.
+[Host coverage](tests/README.md#qualified-hosts) includes Android on 4 KiB pages
+and a Raspberry Pi 5 on 16 KiB pages. Those are distinct configurations.
 
 ## Get Started
 

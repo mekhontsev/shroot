@@ -4,7 +4,10 @@
 
 File-table annotations and the publication boundary between kernel descriptors and logical filesystem state.
 
-- [Descriptor And Cwd Annotations](#descriptor-and-cwd-annotations)
+- [Descriptor annotations and direct IO](#descriptor-and-cwd-annotations)
+- [Capturing and transferring origins](#origin-capture)
+- [Working directories and proc aliases](#working-directory-origins)
+- [Publication order](#publication-ordering) and [kernel boundaries](#kernel-publication-boundaries)
 
 ## Descriptor And Cwd Annotations
 
@@ -47,6 +50,8 @@ number; wide ranges and exec scan the table. Publication generations, loans,
 uncertain channels and last-reference callbacks use the same retirement path.
 This changes lookup cost, not the kernel-completion requirement for native close.
 
+### Origin Capture
+
 Origin vectors separate source capture from destination publication. Capture
 retains the exact ordered origins under one metadata lock, including repeated
 source FDs and explicit unknown entries. It uses caller-owned storage and retains
@@ -86,7 +91,9 @@ retired anchors are released outside the lock. Internal filesystem RPC uses thes
 same primitives with its existing two-FD wire limit, without another allocation,
 syscall or protocol phase.
 
-The filesystem context similarly retains an optional cwd anchor. CLONE_FS
+### Working Directory Origins
+
+The filesystem context retains an optional cwd anchor. CLONE_FS
 shares it, an independent context copies the reference, and exec retains it.
 Root selection and cwd are independent: changing the root does not move cwd,
 and cwd provenance alone does not activate the scoped-root adapter. The special

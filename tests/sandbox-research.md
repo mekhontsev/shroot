@@ -96,95 +96,20 @@ runs omit instrumentation. Rounds alternate forward/reverse mode order,
 with CPU-frequency evidence outside each command and no affinity/frequency lock.
 Native here means an Android native fixture, not a prepared chroot benchmark.
 
-Measured on NX809J, Android 16 / Linux 6.12, with Chromium 149.0.7827.53
-filters captured from a stock headless Alpine launch: `2520a873c204` (627
-instructions, file operations) and `6fb69b9aeec5` (655 instructions, FD-only
-workload). Values are three-round medians in milliseconds; CPU frequencies varied
-and the raw reports retain the observations. Do not infer small executor or
-policy-overhead differences from these samples.
-
-| Executor | Workload | Native + kernel filter | Base + kernel filter | Lazy + installed policy | Lazy without guest filter | Userspace prototype |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Shell | 32768 path stats | 67.4 | 1475.5 | 150.9 | 154.8 | 155.7 |
-| Shell | 4096 open/close pairs | 19.0 | 669.0 | 63.0 | 65.9 | 69.7 |
-| Shell | 32768 FD stats | 21.5 | 1219.5 | 76.5 | 78.5 | 78.0 |
-| User | 32768 path stats | 69.2 | 1454.0 | 145.2 | 121.0 | 171.4 |
-| User | 4096 open/close pairs | 15.3 | 600.3 | 83.8 | 44.0 | 68.0 |
-| User | 32768 FD stats | 10.9 | 1281.3 | 74.5 | 88.5 | 81.7 |
-
-Both identities passed 12 routing controls and 45 timed samples, including
-lazy/no-policy controls. Reports live under `build/seccomp-entry-results`;
-their IDs are `495f84bfa6af4c05aa15ea8d9b66d538` (Shell) and
-`4bf747776a154aba97e113b6511d274b` (User). No other test or build ran alongside
-these series. The installed-policy path is 7.2-17.2 times faster than Base in
-these samples. This supports a large reduction in interception overhead, not
-a claim about browser page speed or negligible filter cost for every operation.
-Device timing variation remains visible in the unfiltered and prototype controls;
-these are not isolated measurements of interpreter cost.
+The matched Shell and User measurements with Chromium 149 filters are
+`495f84bfa6af4c05aa15ea8d9b66d538` and `4bf747776a154aba97e113b6511d274b`
+under `build/seccomp-entry-results`. They retain filter hashes, mode order and
+CPU observations; they are not whole-browser timings.
 
 ### Integration Boundary
 
-The prototype excludes policy publication, per-thread chain lookup, TSYNC,
-filter inheritance across exec and userspace delivery of TRAP/KILL/TRACE/USER_NOTIF.
-It establishes the cost of evaluating real cBPF alongside a complete accelerated
-file operation, not the correctness or final speed of integrated browser entry.
-Production separately publishes those views to live channels after installation.
-
-The shared policy core exports immutable entry views without coordinator or
-listener pointers. Unit controls compare full-chain and shared-ancestor views
-against coordinator decisions for every input word and action precedence.
-The service-gate emitter handles exact PCs and 64-bit ranges through the same
-matcher. IP-dependent filters route aliases before evaluation, including ALLOW
-results, so recovery uses the original instruction address. IP-independent
-chains with an admitted inert checkpoint can rearm after exec; IP-sensitive
-inherited chains retain Base. Non-ALLOW/non-ERRNO actions use original-site
-kernel fallback. The installation fence remains required.
-
-`test_seccomp_policy` installs generated exact-PC/range gates in native children:
-the owned call is admitted while an ordinary call with the same number retains
-ERRNO. Full filter sections pass under Shell and App UID on the 6.12 device
-(`4379905bd5964c8f92b3982087bf690d`, `590cf56103944f9e852369a4fd0dc262`
-under `build/svc-patch-results`). Coverage includes original-PC decisions,
-original readiness arguments, TRAP/KILL/LOG/TRACE/USER_NOTIF fallback, inherited
-exec, fork, 24-cycle TSYNC races, waiting peers and cleanup. Deterministic
-instruction-boundary and queued-signal controls pass under Shell
-(`build/svc-direct-signals/oci-services-ff8d4dec68c2466fa3aafe58695dc789.json`).
-Guest TRACE tests cover the existing no-tracer ENOSYS contract, not guest
-`PTRACE_O_TRACESECCOMP` support.
-
-Stock Alpine Chromium passes four software-rendered, sandbox-enabled App UID
-launches, JavaScript and PNG checks, with owned profiles cleaned up
-(`app/build/shroot/browser-stage-results-6cae35d3f5fc44448a3cba1708187d8f.json`).
-Each launch verifies `filteredCompleted > 0` in a process that published its
-policy and rearmed entry. This proves actual post-filter acceleration, not just
-a successful sandboxed launch; the small completion counts do not measure
-browser throughput. Production statistics reuse the optional completed-call
-counter and a cold publication baseline, without a new per-call counter.
-
-The complete guest-policy runner passes 258 cases in each identity, combining
-Base and lazy entry: `e0a81d781add4a7ebd998435cbcd108e` (User) and
-`a5b7ba7a772542ff80b06033f9bdaa86` (Shell) under `build/guest-policy`.
-This covers TSYNC, notification CONTINUE, listeners, signal masks, signalfd,
-epoll and repeated PID-init delivery. The state and memory suites additionally
-check packet wake ownership, read-only views, fork retention and invalidation.
-
-The integration shares the existing owners and retains these constraints:
-
-- Publish an immutable original-policy view through the entry ownership model;
-  preserve chain precedence and original nr/arch/args/IP before any native or
-  worker effect, including memory, readiness and descriptor shortcuts.
-- Use the existing installation fence to publish per-thread/TSYNC policy only
-  after successful validation, and retain the correct view for admitted calls,
-  fork and exec. Hash-based deduplication is optional, not an admission rule.
-- Preserve kernel policy on ordinary native and cold calls. Replacing it with
-  a catch-all interception filter must not silently admit previously unintercepted
-  operations or introduce per-read/write stops into native IO.
-- Give internal helpers and original-site fallback explicit ownership. A patched
-  site's kernel alias has a different PC: an IP-sensitive filter can reject it
-  before the supervisor can reconstruct the original call. Reuse the owned
-  checkpoint and original-site retry, not an unchecked alias.
-- Keep Android's inherited filters effective. An in-process policy evaluator
-  does not establish hostile-code confinement or remove host restrictions.
+Use the production policy tests for filter publication, inheritance, TSYNC,
+action precedence and original instruction-pointer semantics. The userspace-only
+benchmark qualifies none of these. For a real browser, require a sandboxed
+launch, correct output and a filtered completion in a process with a published
+policy. A nonzero completion count establishes use of the path, not a browser
+throughput figure. See the [entry contract](../cooperative-entry.md) and
+[browser fixtures](browser/README.md).
 
 ## Selective Ptrace Hybrid
 
@@ -337,135 +262,17 @@ separate helper lifecycle solely for this case.
 
 ### Combined Replay Protocol
 
-The retained-signal fixture chains real delivery stops inside the same
-kernel `get_signal` invocation. Each stop installs its retained siginfo, blocks
-that signal and queues/unblocks the next signal's own number. The final stop
-restores the application's mask. No application register or syscall number is
-rewritten, no reserved carrier is needed, and no userspace checkpoint executes
-between these stops. The original syscall retains kernel admission and its
-native restart decision; a completed write is not replayed.
+The controls distinguish kernel-owned restart and job-control decisions from
+register restoration. They check exact signal information, alternate stacks,
+pending queues, EINTR/SA_RESTART and exactly-once IO. Negative controls insert
+a userspace checkpoint between delivery stops or regenerate a cancelled CONT;
+neither is equivalent to leaving the decision in kernel custody.
 
-There are 576 successful combined cases on the test phone:
-
-- 192 entry/seccomp/exit cases with two retained signals, ignored/handled/blocked
-  SIGTRAP, alternate stacks, exact siginfo and PC/SP/x0/x7, EINTR/SA_RESTART,
-  existing private pending signals, protected tasks and exactly-once IO.
-- 96 cases add the production `task_call` executor before publication,
-  including restart-exit reconstruction. Every case retains KILL(-1): original
-  entry replacement and SYSEMU-based exit reconstruction never execute a
-  synthetic skipped syscall through the application filter.
-- 192 cases interpose either PTRACE_INTERRUPT or native
-  STOP/LISTEN/CONT between the two delivery stops. Actual CONT metadata and
-  restart behavior survive. Realtime signals stay pending in the kernel and
-  preserve both their values and queue order.
-- 96 cases distinguish existing process-directed pending signals from the
-  replay's private pending signals. Both deliveries retain their own metadata;
-  private and shared queues must not be coalesced as one standard-signal slot.
-
-Negative controls establish boundaries rather than weakening assertions:
-
-- Six controls insert a SYSEMU userspace checkpoint between the delivery stops.
-  That leaves the original kernel restart decision behind: a read restarts
-  instead of returning EINTR without SA_RESTART. Register restoration cannot
-  reconstruct kernel-local `do_signal` state. Thus the USER-boundary SYSEMU
-  replay above is not a universal restart-boundary replacement.
-- Two controls show that STOP removes a pending CONT. Regenerating a retained
-  copy of that old CONT then wakes the stopped group, even with CONT blocked.
-  Job-control generation effects require kernel custody, not delayed resend.
-
-Eight positive entry/exit controls additionally check reconstruction under
-KILL(-1). `test_fd_filter_remote` separately rejects a genuinely denied native
-call with KILL_THREAD: an exit notification can precede termination. Restoring
-the old blocked SIGSYS mask there would incorrectly revive the actor. The
-executor retains native termination, including when SIGSYS was ignored and
-blocked and TRACEEXIT was not enabled.
-
-The TSYNC fixture pauses the actor with thread-directed STOP. A process-directed
-STOP could select the untraced filter-installation peer, cause a group stop and
-deadlock the acknowledgement protocol. Thread-directed delivery makes the
-acknowledgement independent of process-directed signal selection.
-
-### Checkpoint Cost
-
-Two five-sample interleaved 1000-checkpoint runs on 2026-10-21 had medians of
-14.8-17.3 ms for BRK, 14.9-16.3 ms for SYSEMU, 13.9-16.7 ms for the
-preserved-x7 SYSEMU convention, 14.6-16.7 ms for TRACE and 28.3-31.7 ms for
-syscall entry/exit. These include the fixture's ptrace register/info operations,
-are scheduler-sensitive, and do not measure an end-to-end filesystem speedup.
-The observation supports keeping
-selective event stops, not tracing every syscall in every guest thread. They
-do not establish the cost of a complete adapter or a statistically significant
-advantage over BRK.
-Later expanded-fixture runs had roughly 19 ms BRK/SYSEMU medians and larger
-outliers. The relative checkpoint result remains comparable, but the complete
-multi-stop retained-signal replay is not this one-checkpoint timing.
-
-### Register And Admission Contract
-
-ARM64 syscall stops temporarily expose x7 as an entry/exit marker; the kernel
-restores its hidden original value after ptrace resumes. Writing x7 at that
-stop does not replace the hidden value. The fixture proves two solutions:
-
-1. A requested PTRACE_INTERRUPT after the emulated entry yields a non-syscall
-   stop before any subsequent userspace instruction. Full register restoration
-   is then effective, at the cost of one extra stop.
-2. Owned service code preserves the application x7 and restores it before its
-   checkpoint SVC. The one-stop convention then restores the correct x7 through
-   the kernel. The fixture uses a register shadow in its assembly only; this is
-   not authorization to reserve x18 across arbitrary guest or C adapter code.
-
-SYSEMU entry caches its emulation decision before notifying ptrace. Merely
-resuming that stop with CONT does not execute the current syscall. To admit a
-real call, the prototype leaves the emulated entry skipped, re-enters the same
-SVC under SYSCALL, and arms SYSEMU at the resulting ordinary entry. That native
-call still passes seccomp; the following service checkpoint is emulated.
-Application handlers and rt_sigreturn must not inherit service emulation.
-
-The ARM64 SYSEMU request and the emulation-before-seccomp ordering exist in
-the Android common 5.15 source, not only 6.12. A 5.15 device and vendor policy
-remain untested. Production admission uses the existing guest-only helper probe;
-an unavailable operation fails the native runtime, not unrelated app services.
-
-### Production Adoption
-
-| Owner | Current contract |
-| --- | --- |
-| `task_checkpoint` | Exact marker table, scoped resume modes, complete x7 payload and typed completion event; ordinary guest calls do not acquire SYSEMU |
-| Register gates and C adapter returns | Registered SVC markers carry service completion; genuine SIGTRAP never means adapter completion |
-| `task_helper`, readiness and memory repair | Consume the same typed event while retaining their existing clone, notification, cancellation and actor ownership |
-| `task_call` | Native entry/exit and exact continuation reconstruction; kernel restart_block and orig_x0 stay authoritative |
-| `signal_delivery` | Real delivery-stop chaining, first-info standard-signal coalescing and kernel-owned job-control cancellation |
-
-The dispatcher normalizes fresh wait events before broker deferral, so a held
-event is never converted twice. State lookup is PID-indexed and terminal/exec
-events release the actor state. A stopped-thread register loan establishes the
-service scope; restoring application registers ends it. Explicit native-call
-or debugger resume modes retain ownership over their syscall boundaries.
-
-Native-call tests cover original USER/ENTRY/EXIT/SECCOMP continuations,
-protected tasks, blocked/ignored SIGTRAP, TSYNC, real denials, foreign
-interrupts, and read/ppoll/timer restarts. Replaced entries restore the injected
-x0 when the kernel restarts using the application's private orig_x0. Four
-job-control tests verify private/shared CONT custody, cancellation by STOP,
-native LISTEN and no unintended group wake.
-
-The integration matrix includes the 142-check filesystem-signal suite with
-ignored-SIGTRAP modes, protected memory, filters and metadata interruption;
-helper FD custody/cancellation, buffer/control events, file results/returns,
-mapping-task and private-memory tests; lazy signal recovery and thread churn;
-and stock GDB/strace in Ubuntu with active IO, shared memory and JIT. They use
-staged production helpers under UID 2000, not a separate implementation.
-
-Guest-requested single-step remains a real debugger operation. The two BRKs
-after impossible bootstrap/exit returns remain fail-fast guards, not normal
-control messages. The invalid-pointer copy limitation above is still a distinct
-defect: these results establish signal-neutral control transfer, not arbitrary
-fault-free user-memory access.
-
-For end-to-end cost, `test_svc_libc.py --baseline-build BUILD` interleaves native,
-Base and lazy workloads with a second immutable runtime on the same store.
-Reports retain both sets of helper hashes. Microcheckpoint timings alone do
-not establish the cost of the integrated protocol.
+The [interception contract](../interception.md) and [debugger contract](../debugging.md)
+describe production owners. Guest-requested single-step is a debugger operation,
+not an internal completion marker. Use the benchmark CTest label for checkpoint
+cost; for end-to-end effects, compare matched workloads as described in
+[performance fixtures](developer-workflows.md#runtime-benchmarks).
 
 ## Real Browser Boundaries
 

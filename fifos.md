@@ -20,7 +20,9 @@ suite check metadata sharing, malformed imports and exact descriptor cleanup.
 Guest FIFO names, ownership, modes, ACLs, hardlinks and rename/unlink use the
 ordinary inode namespace. OCI layers and prepared-tree import retain FIFO
 metadata without persisting stream contents. Each image instance has its own
-streams. Native attached directories retain their real kernel permissions.
+streams. A named FIFO's pathname and open descriptor report the guest inode's
+metadata, not the backing pipe's timestamps. The pipe carries data and kernel
+readiness. Native attached directories retain their real kernel permissions.
 
 `inode_fifo` owns store-scoped kernel pipe pins. The backing object is regular
 metadata, not a native `mknod` request: Android shell policy can prohibit native
