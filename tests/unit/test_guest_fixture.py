@@ -2,12 +2,14 @@
 from pathlib import Path
 import shlex
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 lab = Path(__file__).resolve().parents[1]
 with patch.object(sys, 'path', [str(lab), *sys.path]):
+    from client_fixture import archive_fixture
     from kernel_profile import KernelProfile
     from test_oci_services import Suite
     from test_debugger_runtime import outcome
@@ -18,6 +20,33 @@ with patch.object(sys, 'path', [str(lab), *sys.path]):
 
 
 class GuestFixtureTest(unittest.TestCase):
+    def test_dynamic_rootfs_keeps_loader_and_library_aliases_without_host_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            program = root / 'client-guest'
+            program.write_bytes(b'probe')
+            program.chmod(0o700)
+            loader = root / 'ld.so'
+            loader.write_bytes(b'loader')
+            library = root / 'libprobe.so.1.2'
+            library.write_bytes(b'library')
+            alias = root / 'libprobe.so.1'
+            alias.symlink_to(library.name)
+            archive = root / 'rootfs.tar.gz'
+            listing = (f'linux-vdso.so.1 (0x1)\nlibprobe.so.1 => {alias} (0x2)\n'
+                       f'{loader} (0x3)\n')
+            with patch('client_fixture.elf_details', return_value=f'[Requesting program interpreter: {loader}]'), \
+                    patch('client_fixture.subprocess.check_output', return_value=listing):
+                archive_fixture(root, archive, binaries=[(program, 'bin/one'), (program, 'bin/two')])
+            with tarfile.open(archive) as tar:
+                entry = tar.getmember('bin/client-guest')
+                self.assertEqual((entry.mode, entry.uid, entry.gid), (0o755, 0, 0))
+                for path, expected in ((loader, b'loader'), (alias, b'library')):
+                    name = str(path.relative_to('/'))
+                    self.assertEqual(tar.getnames().count(name), 1)
+                    self.assertTrue(tar.getmember(name).isfile())
+                    self.assertEqual(tar.extractfile(name).read(), expected)
+
     def test_nested_case_discovery_has_no_runtime_side_effects(self):
         with patch.object(sys, 'argv', ['nested', '/missing-build', '--list-scenarios']), \
                 patch('test_nested_runtime.subprocess.run') as run, \

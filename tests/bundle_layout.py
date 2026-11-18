@@ -16,6 +16,11 @@ def elf_details(path, readelf):
                                    text=True, env=dict(os.environ, LC_ALL='C'), timeout=30)
 
 
+def elf_interpreter(details):
+    match = re.search(r'Requesting program interpreter:\s*([^\]]+)', details)
+    return match[1] if match else None
+
+
 def audit_elf(path, readelf, *, dynamic, system):
     details = elf_details(path, readelf)
     assert re.search(r'Class:\s+ELF64\b', details), path
@@ -30,12 +35,12 @@ def audit_elf(path, readelf, *, dynamic, system):
     assert not re.search(r'\((RPATH|RUNPATH)\)', details), (path, 'embedded library search path')
     loads = re.findall(r'^\s*LOAD\s+.*\s+(0x[0-9a-fA-F]+)\s*$', details, re.MULTILINE)
     assert loads and all(int(alignment, 16) >= 16384 for alignment in loads), (path, loads)
-    interpreter = re.findall(r'Requesting program interpreter:\s*([^\]]+)', details)
+    interpreter = elf_interpreter(details)
     if interpreter:
         expected = (['/system/bin/linker64'] if system == 'Android' else
                     ['/lib/ld-linux-aarch64.so.1', '/lib64/ld-linux-aarch64.so.1',
                      '/lib/ld-musl-aarch64.so.1'])
-        assert dynamic and interpreter[0] in expected, (path, interpreter)
+        assert dynamic and interpreter in expected, (path, interpreter)
     return needed
 
 
