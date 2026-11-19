@@ -5,6 +5,7 @@
 #include <linux/seccomp.h>
 #include <poll.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +16,7 @@
 #include <sys/prctl.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
+#include <sys/signalfd.h>
 #include <sys/stat.h>
 #include <sys/msg.h>
 #include <sys/socket.h>
@@ -37,7 +39,9 @@ int main(int argc,char **argv) {
     assert(count && count<=10000000);
     unsigned blocks=argc==4 ? (unsigned)strtoul(argv[3],NULL,10) : 1;
     assert(blocks && blocks<=64);
-    int blocking=!strcmp(argv[1],"epoll-ready");
+    int mixed=!strcmp(argv[1],"epoll-signalfd-ready");
+    int vector=mixed || !strcmp(argv[1],"epoll-vector-ready");
+    int blocking=vector || !strcmp(argv[1],"epoll-ready");
     int idle=!strcmp(argv[1],"idle"),epoll=blocking || !strcmp(argv[1],"epoll");
     int cycle=!strcmp(argv[1],"file-cycle"),opening=!strcmp(argv[1],"file-open");
     int files=cycle || opening || !strcmp(argv[1],"file-stat");
@@ -72,8 +76,18 @@ int main(int argc,char **argv) {
         assert(write(fd,"payload",7)==7 && lseek(fd,0,SEEK_SET)==0);
     }
     int queue=epoll_create1(EPOLL_CLOEXEC); assert(queue>=0);
-    struct epoll_event event={.events=EPOLLIN,.data.u64=42},received;
+    struct epoll_event event={.events=EPOLLIN,.data.u64=42},received[32];
     if (!bytes) assert(!epoll_ctl(queue,EPOLL_CTL_ADD,fd,&event));
+    int signals=-1;
+    sigset_t saved;
+    if (vector) {
+        sigset_t mask;
+        sigemptyset(&mask); sigaddset(&mask,SIGUSR1);
+        assert(!sigprocmask(SIG_BLOCK,&mask,&saved));
+        signals=signalfd(-1,&mask,SFD_CLOEXEC|SFD_NONBLOCK); assert(signals>=0);
+        struct epoll_event signal_event={.events=EPOLLIN,.data.u64=43};
+        if (mixed) assert(!epoll_ctl(queue,EPOLL_CTL_ADD,signals,&signal_event));
+    }
     struct pollfd p={.fd=fd,.events=POLLIN};
     uid_t uid=getuid(),euid=geteuid(); gid_t gid=getgid(),egid=getegid();
     int message_queue=-1,pair[2]={-1,-1};
@@ -157,8 +171,8 @@ int main(int argc,char **argv) {
                 *(volatile unsigned char *)address=(unsigned char)i;
                 assert(!munmap(address,size));
             } else if (epoll) {
-                assert(epoll_wait(queue,&received,1,blocking ? -1 : 0)==1);
-                assert(received.events==EPOLLIN && received.data.u64==42);
+                assert(epoll_wait(queue,received,vector ? 32 : 1,blocking ? -1 : 0)==1);
+                assert(received[0].events==EPOLLIN && received[0].data.u64==42);
             } else {
                 struct timespec timeout={.tv_sec=idle ? 2 : 0};
                 assert(ppoll(&p,1,&timeout,NULL)==(idle ? 0 : 1));
@@ -180,6 +194,15 @@ int main(int argc,char **argv) {
             argv[1],block,count,samples[block].elapsed,samples[block].cpu,
             samples[block].voluntary,samples[block].involuntary,
             samples[block].start_cpu,samples[block].end_cpu);
+    if (vector) {
+        uint64_t n; assert(read(fd,&n,sizeof(n))==sizeof(n) && n==1);
+        assert(!raise(SIGUSR1));
+        assert(epoll_wait(queue,received,32,0)==mixed);
+        if (mixed) assert(received[0].events==EPOLLIN && received[0].data.u64==43);
+        struct signalfd_siginfo info;
+        assert(read(signals,&info,sizeof(info))==sizeof(info) && info.ssi_signo==SIGUSR1);
+        assert(!close(signals) && !sigprocmask(SIG_SETMASK,&saved,NULL));
+    }
     assert(!close(queue) && !close(fd));
     if (messages) assert(!msgctl(message_queue,IPC_RMID,NULL));
     if (sockets) assert(!close(pair[0]) && !close(pair[1]));

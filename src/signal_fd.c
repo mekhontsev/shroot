@@ -20,15 +20,16 @@ static struct md_task_readiness_epoch task_epoch(struct md_fd_object *object,con
         .pending=md_signal_pending_revision(actor ? actor->signals : NULL),
         .configuration=((struct md_signal_fd *)object)->revision};
 }
-static const struct md_fd_object_type type={.destroy=destroy,.task_poll=task_poll,.task_poll_epoch=task_epoch,
+static const struct md_fd_object_type logical={.destroy=destroy,.task_poll=task_poll,.task_poll_epoch=task_epoch,
     .selectors=(1U<<MD_FD_SELECTOR_PROC)|(1U<<MD_FD_SELECTOR_EPOLL_TARGET)|(1U<<MD_FD_SELECTOR_POLL)};
-struct md_signal_fd *md_signal_fd_new(void) {
+static const struct md_fd_object_type native={.destroy=destroy,.selectors=1U<<MD_FD_SELECTOR_PROC};
+struct md_signal_fd *md_signal_fd_new(int logical_sigsys) {
     struct md_signal_fd *s=calloc(1,sizeof(*s));
-    if (s) md_fd_object_init(&s->object,&type);
+    if (s) md_fd_object_init(&s->object,logical_sigsys ? &logical : &native);
     return s;
 }
 struct md_signal_fd *md_signal_fd_from_object(struct md_fd_object *object) {
-    return object && object->type==&type ? (void *)object : NULL;
+    return object && (object->type==&logical || object->type==&native) ? (void *)object : NULL;
 }
 struct md_fd_object *md_signal_fd_object(struct md_signal_fd *s) { return s ? &s->object : NULL; }
 uint64_t md_signal_fd_mask(const struct md_signal_fd *s) { return s ? s->mask : 0; }

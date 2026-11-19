@@ -8278,9 +8278,25 @@ static void signal_operation_masks(void) {
     }
     puts("PASS signal operation: transport-independent mask effects, logical state, output and failed input");
 }
+static void signal_descriptor_readiness(void) {
+    const unsigned poll=(1U<<MD_FD_SELECTOR_EPOLL_TARGET)|(1U<<MD_FD_SELECTOR_POLL);
+    for (int logical=0;logical<2;++logical) {
+        struct md_signal_fd *file=md_signal_fd_new(logical);
+        struct md_fd_object *object=md_signal_fd_object(file);
+        assert(object);
+        uint64_t masks[]={0,MD_SIGNAL_SYS_BIT,UINT64_C(1)<<(SIGUSR1-1)};
+        for (unsigned i=0;i<sizeof(masks)/sizeof(*masks);++i) {
+            md_signal_fd_update(file,masks[i]);
+            assert(md_signal_fd_from_object(object)==file && md_signal_fd_mask(file)==masks[i]);
+            assert(object->type->selectors==((1U<<MD_FD_SELECTOR_PROC)|(logical ? poll : 0)));
+            assert(!!object->type->task_poll==logical && !!object->type->task_poll_epoch==logical);
+        }
+        md_fd_object_release(object);
+    }
+}
 static void signal_immediate_waits(void) {
     uint64_t set=UINT64_C(1)<<(SIGUSR1-1),scratch[64];
-    struct md_signal_fd *file=md_signal_fd_new(); assert(file);
+    struct md_signal_fd *file=md_signal_fd_new(1); assert(file);
     md_signal_fd_update(file,set);
     for (unsigned vector=0;vector<2;++vector) for (unsigned empty=0;empty<2;++empty) {
         struct md_signal_operation op;
@@ -8491,7 +8507,7 @@ static void signal_descriptor_rollback(void) {
     struct signal_control *owner=calloc(1,sizeof(*owner)); assert(owner); t.signals.control=owner;
     assert(md_fd_order_begin(t.resources.files,&owner->files,NULL)==1);
     assert(!md_fd_order_start(&owner->files));
-    owner->descriptor=md_signal_fd_object(md_signal_fd_new()); assert(owner->descriptor);
+    owner->descriptor=md_signal_fd_object(md_signal_fd_new(1)); assert(owner->descriptor);
     assert(!md_fd_origins_prepare_object(t.resources.files,owner->descriptor,0,&owner->publication));
     owner->loan=calloc(1,sizeof(*owner->loan)); assert(owner->loan);
     owner->loan->loan_table=md_fd_origins_pin(t.resources.files);
@@ -8923,6 +8939,7 @@ int main(void) {
     descriptor_service_queries();
     retained_child_selection();
     signal_operation_masks();
+    signal_descriptor_readiness();
     signal_immediate_waits();
     debugger_boundary_demand();
     debugger_index_lifetime();

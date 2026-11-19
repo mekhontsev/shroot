@@ -355,8 +355,11 @@ the common transfer action, including vectors larger than one packet;
 ordinary native IO acquires no additional turn or observation. `signal_pending`
 separates thread-private and process-shared SIGSYS queues and the shared-sighand
 wait domain. Other signals retain native kernel queues. `signal_fd` integrates
-signalfd/read/readv, typed FD transfer, poll and task-affine epoll through the
-existing descriptor owners. Zero-time signal probes and nonblocking descriptor
+signalfd/read/readv and typed FD transfer through the existing descriptor
+owners. Where signals use only kernel queues, poll and epoll observe the native
+signalfd directly. Launches with logical SIGSYS also observe task-affine
+readiness, even if the initial signalfd mask does not select SIGSYS: an alias
+can change that mask after registration. Zero-time signal probes and nonblocking descriptor
 reads use their admitted scratch directly; only actual blocking waits acquire
 parked storage and release the memory turn. Partial descriptor reads retain
 nonblocking tail consumption and return the bytes already copied.

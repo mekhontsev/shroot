@@ -11,7 +11,8 @@ from benchmark_cpu import observe_suite_cpu
 from fixture_executor import FixtureExecutor
 
 CONTROL_WORKLOADS = ('fd-dup', 'fd-dup-floor', 'fd-stat', 'fd-flags', 'fd-ioctl', 'fd-bytes',
-                     'identity', 'process-identity', 'uname', 'ipc-nowait', 'socket-nowait', 'socket-rights')
+                     'identity', 'process-identity', 'uname', 'ipc-nowait', 'socket-nowait', 'socket-rights',
+                     'epoll-vector-ready', 'epoll-signalfd-ready')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

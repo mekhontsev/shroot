@@ -2432,7 +2432,7 @@ void execution_checkpoint_event(struct thread *t,pid_t pid) {
                 && !t->debug.options && !md_memory_exposed(t->memory))
             regs.regs[0]|=MD_INTERCEPTION_MACHINE;
         if (statistics) regs.regs[0]|=MD_INTERCEPTION_STATISTICS;
-        if (md_app_uid_active) regs.regs[0]|=MD_INTERCEPTION_HOST_POLICY;
+        if (md_host_logical_sigsys()) regs.regs[0]|=MD_INTERCEPTION_HOST_POLICY;
         if (!set_registers(pid, &regs)) return;
         describe_process(pid, 0);
         SUPERVISOR_TRACE("PROBE guest image ready pid=%d\n", pid); resume(pid, 0);

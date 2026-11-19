@@ -5,6 +5,7 @@
 #include "fd_selector.h"
 #include "guest_debugger.h"
 #include "guest_identity.h"
+#include "host_policy.h"
 #include "identity_call.h"
 #include "interception.h"
 #include "interception_buffers.h"
@@ -837,7 +838,7 @@ void signal_control_progress(struct thread *t) {
         int error=0;
         if (t->execution.request.nr==SYS_signalfd4 && !md_signal_fd_from_object(owner->descriptor)) {
             md_fd_object_release(owner->descriptor);
-            owner->descriptor=md_signal_fd_object(md_signal_fd_new());
+            owner->descriptor=md_signal_fd_object(md_signal_fd_new(md_host_logical_sigsys()));
             error=owner->descriptor ? md_fd_origins_prepare_object(t->resources.files,owner->descriptor,
                 t->execution.request.args[3]&SFD_CLOEXEC ? FD_CLOEXEC : 0,&owner->publication) : -ENOMEM;
             if (!error && descriptor<0) {
@@ -1302,7 +1303,7 @@ void signals_buffer_control(struct thread *t,const struct supervisor_control_req
     }
     case MD_BUFFER_SIGNAL_ENABLE: {
         struct { struct md_kernel_action action; uint64_t mask; } initial;
-        if (t->entered || t->phase!=IDLE || !md_memory_buffers(t->memory)
+        if (!md_host_logical_sigsys() || t->entered || t->phase!=IDLE || !md_memory_buffers(t->memory)
                 || control->args[1]!=sizeof(initial)) break;
         ssize_t copied=md_task_copy_direct(t->pid,control->args[0],&initial,sizeof(initial),0);
         if (copied!=sizeof(initial)) { result=copied<0 ? copied : -EFAULT; break; }
