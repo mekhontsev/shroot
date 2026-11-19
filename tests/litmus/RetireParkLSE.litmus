@@ -1,0 +1,12 @@
+AArch64 RetireParkLSE
+(* Successful NATIVE -> RESPONSE, then inspect the caller's sleeping bit.
+   LSE arm of the supervisor's outlined compare-and-exchange. *)
+{
+0:X1=state; 0:X2=sleeping; 0:X3=1; 0:X5=0;
+1:X1=sleeping; 1:X2=state; 1:X3=1;
+}
+ P0               | P1           ;
+ CASAL W5,W3,[X1] | STLR W3,[X1] ;
+ LDAR W4,[X2]     | LDAR W4,[X2] ;
+filter (0:X5=0 /\ state=1)
+exists (0:X4=0 /\ 1:X4=0)

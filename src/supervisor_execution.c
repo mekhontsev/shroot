@@ -413,7 +413,7 @@ int skip(pid_t pid) {
 
 int cooperative_native_observe(pid_t pid,struct md_entry_native *native,int terminal) {
     unsigned state=atomic_load_explicit(&native->state,memory_order_acquire);
-    if (state==MD_NATIVE_DONE || state==MD_NATIVE_CANCELLED || state==MD_NATIVE_UNKNOWN) return 0;
+    if (md_native_resolved(state)) return 0;
     struct user_pt_regs regs={0};
     if (state==MD_NATIVE_RUNNING) {
         if (!registers(pid,&regs)) return -ESRCH;
@@ -489,8 +489,12 @@ static int entry_native_return(const struct thread *t,enum md_execution_context 
 
 void native_continue(struct thread *t) {
     if (!entry_pending(t)) { resume(t->pid,0); return; }
-    if (statistics) ++statistics->entry_native;
     struct md_entry_request *call=&t->entry.control->call;
+    if (statistics) {
+        unsigned nr=(unsigned)call->number;
+        ++statistics->entry_native;
+        if (nr<512) ++statistics->calls[nr].native_decisions;
+    }
     enum md_execution_context reason=md_execution_native_context(call->number,call->args);
     if (entry_native_return(t,reason)) {
         t->entry.control->execution_action=MD_EXECUTION_NATIVE;
@@ -634,9 +638,7 @@ unsigned entry_effect_reconcile(struct thread *t) {
     unsigned state=atomic_load_explicit(&native->state,memory_order_acquire);
     /* Terminal cleanup may race the caller's claim. Never treat unchanged
      * syscall arguments as a result, or repeat an uncertain FD mutation. */
-    if (state==MD_NATIVE_READY && atomic_compare_exchange_strong_explicit(
-            &native->state,&state,MD_NATIVE_CANCELLED,memory_order_acq_rel,memory_order_acquire))
-        state=MD_NATIVE_CANCELLED;
+    if (state==MD_NATIVE_READY) state=md_native_cancel_ready(native);
     if (state==MD_NATIVE_RUNNING && t->kernel_stopped && !cooperative_native_observe(t->pid,native,t->terminal_stop))
         state=atomic_load_explicit(&native->state,memory_order_acquire);
     return state;
@@ -912,7 +914,7 @@ static void entry_begin(struct thread *t,struct md_entry_channel *channel) {
     channel->return_checkpoint=0;
     if (statistics) {
         ++statistics->entry_executions;
-        ++statistics->calls[(unsigned)call.nr].entry;
+        if ((unsigned)call.nr<512) ++statistics->calls[(unsigned)call.nr].entry;
     }
     uint32_t decision=interception_decision(t,&call);
     unsigned action=decision&SECCOMP_RET_ACTION_FULL;

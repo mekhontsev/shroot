@@ -48,7 +48,9 @@ Single-FD retirement and short close/mark/abandon ranges visit only the hash
 buckets intersecting that range. Collisions still check the full descriptor
 number; wide ranges and exec scan the table. Publication generations, loans,
 uncertain channels and last-reference callbacks use the same retirement path.
-This changes lookup cost, not the kernel-completion requirement for native close.
+Base and resident entry need no completion receipt for a close proven to have
+no slot metadata in a privately owned table. Shared tables keep their ordered
+receipt. The kernel performs the close and supplies its result in either case.
 
 ### Origin Capture
 
@@ -175,6 +177,28 @@ duplicate, selector activation and any rollback close. Resident controls and
 native-effect receipts use the shared channel without fetching application
 registers. A cancelled effect does not publish descriptor changes; a completed
 close retains Linux's descriptor-retirement semantics even when it returns EINTR.
+
+After a resident duplicate of an unannotated FD commits in a private table,
+the owner publishes its two exact unannotated slots and a mask of slot groups
+containing metadata, including IO hints and loans. Empty groups allow local
+close across successive duplicates. Local duplication requires either an
+FD-bookkeeping-only route for the original call or fully armed provider
+selectors. A fixed-target duplicate requires both slots to be unannotated.
+An allocating duplicate goes straight to the kernel if its entire destination
+range is unannotated. If the only possible conflicts are exact, plain physical
+anchors that the preceding allocation skipped as occupied, the resident caller
+can execute the original duplicate once and check the actual result. The source
+must match the device and inode that the supervisor could inspect, with a
+different kernel file type from the anchors. This proves neither OFD identity
+nor permission to perform IO. Before the application resumes, a collision needs
+an independent type check under the private table turn. Only a mismatch retires
+the old anchor. A live anchor, virtual provider or loan cannot be discarded by
+reporting its FD number. If an already committed collision cannot be reconciled,
+the resident entry fails closed instead of replaying the allocation.
+The kernel still selects the FD and sets its flags.
+Grouping high numbers can decline a shortcut, never grant one on a collision.
+No group is reserved. A stop, borrowed execution or new owner request revokes
+the view; ordinary guest policy admission still precedes each operation.
 
 Application SCM_RIGHTS transfers on negotiated `ORIGINS_V1` connections carry
 authenticated origin capsules through the receive adapter. Unannotated inherited

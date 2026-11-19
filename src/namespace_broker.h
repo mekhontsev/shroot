@@ -43,6 +43,8 @@ void md_broker_entry_wake(struct md_namespace_broker *,pid_t);
 /* Bounded supervisor-owned control dispatch. Returns progress or pending work;
  * revisit resource owners before sleeping when nonzero. Worker IO stays independent. */
 int md_broker_entry_progress(struct md_namespace_broker *);
+struct md_fd_absence;
+void md_broker_entry_absence(struct md_namespace_broker *,int,struct md_entry_channel *,const struct md_fd_absence *);
 void md_broker_entry_reply(struct md_namespace_broker *,struct md_entry_channel *,enum md_entry_outcome,long);
 void md_broker_entry_wait(struct md_entry_channel *);
 /* Publish one journaled caller action. The control owner retains its resource
@@ -93,6 +95,7 @@ int md_broker_hold_event(struct md_namespace_broker *,pid_t,int,const struct rus
 /* A barrier owns an undecoded stop. Revoke local leases and pause admission,
  * but retain the native journal: entry registers are not syscall results. */
 void md_broker_park(struct md_namespace_broker *,pid_t);
+/* A forgotten identity is drained without delivery. Zero leaves both outputs unchanged. */
 pid_t md_broker_take_event(struct md_namespace_broker *,int *,struct rusage *);
 /* Includes terminal events already reaped from the kernel but still owned by
  * worker retirement. ECHILD does not finish the dispatcher while these remain. */

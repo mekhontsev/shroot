@@ -64,6 +64,7 @@ static void task_action_release(struct task_action *owner);
 static void task_action_finish(struct task_action *owner,long result);
 static void loan_failed(struct task_action *owner,long result);
 static long loan_close_finish(struct task_action *owner,long result);
+static void loan_close_lost(struct task_action *owner,enum md_task_call_effect effect,long result);
 static void task_action_call_complete(long result,int retry);
 static void capture_borrowed_complete(void *context,struct md_task_helper_result result);
 static void task_action_call_start(struct task_action *owner);
@@ -103,7 +104,7 @@ struct md_task_quiesce *quiescence_pending(pid_t pid) {
         mapping_execution ? NULL : mapping_barrier,
         task_action_execution || task_action_releasing ? NULL : task_action_barrier};
     for (unsigned i=0;i<sizeof(barriers)/sizeof(*barriers);++i)
-        if (md_task_quiesce_pending(barriers[i],pid)) return barriers[i];
+        if (md_task_quiesce_pending(barriers[i],pid,NULL)) return barriers[i];
     return NULL;
 }
 
@@ -284,14 +285,21 @@ void task_action_discard(struct thread *t) {
     if (owner->resident) {
         struct md_entry_native *native=&t->entry.control->native;
         unsigned state=entry_effect_reconcile(t);
-        struct md_fd_mutation close={.nr=native->number,
-            .args={native->args[0],native->args[1],native->args[2]}};
-        if (state==MD_NATIVE_DONE) (void)loan_close_finish(owner,native->result);
-        else if (state!=MD_NATIVE_CANCELLED) CHECK(!md_fd_mutation_abandon(&close,owner->loan_table));
+        loan_close_lost(owner,state==MD_NATIVE_DONE ? MD_EFFECT_RETURNED :
+            state==MD_NATIVE_CANCELLED ? MD_EFFECT_UNSTARTED : MD_EFFECT_UNCERTAIN,
+            state==MD_NATIVE_DONE ? native->result : 0);
         t->entry.effect=NULL; t->entry.waiting=0; owner->resident=0;
     }
     t->action=NULL; owner->requester=NULL;
-    if (owner->loan) { if (!owner->retired) owner->loan_turn=NULL; return; }
+    if (owner->loan) {
+        if (!owner->retired && owner->loan_turn) {
+            /* The request can disappear while a different actor is closing.
+             * Keep its queue position until that actor's receipt is resolved. */
+            if (owner==task_action_execution) CHECK(!md_fd_order_move(owner->loan_turn,&owner->files));
+            owner->loan_turn=NULL;
+        }
+        return;
+    }
     /* A foreign actor can still be using this payload. Its exact completion
      * retires the detached request, independently of requester death. */
     if (owner!=task_action_execution) task_action_release(owner);
@@ -349,9 +357,12 @@ static int loan_close_denied(long number,long result) {
     return number==SYS_close && (result==-EPERM || result==-EACCES || result==-ENOSYS);
 }
 
-static long loan_close_finish(struct task_action *owner,long result) {
-    struct md_fd_mutation close={.nr=owner->native.arguments.number,
+static struct md_fd_mutation loan_close_mutation(const struct task_action *owner) {
+    return (struct md_fd_mutation){.nr=owner->native.arguments.number,
         .args={owner->native.arguments.value[0],owner->native.arguments.value[1],owner->native.arguments.value[2]}};
+}
+static long loan_close_finish(struct task_action *owner,long result) {
+    struct md_fd_mutation close=loan_close_mutation(owner);
     CHECK(!md_fd_mutation_finish(&close,owner->loan_table,result));
     struct md_fd_order *turn=owner->loan_turn ? owner->loan_turn : &owner->files;
     int remaining=md_fd_origins_loan_matches(turn,owner->number,owner->loan);
@@ -359,6 +370,13 @@ static long loan_close_finish(struct task_action *owner,long result) {
     if (!remaining) return 0;
     if (result==-EBADF) return md_fd_origins_close_range(owner->loan_table,owner->number,owner->number,0);
     return result;
+}
+static void loan_close_lost(struct task_action *owner,enum md_task_call_effect effect,long result) {
+    if (effect==MD_EFFECT_UNSTARTED) return;
+    if (effect==MD_EFFECT_RETURNED && (!loan_close_finish(owner,result)
+            || loan_close_denied(owner->native.arguments.number,result))) return;
+    struct md_fd_mutation close=loan_close_mutation(owner);
+    CHECK(!md_fd_mutation_abandon(&close,owner->loan_table));
 }
 
 static void loan_entry_complete(struct thread *t,long result) {
@@ -397,7 +415,8 @@ static void task_action_call_complete(long result,int retry) {
         md_task_checkpoint_restore(&checkpoints,actor->pid); owner->checkpoint_suspended=0;
     }
     if (owner->loan) {
-        if (!retry && result!=-ESRCH) result=loan_close_finish(owner,result);
+        if (result==-ESRCH) loan_close_lost(owner,owner->native.effect,owner->native.result);
+        else if (!retry) result=loan_close_finish(owner,result);
     } else if (!owner->capture && !result && !retry) {
         if (owner->pid_filter) {
             for (struct thread *peer=threads;peer;peer=peer->next)
@@ -877,8 +896,28 @@ void task_action_schedule(void) {
     CHECK(!md_pending_dispatch(&task_action_queue,task_action_progress,NULL));
 }
 
+static int loan_holder(const struct task_action *owner,const struct thread *p) {
+    return p && p->pid && p->resources.files==owner->loan_table && !p->terminal_stop && !p->resume_lost;
+}
+static int loan_surviving_holder(const struct task_action *owner,const struct thread *p) {
+    if (!loan_holder(owner,p)) return 0;
+    /* A borrowed actor's death can already be queued in its barrier before
+     * lifecycle dispatch updates the task record. Exec is not death. */
+    int status;
+    if (md_task_quiesce_pending(task_action_barrier,p->pid,&status)
+            || md_task_quiesce_pending(mapping_barrier,p->pid,&status))
+        return !(WIFEXITED(status) || WIFSIGNALED(status)
+            || (WIFSTOPPED(status) && ((unsigned)status>>16)==PTRACE_EVENT_EXIT));
+    return 1;
+}
+static int loan_close_needed(const struct task_action *owner,const struct md_fd_order *turn) {
+    int match=md_fd_origins_loan_matches(turn,owner->number,owner->loan);
+    if (match!=-ESTALE || loan_surviving_holder(owner,owner->requester)) return match;
+    for (const struct thread *p=threads;p;p=p->next) if (loan_surviving_holder(owner,p)) return match;
+    return 0; /* No close or guess is needed after the last holder is gone. */
+}
 static int loan_borrow(struct task_action *owner,struct thread *p,int *alive,int *stopped) {
-    if (!p || !p->pid || p->resources.files!=owner->loan_table || p->terminal_stop || p->resume_lost) return 0;
+    if (!loan_holder(owner,p)) return 0;
     if (retained_task_held(p) || p->signals.return_pending || (p!=owner->requester && p->pid!=owner->retirement.task
             && !task_action_borrowable(p,owner->requester))) {
         *alive=1; return 0;
@@ -899,7 +938,7 @@ static void loan_start(struct task_action *owner) {
     }
     if (md_fd_order_state(turn)==MD_RESOURCE_ORDER_QUEUED) return;
     if (md_fd_order_state(turn)==MD_RESOURCE_ORDER_READY) CHECK(!md_fd_order_start(turn));
-    int exists=md_fd_origins_loan_matches(turn,owner->number,owner->loan);
+    int exists=loan_close_needed(owner,turn);
     if (exists<0) { loan_failed(owner,exists); return; }
     if (!exists) { task_action_finish(owner,0); return; }
     struct thread *t=owner->requester;

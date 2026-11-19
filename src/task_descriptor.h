@@ -17,4 +17,6 @@ void md_task_descriptor_release(int *process);
 /* Metadata-only pin under the same table turn. This is not an OFD copy:
  * offsets, access mode and status flags must never be inferred from it. */
 int md_task_descriptor_pin(pid_t actor,int number);
+struct stat;
+int md_task_descriptor_stat(pid_t actor,int number,struct stat *);
 #endif

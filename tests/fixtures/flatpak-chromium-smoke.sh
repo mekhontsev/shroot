@@ -20,7 +20,17 @@ timeout 60 flatpak run --command=sh "$app" -ec '
     test -d /sys/dev/block
     test -s /sys/devices/system/cpu/possible
     cat /sys/devices/system/cpu/possible
-    test ! -e /sys/devices/platform
+    platform=/sys/devices/platform
+    set -- /sys/class/drm/renderD*
+    if test -e "$1"; then
+        test "$(ls -A "$platform")" = shroot-gpu
+        for node do
+            test "$(readlink -f "$node")" = "$platform/shroot-gpu/drm/${node##*/}"
+            test -c "/dev/dri/${node##*/}"
+        done
+    else
+        test ! -e "$platform"
+    fi
     memory=$(mktemp /dev/shm/md-flatpak-check.XXXXXXXX)
     printf shared-memory > "$memory"
     test "$(cat "$memory")" = shared-memory

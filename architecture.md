@@ -201,6 +201,10 @@ or a timer for progress.
 A terminal event can supersede a broker-held stop when SIGKILL advances the
 task. The broker retains one event lease through worker retirement, publishing
 the terminal status and usage instead of replaying a stale continuation.
+A lease belongs to the task record, not its numeric PID. A forgotten record
+stays out of the PID index until its last owner releases it; any undelivered
+event is discarded. New identities enter the index only after successful
+preparation and never inherit the previous occupant's stop.
 
 See [process lifetime](process-lifetime.md), [interception](interception.md)
 and [process resources](process-resources.md) for scheduler, cancellation,

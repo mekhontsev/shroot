@@ -515,7 +515,8 @@ static void managed_proc_reads(const char *store) {
     assert(descriptors()==before);
     puts("PASS managed proc observations: socket identity, descriptor reuse, credentials, busy table and typed provider fallback, no FD leak");
 }
-static void deferred_operation_lifetime(const char *store,int xattr,int shutdown) {
+enum deferred_end { DEFERRED_REPLY, DEFERRED_SHUTDOWN, DEFERRED_REPLACE_QUEUED, DEFERRED_REPLACE_READY };
+static void deferred_operation_lifetime(const char *store,int xattr,enum deferred_end end) {
     unsigned before=descriptors();
     pid_t pid=getpid();
     struct md_task_registry *tasks=md_task_registry_create(); assert(tasks);
@@ -546,13 +547,40 @@ static void deferred_operation_lifetime(const char *store,int xattr,int shutdown
      * fixture alarm fails missing admission or an abandoned completion. */
     while (!atomic_load_explicit(&deferred_created,memory_order_acquire)) sched_yield();
     assert(md_broker_task_active(broker,pid) && !atomic_load(&deferred_destroyed));
-    if (!shutdown) {
+    int replace=end==DEFERRED_REPLACE_QUEUED || end==DEFERRED_REPLACE_READY;
+    if (replace) {
+        int status=(PTRACE_EVENT_EXEC<<16)|(SIGTRAP<<8)|0x7f,received=0;
+        assert(md_broker_hold_event(broker,pid,status,NULL)==1);
+        assert(md_broker_hold_event(broker,pid,status,NULL)==-EBUSY);
+        if (xattr) assert(md_broker_hold_event(broker,pid,SIGKILL,NULL)==1);
+        assert(!md_fs_worker_dispatch(worker) && !md_broker_take_event(broker,&received,NULL));
+        assert(md_broker_task_active(broker,pid) && md_broker_pending_events(broker));
+    }
+    if (end!=DEFERRED_SHUTDOWN) {
         atomic_store_explicit(&deferred_ready,1,memory_order_release);
         md_fs_worker_wake(worker);
         while (md_broker_task_active(broker,pid)) sched_yield();
         assert(atomic_load(&channel.state)==MD_ENTRY_RESPONSE && channel.receipt==1
             && channel.outcome==MD_ENTRY_COMPLETED && channel.result==-EINTR);
+        if (end==DEFERRED_REPLACE_READY) assert(!md_fs_worker_dispatch(worker));
         md_broker_forget(broker,pid);
+        if (replace) {
+            struct md_entry_channel fresh;
+            assert(!md_broker_task(broker,pid,MD_BROKER_COOPERATIVE,0,0,NULL,0));
+            assert(!md_broker_cooperative_bind(broker,pid,&fresh,1));
+            fresh.sequence=1; fresh.call.number=SYS_getuid;
+            md_entry_publish_request(&fresh,MD_ENTRY_REQUEST);
+            md_broker_resumed(broker,pid);
+            assert(!md_fs_worker_dispatch(worker));
+            int status=-1;
+            assert(!md_broker_take_event(broker,&status,NULL) && status==-1 && !md_broker_pending_events(broker));
+            /* EVENT_WAIT: only the replacement channel can receive its own reply. */
+            while (atomic_load_explicit(&fresh.state,memory_order_acquire)!=MD_ENTRY_RESPONSE
+                    || md_broker_task_active(broker,pid)) sched_yield();
+            assert(fresh.receipt==1 && fresh.outcome==MD_ENTRY_COMPLETED && !fresh.result);
+            assert(atomic_load(&channel.state)==MD_ENTRY_CLOSED && channel.result==-EINTR);
+            md_broker_forget(broker,pid);
+        }
     }
     assert(!md_fs_worker_stop(worker)); md_broker_destroy(broker);
     assert(atomic_load(&deferred_destroyed)==1);
@@ -560,7 +588,7 @@ static void deferred_operation_lifetime(const char *store,int xattr,int shutdown
     md_task_registry_destroy(tasks); md_domain_release(resources.fs);
     md_fd_origins_release(resources.files); md_identity_release(&id);
     assert(descriptors()==before);
-    printf("PASS broker deferred lifetime: xattr=%d shutdown=%d continuation and both operand FDs released\n",xattr,shutdown);
+    printf("PASS broker deferred lifetime: xattr=%d end=%d continuation and both operand FDs released\n",xattr,end);
 }
 static void stopped_queued_entry(const char *store,int status,int admission) {
     unsigned before=descriptors();
@@ -991,8 +1019,8 @@ void md_test_namespace_broker(const char *root) {
     assert(!close(directory) && !close(attached));
     completed_result(store,SYS_fstat); completed_result(store,SYS_gettid);
     managed_proc_reads(store);
-    for (int shutdown=0;shutdown<2;++shutdown)
-        for (int xattr=0;xattr<2;++xattr) deferred_operation_lifetime(store,xattr,shutdown);
+    for (enum deferred_end end=DEFERRED_REPLY;end<=DEFERRED_REPLACE_READY;++end)
+        for (int xattr=0;xattr<2;++xattr) deferred_operation_lifetime(store,xattr,end);
     stopped_queued_entry(store,(PTRACE_EVENT_STOP<<16)|(SIGTRAP<<8)|0x7f,1);
     stopped_queued_entry(store,(PTRACE_EVENT_SECCOMP<<16)|(SIGTRAP<<8)|0x7f,1);
     stopped_queued_entry(store,((SIGTRAP|0x80)<<8)|0x7f,1);

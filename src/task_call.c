@@ -61,7 +61,11 @@ static int calling(struct md_task_call *f) {
         if (!error) f->interrupted_entry=1;
     } else if (f->arguments.flags&MD_TASK_CALL_INTERRUPTIBLE)
         error=trace(f,PTRACE_SETSIGMASK,(void *)sizeof(f->mask),&f->mask);
-    if (!error) { f->stage=CALLING; error=trace(f,PTRACE_SYSCALL,NULL,NULL); }
+    if (!error) {
+        f->stage=CALLING;
+        if (!f->interrupted_entry) f->effect=MD_EFFECT_UNCERTAIN;
+        error=trace(f,PTRACE_SYSCALL,NULL,NULL);
+    }
     return error;
 }
 static int invoke(struct md_task_call *f) {
@@ -193,7 +197,7 @@ int md_task_call_again(struct md_task_call *f,const struct md_task_call_argument
         int error=trace(f,PTRACE_SETSIGMASK,(void *)sizeof(blocked),&blocked);
         if (error) return error;
     }
-    f->arguments=*arguments; f->stage=CALL_ENTRY;
+    f->arguments=*arguments; f->stage=CALL_ENTRY; f->effect=MD_EFFECT_UNSTARTED;
     f->interrupt_requested=0; f->interrupted_entry=0;
     if (collected) return invoke(f);
     if (f->boundary==MD_TASK_CALL_ENTRY || f->boundary==MD_TASK_CALL_SECCOMP) {
@@ -394,6 +398,7 @@ static int task_call_event(struct md_task_call *f,int status,int collect) {
     }
     f->result=(long)observed.exit.rval;
     if (f->interrupted_entry) f->result=-EINTR;
+    if (!md_syscall_restarting(f->result) && !f->interrupted_entry) f->effect=MD_EFFECT_RETURNED;
     if (interruptible) {
         uint64_t blocked=md_signal_blockable_mask();
         error=trace(f,PTRACE_SETSIGMASK,(void *)sizeof(blocked),&blocked);

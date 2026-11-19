@@ -20,6 +20,19 @@ static inline atomic_uint *md_entry_owner_awake(struct md_entry_channel *c,enum 
 static inline int md_entry_fd_pending(unsigned state) {
     return state==MD_ENTRY_FD_REQUEST || state==MD_ENTRY_FD_RETIRING;
 }
+static inline int md_entry_next_sequence(uint64_t previous,uint64_t sequence) {
+    return previous!=UINT64_MAX && sequence==previous+1;
+}
+static inline void md_entry_record_reply(struct md_entry_channel *c,uint64_t sequence,
+        enum md_entry_outcome outcome,long result) {
+    c->receipt=sequence; c->outcome=outcome; c->result=result;
+}
+/* The caller has acquired RESPONSE. A wake alone never admits these fields. */
+static inline int md_entry_read_reply(const struct md_entry_channel *c,enum md_entry_outcome *outcome,long *result) {
+    if (c->receipt!=c->sequence) return 0;
+    *outcome=c->outcome; *result=c->result;
+    return 1;
+}
 /* Either publication observes a parked owner or parking observes the request.
  * The returned wake obligation must be fulfilled by the caller's transport. */
 static inline int md_entry_publish_request(struct md_entry_channel *c,unsigned state) {
@@ -54,6 +67,13 @@ static inline int md_entry_publish_response(struct md_entry_channel *c,unsigned 
     atomic_store_explicit(&c->state,state,memory_order_seq_cst);
     return atomic_load_explicit(&c->sleeping,memory_order_seq_cst)!=0;
 }
+static inline int md_entry_prepare_reply_wait(struct md_entry_channel *c,int native_sent,unsigned *expected) {
+    atomic_store_explicit(&c->sleeping,1,memory_order_seq_cst);
+    unsigned state=atomic_load_explicit(&c->state,memory_order_seq_cst);
+    *expected=state;
+    return state==MD_ENTRY_REQUEST || state==MD_ENTRY_RUNNING || state==MD_ENTRY_PARKED
+        || (state==MD_ENTRY_NATIVE && native_sent);
+}
 enum { MD_ENTRY_PENDING_CALL=1, MD_ENTRY_PENDING_NATIVE=2 };
 static inline unsigned md_entry_prepare_wait(struct md_entry_channel *c,enum md_entry_owner owner) {
     atomic_store_explicit(md_entry_owner_awake(c,owner),0,memory_order_seq_cst);
@@ -61,16 +81,25 @@ static inline unsigned md_entry_prepare_wait(struct md_entry_channel *c,enum md_
         && md_entry_request_owner(c->call.reserved)==owner ? MD_ENTRY_PENDING_CALL : 0;
     if (owner==MD_ENTRY_WORKER_OWNER) {
         unsigned state=atomic_load_explicit(&c->native.state,memory_order_seq_cst);
-        if (state==MD_NATIVE_DONE || state==MD_NATIVE_CANCELLED || state==MD_NATIVE_UNKNOWN)
-            pending|=MD_ENTRY_PENDING_NATIVE;
+        if (md_native_resolved(state)) pending|=MD_ENTRY_PENDING_NATIVE;
     }
     return pending;
+}
+static inline int md_entry_early_native_result(struct md_entry_channel *c,long *result) {
+    if (c->native_commit || atomic_load_explicit(&c->native.state,memory_order_acquire)!=MD_NATIVE_DONE)
+        return 0;
+    long value=c->native.result;
+    unsigned offered=MD_ENTRY_NATIVE;
+    if (!atomic_compare_exchange_strong_explicit(&c->state,&offered,MD_ENTRY_RETIRING,
+            memory_order_seq_cst,memory_order_acquire)) return 0;
+    *result=value;
+    return 1;
 }
 /* The native-effect owner publishes receipts. A caller which claimed RETIRING already
  * owns the native result and may have queued its next request in call. */
 static inline int md_entry_native_retire(struct md_entry_channel *c,uint64_t sequence,
         enum md_entry_outcome outcome,long result) {
-    c->receipt=sequence; c->result=result; c->outcome=outcome;
+    md_entry_record_reply(c,sequence,outcome,result);
     unsigned offered=MD_ENTRY_NATIVE;
     if (atomic_compare_exchange_strong_explicit(&c->state,&offered,MD_ENTRY_RESPONSE,
             memory_order_seq_cst,memory_order_acquire)) return 1;

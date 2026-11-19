@@ -1201,8 +1201,9 @@ static void report_statistics(void) {
                     (unsigned long long)statistics->calls[nr].trace,
                     (unsigned long long)statistics->calls[nr].notification);
             if (statistics->calls[nr].entry)
-                fprintf(stderr,"MD_ENTRY_SYSCALL nr=%u calls=%llu\n",nr,
-                    (unsigned long long)statistics->calls[nr].entry);
+                fprintf(stderr,"MD_ENTRY_SYSCALL nr=%u calls=%llu nativeDecisions=%llu\n",nr,
+                    (unsigned long long)statistics->calls[nr].entry,
+                    (unsigned long long)statistics->calls[nr].native_decisions);
         }
     }
 }

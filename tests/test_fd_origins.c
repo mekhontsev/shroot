@@ -10,6 +10,7 @@
 #include "fd_receipt.h"
 #include "fd_channel.h"
 #include "fd_native_pin.h"
+#include "fd_view.h"
 #include "descriptor_inode.h"
 #include "fd_return.h"
 #include "received_fds.h"
@@ -333,13 +334,55 @@ static void native_io_proofs(struct md_mount_namespace *view,struct md_fs_anchor
     assert(md_fd_origins_close_untracked(&turn,127));
     assert(md_fd_origins_validate(&turn,before_close.generation)==-EAGAIN);
     assert(md_fd_origins_close_untracked(&turn,-1));
+    struct md_fd_absence a;
+    assert(!md_fd_origins_absence(&turn,8,100,&a));
+    assert(!md_fd_origins_absence(&turn,127,9,&a));
+    assert(md_fd_origins_absence(&turn,127,3,&a));
+    assert((a.checkable&((1u<<8)|(1u<<9)))==((1u<<8)|(1u<<9)));
+    assert(a.carrier_kinds&md_fd_kind_bit(S_IFREG));
+    assert(a.carrier_kinds&md_fd_kind_bit(S_IFDIR));
+    assert(!md_fd_absent(&a,8) && !md_fd_absent(&a,9) && md_fd_absent(&a,3));
     allocation_budget=-1;
+    int pipe_slot[2]; assert(!pipe(pipe_slot));
+    int probe=fcntl(md_fs_anchor_fd(file),F_DUPFD_CLOEXEC,32);
+    assert(probe>=32);
+    put(files,probe,file,FD_CLOEXEC);
+    assert(md_fd_origins_recheck(&turn,getpid(),probe)==-ESTALE);
+    assert(md_fd_origins_native_regular(&turn,probe));
+    assert(!close(probe));
+    assert(md_fd_origins_recheck(&turn,getpid(),probe)==-ENOENT);
+    assert(md_fd_origins_native_regular(&turn,probe));
+    assert(fcntl(pipe_slot[0],F_DUPFD_CLOEXEC,probe)==probe);
+    assert(!md_fd_origins_recheck(&turn,getpid(),probe));
+    assert(!md_fd_origins_native_regular(&turn,probe) && fcntl(probe,F_GETFD)==FD_CLOEXEC);
+    assert(!close(probe) && !close(pipe_slot[0]) && !close(pipe_slot[1]));
+    put(files,4095,file,FD_CLOEXEC);
+    put(files,4094,file,0);
+    assert(!md_fd_origins_absence(&turn,127,4095,&a));
+    assert(!md_fd_origins_close_range(files,4095,4095,0));
+    assert(md_fd_origins_absence(&turn,127,4095,&a));
+    assert(md_fd_absent(&a,4095) && !md_fd_absent(&a,4094) && !md_fd_absent(&a,4093));
+    assert(!md_fd_origins_close_range(files,4094,4094,0));
+    assert(md_fd_origins_absence(&turn,127,4095,&a) && md_fd_absent(&a,4093));
+    /* A completed allocating dup displaces any stale destination annotation;
+     * a failed allocation changes neither the binding nor the view. */
+    struct md_fd_mutation dup_op;
+    unsigned long dupargs[6]={127,F_DUPFD_CLOEXEC,3};
+    put(files,31,file,FD_CLOEXEC);
+    assert(!md_fd_mutation_prepare(files,SYS_fcntl,dupargs,&dup_op));
+    assert(!md_fd_mutation_commit(&dup_op,files,-EMFILE,NULL,&turn,&a));
+    assert(a.source<0 && md_fd_origins_native_regular(&turn,31));
+    assert(!md_fd_mutation_prepare(files,SYS_fcntl,dupargs,&dup_op));
+    assert(!md_fd_mutation_commit(&dup_op,files,31,NULL,&turn,&a));
+    assert(a.source==127 && a.result==31 && !(a.occupied&(UINT64_C(1)<<31)));
     static const struct md_fd_object_type type={.destroy=borrowed_file_destroy,.origin=borrowed_file_origin};
     struct borrowed_file typed={.origin=file}; md_fd_object_init(&typed.object,&type);
     struct md_fd_origin_update update;
     assert(!md_fd_origins_prepare_object(files,&typed.object,0,&update));
     md_fd_origins_finish(&update,10);
+    assert(md_fd_origins_describe(&turn,10,&native) && !native.origin && !native.kind && !native.flags);
     assert(!md_fd_origins_native(&turn,10,&native));
+    assert(md_fd_origins_recheck(&turn,getpid(),10)==-ESTALE);
     assert(!md_fd_origins_native_regular(&turn,10));
     assert(!md_fd_origins_close_untracked(&turn,10));
     struct md_identity identity=md_identity_new(0,0);
@@ -361,9 +404,11 @@ static void native_io_proofs(struct md_mount_namespace *view,struct md_fs_anchor
     assert(!md_fd_origins_prepare(files,file,0,&update));
     assert(!md_fd_origins_prepare_custody(&update,loan,&turn));
     md_fd_origins_finish(&update,11);
+    assert(!md_fd_origins_describe(&turn,11,&native));
     assert(!md_fd_origins_native(&turn,11,&native));
     assert(!md_fd_origins_native_regular(&turn,11));
     assert(!md_fd_origins_close_untracked(&turn,11));
+    assert(md_fd_origins_recheck(&turn,getpid(),11)==-ESTALE);
     assert(!md_fd_origins_abandon_range(files,11,11));
     assert(!md_fd_origins_close_untracked(&turn,11));
     assert(!md_fd_origins_abandon_range(files,8,8));
@@ -374,6 +419,8 @@ static void native_io_proofs(struct md_mount_namespace *view,struct md_fs_anchor
     struct md_fd_origins *shared=md_fd_origins_fork(files,1); assert(shared==files);
     assert(!md_fd_origins_exclusive(&turn));
     assert(!md_fd_origins_close_untracked(&turn,127));
+    assert(!md_fd_origins_absence(&turn,127,1024,&a));
+    assert(md_fd_origins_recheck(&turn,getpid(),8)==-EINVAL);
     md_fd_origins_release(shared);
     assert(md_fd_origins_exclusive(&turn));
     /* Count possible readiness, not its current callback result. Dynamic

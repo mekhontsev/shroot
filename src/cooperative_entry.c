@@ -112,6 +112,13 @@ static enum md_entry_outcome resume_kernel(struct md_entry_client *client,struct
     }
     return progress(client,call);
 }
+static void worker_fd_result(struct md_entry_channel *c,const struct md_entry_call *call,long result) {
+    if (result<0) return;
+    if (md_entry_open(call->number) || md_entry_close_or_dup(call->number,call->args)) {
+        if (call->number==SYS_close) md_entry_set_worker_fd(c,(unsigned)call->args[0],0);
+        else md_entry_set_worker_fd(c,(unsigned)result,1);
+    }
+}
 static enum md_entry_outcome resume_native(struct md_entry_client *client,struct md_entry_call *call) {
     struct md_entry_channel *c=continuation(client,call);
     if (!c) return finish(client,call,MD_ENTRY_UNKNOWN);
@@ -127,17 +134,12 @@ static enum md_entry_outcome resume_native(struct md_entry_client *client,struct
         if (md_entry_publish_request(c,MD_ENTRY_REQUEST)) wake_owner(c);
         return progress(client,call);
     }
-    if (!c->native_commit && atomic_load_explicit(&c->native.state,memory_order_acquire)==MD_NATIVE_DONE) {
-        long result=c->native.result;
-        unsigned offered=MD_ENTRY_NATIVE;
-        /* Only the completed effect returns early. The worker retains the
-         * table turn and pin until retirement; no future call is anticipated. */
-        if (atomic_compare_exchange_strong_explicit(&c->state,&offered,MD_ENTRY_RETIRING,
-                memory_order_seq_cst,memory_order_acquire)) {
-            if (!atomic_load_explicit(&c->awake,memory_order_seq_cst)) md_guest_buffer_admit(MD_ENTRY_WAKE);
-            call->result=result;
-            return finish(client,call,MD_ENTRY_COMPLETED);
-        }
+    long result;
+    if (md_entry_early_native_result(c,&result)) {
+        if (!atomic_load_explicit(&c->awake,memory_order_seq_cst)) md_guest_buffer_admit(MD_ENTRY_WAKE);
+        call->result=result;
+        worker_fd_result(c,call,result);
+        return finish(client,call,MD_ENTRY_COMPLETED);
     }
     atomic_thread_fence(memory_order_seq_cst);
     if (!atomic_load_explicit(&c->awake,memory_order_seq_cst)) md_guest_buffer_admit(MD_ENTRY_WAKE);
@@ -161,8 +163,7 @@ static void native_effect(void *context) {
              * repeat the same probe without ever reaching signal delivery. */
             if (md_execution_native_context(native->number,native->args)==MD_CONTEXT_WAIT
                     && __atomic_load_n((uint64_t *)(frame+MD_SVC_DIRECT_PENDING),__ATOMIC_ACQUIRE)) {
-                native->result=-EINTR;
-                atomic_store_explicit(&native->state,MD_NATIVE_CANCELLED,memory_order_release);
+                md_native_cancel_ready(native);
             }
         }
     }
@@ -211,6 +212,59 @@ static enum md_entry_outcome offer_native(struct md_entry_client *client,struct 
         c->native.args[1]=(uintptr_t)c->native_path;
     call->effect=native_effect; call->effect_context=&c->native; call->next=resume_native;
     return MD_ENTRY_NATIVE_EFFECT;
+}
+static int resident_client(struct md_entry_client *client) {
+    uintptr_t sp;
+    __asm__ volatile("mov %0, sp" : "=r"(sp));
+    return md_svc_frame_client(md_svc_runtime.frames,sp)==client;
+}
+static int original_route(const struct md_entry_channel *c,const struct md_entry_call *call,uint32_t *decision) {
+    struct seccomp_data data={.nr=call->number,.arch=AUDIT_ARCH_AARCH64,.instruction_pointer=call->instruction_pointer};
+    memcpy(data.args,call->args,sizeof(data.args));
+    return md_interception_route_eval(&routes,&c->routes,&data,decision);
+}
+static enum md_fd_view_route local_fd_mutation(const struct md_entry_channel *c,const struct md_entry_call *call) {
+    enum md_fd_view_route route=md_fd_view_native_mutation(&c->descriptor,call->number,call->args);
+    if (route==MD_FD_CHECK_ROUTE || route==MD_FD_CHECK_ROUTE_RESULT) {
+        /* The FD-only verdict requires bookkeeping, not provider discovery.
+         * A dispatch selector still requires its normal adapter admission. */
+        uint32_t decision;
+        if (original_route(c,call,&decision) || decision!=(SECCOMP_RET_TRACE|MD_INTERCEPT_FD))
+            return MD_FD_VIA_OWNER;
+        return route==MD_FD_CHECK_ROUTE ? MD_FD_LOCAL : MD_FD_CHECK_RESULT;
+    }
+    return route;
+}
+static enum md_entry_outcome checked_dup(struct md_entry_client *client,struct md_entry_channel *c,
+        struct md_entry_call *call) {
+    const struct md_fd_absence proof=c->descriptor.absence;
+    struct stat st;
+    struct md_entry_native effect={.state=MD_NATIVE_READY,.number=SYS_fstat,.result=-EINTR,
+        .args={call->args[0],(uintptr_t)&st}};
+    native_effect(&effect);
+    if (effect.result || (proof.carrier_kinds & md_fd_kind_bit(st.st_mode))
+            || st.st_dev!=proof.carrier_device || st.st_ino!=proof.carrier_inode
+            || atomic_load_explicit(&c->descriptor.descriptor,memory_order_acquire)!=MD_FD_VIEW_UNTRACKED)
+        return MD_ENTRY_DECLINED;
+    effect.number=call->number;
+    memcpy(effect.args,call->args,sizeof(effect.args));
+    md_native_offer(&effect,0);
+    native_effect(&effect);
+    call->result=effect.result;
+    if (effect.result>=0 && !md_fd_absent(&proof,(int)effect.result)) {
+        /* The allocation has happened. Reconcile its real slot, never replay
+         * the original syscall, including after an interrupted control wait. */
+        struct md_entry_call receipt=*call;
+        receipt.number=MD_FD_RECHECK_SLOT;
+        memset(receipt.args,0,sizeof(receipt.args));
+        receipt.args[0]=(uint64_t)effect.result;
+        receipt.continuation[CONT_SEQUENCE]=c->sequence;
+        receipt.continuation[CONT_FLAGS]=(uintptr_t)MD_ENTRY_FD_CONTROL<<CALL_KIND_SHIFT;
+        enum md_entry_outcome outcome=publish(client,&receipt);
+        return outcome==MD_ENTRY_COMPLETED && !receipt.result ? MD_ENTRY_COMPLETED : MD_ENTRY_UNKNOWN;
+    }
+    if (c->route_statistics) atomic_fetch_add_explicit(&c->local_native,1,memory_order_relaxed);
+    return finish(client,call,MD_ENTRY_COMPLETED);
 }
 static enum md_entry_outcome invoke_identified(struct md_entry_client *client,long tid,struct md_entry_call *call) {
     if (!client || !call || call->reserved) return MD_ENTRY_DECLINED;
@@ -286,11 +340,8 @@ static enum md_entry_outcome invoke_identified(struct md_entry_client *client,lo
         /* Guest policy was evaluated above at the original SVC. Local routing
          * then avoids a supervisor round trip for ordinary native operations
          * and unconditional errors from our own interception contract. */
-        struct seccomp_data data={.nr=call->number,.arch=AUDIT_ARCH_AARCH64,
-            .instruction_pointer=call->instruction_pointer};
-        memcpy(data.args,call->args,sizeof(data.args));
         uint32_t decision;
-        if (md_interception_route_eval(&routes,&c->routes,&data,&decision)) goto kernel;
+        if (original_route(c,call,&decision)) goto kernel;
         if (decision==SECCOMP_RET_ALLOW) {
             if (c->route_statistics) atomic_fetch_add_explicit(&c->local_native,1,memory_order_relaxed);
             outcome=tid>0 ? admitted_kernel_call(c,call) : kernel_call(call); goto done;
@@ -397,11 +448,25 @@ classified:
     if (!atomic_load_explicit(&c->enabled,memory_order_acquire)
             || (available!=MD_ENTRY_IDLE && available!=MD_ENTRY_RETIRING)
             || c->sequence==UINT64_MAX) goto done;
+    enum md_fd_view_route fd_route=tid>0 ? local_fd_mutation(c,call) : MD_FD_VIA_OWNER;
+    if (fd_route!=MD_FD_VIA_OWNER
+            && (atomic_load_explicit(&c->routes.flags,memory_order_acquire)&MD_ROUTE_ADMITTED_KERNEL)) {
+        if (fd_route==MD_FD_CHECK_RESULT) {
+            if (resident_client(client) && available==MD_ENTRY_IDLE) {
+                enum md_entry_outcome completed=checked_dup(client,c,call);
+                if (completed!=MD_ENTRY_DECLINED) return completed;
+            }
+        } else {
+            /* No slot metadata to copy or retire. The kernel owns fd selection,
+             * validation and close-on-exec; this is not a grant for IO. */
+            if (c->route_statistics) atomic_fetch_add_explicit(&c->local_native,1,memory_order_relaxed);
+            call->effect=native_effect;
+            return finish(client,call,MD_ENTRY_NATIVE_CALL);
+        }
+    }
     if (tid>0 && (call->number==SYS_lseek || call->number==SYS_fcntl || call->number==SYS_ioctl)
             && (int)call->args[0]>=0 && md_entry_view_descriptor(c)==(int)call->args[0]
-            && (md_fd_view_query(call->number,call->args,c->descriptor.kind)
-                || (call->number==SYS_fcntl && (unsigned)call->args[1]==F_SETFD
-                    && (call->args[2]&FD_CLOEXEC)==c->descriptor.flags))) {
+            && md_fd_view_query(call->number,call->args,c->descriptor.kind,c->descriptor.flags)) {
         /* The kernel still owns the shared OFD offset and validates whence.
          * No cached result or predicted next operation is involved. */
         if (call->number==SYS_lseek) {
@@ -425,7 +490,16 @@ classified:
         return finish(client,call,MD_ENTRY_COMPLETED);
     }
     int native_fd=md_entry_native_fd(call->number,call->args);
-    if (task_execution && !native_fd) {
+    /* Most anonymous descriptors have no filesystem origin. Only offer the
+     * worker mutations of descriptors it actually issued or currently leases.
+     * Both owners still resolve the live slot under the file-table turn. */
+    int task_fd=tid>0 && md_entry_close_or_dup(call->number,call->args)
+        && !md_entry_worker_fd(c,(unsigned)call->args[0])
+        && ((int)call->args[0]<0 || md_entry_view_descriptor(c)!=(int)call->args[0] || !c->descriptor.kind)
+        && resident_client(client);
+    if ((task_execution && !native_fd) || task_fd) {
+        if (task_fd && call->number==SYS_dup3)
+            md_entry_set_worker_fd(c,(unsigned)call->args[1],0);
         call->continuation[CONT_SEQUENCE]=c->sequence;
         call->continuation[CONT_FLAGS]=CALL_BEGIN;
         return task_execute(client,call);
@@ -530,8 +604,7 @@ static enum md_entry_outcome progress(struct md_entry_client *client,struct md_e
             return resume_native(client,call);
         }
         if (state==MD_ENTRY_RESPONSE) {
-            if (c->receipt!=c->sequence) break;
-            outcome=c->outcome; call->result=c->result;
+            if (!md_entry_read_reply(c,&outcome,&call->result)) break;
             if (outcome!=MD_ENTRY_DECLINED && outcome!=MD_ENTRY_COMPLETED
                     && !(outcome==MD_ENTRY_DISPATCH && !request && !descriptor)
                     && !(request && outcome==MD_ENTRY_NEEDS_STOP)) outcome=MD_ENTRY_UNKNOWN;
@@ -562,10 +635,7 @@ static enum md_entry_outcome progress(struct md_entry_client *client,struct md_e
             continue;
         }
         parked=1;
-        atomic_store_explicit(&c->sleeping,1,memory_order_seq_cst);
-        state=atomic_load_explicit(&c->state,memory_order_seq_cst);
-        if (state==MD_ENTRY_REQUEST || state==MD_ENTRY_RUNNING || state==MD_ENTRY_PARKED
-                || (state==MD_ENTRY_NATIVE && native_sent)) {
+        if (md_entry_prepare_reply_wait(c,native_sent,&state)) {
             /* EVENT_WAIT: exact response or owner closure. Launch teardown
              * terminates the task. Never abandon an accepted output pointer
              * while its worker can still write into the caller's stack. */
@@ -576,13 +646,15 @@ static enum md_entry_outcome progress(struct md_entry_client *client,struct md_e
     /* A response ready after parking is not evidence that spinning helped. */
     if (budget) md_spin_result(&policy,!parked && outcome==MD_ENTRY_COMPLETED);
     c->feedback[kind]=policy;
+    if (!request && native_sent && outcome==MD_ENTRY_COMPLETED)
+        worker_fd_result(c,call,call->result);
     if (outcome==MD_ENTRY_DISPATCH) {
-        uintptr_t sp;
-        __asm__ volatile("mov %0, sp" : "=r"(sp));
-        if (md_svc_frame_client(md_svc_runtime.frames,sp)==client) {
+        if (resident_client(client)) {
             /* The worker released all turns without committing an effect.
              * Transfer to the same typed owner as initial task admission;
              * only that owner may request an actual stopped context. */
+            if (md_entry_close_or_dup(call->number,call->args))
+                md_entry_set_worker_fd(c,(unsigned)call->args[0],0);
             call->continuation[CONT_FLAGS]=CALL_BEGIN;
             return task_execute(client,call);
         }
@@ -758,8 +830,7 @@ long md_guest_native_call(long number,const unsigned long args[6]) {
             struct md_entry_native *native=&c->adapter_native;
             native->number=(int32_t)number;
             memcpy(native->args,values,sizeof(values));
-            native->result=0;
-            atomic_store_explicit(&native->state,MD_NATIVE_READY,memory_order_release);
+            md_native_offer(native,0);
             native_effect(native);
             unsigned state=atomic_load_explicit(&native->state,memory_order_acquire);
             if (state!=MD_NATIVE_DONE && state!=MD_NATIVE_CANCELLED)

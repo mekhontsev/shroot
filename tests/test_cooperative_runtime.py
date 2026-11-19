@@ -160,6 +160,9 @@ def main():
             output = suite.command([*runner, '--statistics', '--store', suite.base + '/store',
                                    '--user', '0:0', '--', '/bin/probe', '--fd-discovery'])
             assert 'PASS native FD discovery:' in output
+            if args.machine_entry is not False:
+                delegated = re.search(r'cooperativeDeclined=(\d+)', output)
+                assert delegated and int(delegated[1]) < 128, 'anonymous dup/close burst still bounces through worker'
             seeks = re.search(r'nativeSeek=(\d+)', output)
             assert seeks and int(seeks[1]) < 512, 'ordinary repeated seeks still enter the worker'
             for key, minimum in (('nativeClose', 250), ('nativeDuplicate', 120),

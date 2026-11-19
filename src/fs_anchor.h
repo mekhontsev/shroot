@@ -15,6 +15,8 @@ void md_fs_anchor_release(struct md_fs_anchor *);
 int md_fs_anchor_fd(const struct md_fs_anchor *);
 /* Immutable type when captured; zero means unknown, never a guessed type. */
 unsigned md_fs_anchor_kind(const struct md_fs_anchor *);
+/* A single native data identity; excludes synthetic children and alternate carriers. */
+unsigned md_fs_anchor_carrier_kind(const struct md_fd_object *);
 /* Provider-only child: the pin identifies its parent, not a data inode. */
 int md_fs_anchor_virtual(const struct md_fs_anchor *);
 struct md_inode_store;

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "fd_mutation.h"
+#include "descriptor_calls.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -48,17 +49,16 @@ int md_fd_mutation_prepare(struct md_fd_origins *files, long nr,
     }
     unsigned command=(unsigned)a[1];
     if (nr==SYS_fcntl) out->args[1]=command;
-    int duplicate=nr==SYS_dup || nr==SYS_dup3
-        || (nr==SYS_fcntl && (command==F_DUPFD || command==F_DUPFD_CLOEXEC));
-    if (!duplicate) return 0;
+    if (!md_descriptor_duplicate_call(nr,command)) return 0;
     unsigned flags=(nr==SYS_dup3 && (a[2]&O_CLOEXEC))
         || (nr==SYS_fcntl && command==F_DUPFD_CLOEXEC) ? FD_CLOEXEC : 0;
     return md_fd_origins_prepare_copy(files,(int)a[0],flags,&out->update);
 }
-int md_fd_mutation_finish_closed(struct md_fd_mutation *op,struct md_fd_origins *files,long result,struct md_fd_closed *closed) {
+int md_fd_mutation_commit(struct md_fd_mutation *op,struct md_fd_origins *files,long result,struct md_fd_closed *closed,
+        const struct md_fd_order *turn,struct md_fd_absence *view) {
     int error=0;
-    if (op->update.table) md_fd_origins_finish_closed(&op->update,result<0 ? -1 : (int)result,
-        op->nr==SYS_dup3 ? closed : NULL);
+    if (op->update.table) md_fd_origins_commit(&op->update,result<0 ? -1 : (int)result,
+        op->nr==SYS_dup3 ? closed : NULL,turn,(int)op->args[0],view);
     else if (op->nr==SYS_close && (!result || result==-EINTR || result==-EIO || result==-ENOSPC || result==-EDQUOT)) {
         /* Linux releases a valid slot before reporting close's late IO errors. */
         if ((int)op->args[0]>=0)
@@ -69,6 +69,9 @@ int md_fd_mutation_finish_closed(struct md_fd_mutation *op,struct md_fd_origins 
     else if (!result && op->nr==SYS_fcntl && op->args[1]==F_SETFD)
         error=md_fd_origins_set_flags(files,(int)op->args[0],(unsigned)op->args[2]&FD_CLOEXEC);
     *op=(struct md_fd_mutation){0}; return error;
+}
+int md_fd_mutation_finish_closed(struct md_fd_mutation *op,struct md_fd_origins *files,long result,struct md_fd_closed *closed) {
+    return md_fd_mutation_commit(op,files,result,closed,NULL,NULL);
 }
 int md_fd_mutation_finish(struct md_fd_mutation *op,struct md_fd_origins *files,long result) {
     return md_fd_mutation_finish_closed(op,files,result,NULL);

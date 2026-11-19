@@ -18,6 +18,7 @@
 #include "fd_mutation.h"
 #include "fd_object.h"
 #include "fd_origins.h"
+#include "task_descriptor.h"
 #include "fd_selector.h"
 #include "file_open.h"
 #include "fs_anchor.h"
@@ -184,6 +185,10 @@ void fd_discard(struct thread *t) {
     fd_policy_release(t);
 }
 
+static int duplicate_selectors_ready(struct thread *t) {
+    return md_fd_selector_has_mask(t->descriptors.selector,MD_FD_SANDBOX_SELECTORS,-1)==1;
+}
+
 void fd_finish(struct thread *t, long result) {
     if (t->descriptors.task) {
         /* The adapter must acknowledge execution. Fatal filter exits can
@@ -209,7 +214,27 @@ void fd_finish(struct thread *t, long result) {
     if (t->descriptors.cwd && nr!=SYS_openat && !result)
         CHECK(!md_domain_set_cwd(t->descriptors.fs_order.fs,md_domain_restricted(t->descriptors.fs_order.fs) ? NULL : t->descriptors.origin));
     md_fs_anchor_release(t->descriptors.origin); t->descriptors.origin=NULL;
-    CHECK(!md_fd_mutation_finish_closed(&t->descriptors.mutation,t->resources.files,result,&t->close.closed));
+    struct md_fd_absence absence={.source=-1};
+    int view=result>=0 && entry_pending(t) && !t->descriptors.job
+        && md_descriptor_duplicate_call(nr,(unsigned)t->descriptors.call.args[1]);
+    CHECK(!md_fd_mutation_commit(&t->descriptors.mutation,t->resources.files,result,&t->close.closed,
+        view ? &t->descriptors.order : NULL,view ? &absence : NULL));
+    if (absence.source>=0 && !t->close.closed.first) {
+        int minimum=nr==SYS_fcntl ? (int)t->descriptors.call.args[2] : 0;
+        uint64_t conflicts=md_fd_suffix_conflicts(&absence,minimum);
+        absence.checkable=md_fd_checked_prefix(&absence,minimum,(int)result);
+        struct stat st;
+        if (nr==SYS_dup3 || !conflicts || (conflicts&~absence.checkable)
+                || md_task_descriptor_stat(t->pid,(int)result,&st)
+                || (absence.carrier_kinds&md_fd_kind_bit(st.st_mode)))
+            absence.checkable=0;
+        else {
+            absence.carrier_device=st.st_dev;
+            absence.carrier_inode=st.st_ino;
+        }
+        absence.duplicates=duplicate_selectors_ready(t);
+        md_broker_entry_absence(broker,t->pid,t->entry.control,&absence);
+    }
     foreign_duplicate_release(t);
     if (t->descriptors.fs_order.fs) CHECK(!md_fs_order_complete(&t->descriptors.fs_order));
     if (t->descriptors.job==MD_FD_DUPLICATE_BEGIN)
@@ -268,6 +293,11 @@ void fd_start(struct thread *t) {
         CHECK(!md_fd_order_start(&t->descriptors.order));
     struct user_pt_regs *r=&t->descriptors.registers;
     const struct seccomp_data *call=&t->descriptors.call;
+    if (t->descriptors.job==MD_FD_RECHECK_SLOT) {
+        int error=md_fd_origins_recheck(&t->descriptors.order,t->pid,(int)t->descriptors.request.args[0]);
+        CHECK(!md_fd_order_complete(&t->descriptors.order)); t->descriptors.job=0;
+        control_return(t,r,error,0); return;
+    }
     if (t->descriptors.job==MD_FD_DUPLICATE_BEGIN && !t->descriptors.foreign) {
         int error=md_fd_origins_validate(&t->descriptors.order,t->descriptors.request.args[0]);
         if (error) {
@@ -353,15 +383,25 @@ void fd_start(struct thread *t) {
     fd_native_start(t);
 }
 
+static int fd_release_untracked_close(struct thread *t,int number) {
+    if (!md_fd_origins_close_untracked(&t->descriptors.order,number)) return 0;
+    CHECK(!md_fd_order_complete(&t->descriptors.order));
+    if (statistics) ++statistics->untracked_close;
+    return 1;
+}
+
 static void fd_native_start(struct thread *t) {
     struct user_pt_regs *r=&t->descriptors.registers;
     const struct seccomp_data *call=&t->descriptors.call;
     if (!t->descriptors.job && !t->descriptors.cwd && !t->descriptors.capture && t->phase==IDLE
-            && call->nr==SYS_fcntl && (unsigned)call->args[1]==F_SETFD
+            && (call->nr==SYS_close || (call->nr==SYS_fcntl && (unsigned)call->args[1]==F_SETFD))
             && !t->debug.options && !t->debug.call_active && !t->debug.step_call
-            && !md_debugger_traced(debugger,t->pid) && md_fd_origins_exclusive(&t->descriptors.order)) {
+            && !md_debugger_traced(debugger,t->pid)) {
         struct md_fd_native native;
-        if (md_fd_origins_native(&t->descriptors.order,(int)call->args[0],&native)
+        if (call->nr==SYS_close) {
+            if (fd_release_untracked_close(t,(int)call->args[0])) { native_continue(t); return; }
+        } else if (md_fd_origins_exclusive(&t->descriptors.order)
+                && md_fd_origins_native(&t->descriptors.order,(int)call->args[0],&native)
                 && (call->args[2]&FD_CLOEXEC)==native.flags) {
             /* Kernel denial or success leaves the same metadata. No peer can
              * change this private table before the admitted call executes. */
@@ -602,17 +642,14 @@ int fd_close_compact(struct thread *t,unsigned long cookie,const struct ptrace_s
     CHECK(ready>=0);
     if (!ready) { CHECK(!md_fd_order_cancel(&t->descriptors.order)); return 0; }
     CHECK(!md_fd_order_start(&t->descriptors.order));
-    if (md_fd_origins_close_untracked(&t->descriptors.order,number)) {
-        CHECK(!md_fd_order_complete(&t->descriptors.order));
-        if (statistics) { ++statistics->untracked_close; ++statistics->calls[SYS_close].trace; }
-        resume(t->pid,0); return 1;
-    }
+    if (statistics) ++statistics->calls[SYS_close].trace;
+    if (fd_release_untracked_close(t,number)) { resume(t->pid,0); return 1; }
     /* No register rewrite or helper is needed. Keep the same table turn until
      * the actual close result, including EBADF and late writeback errors. */
     unsigned long args[6]={(unsigned long)(long)number};
     CHECK(!md_fd_mutation_prepare(t->resources.files,SYS_close,args,&t->descriptors.mutation));
     t->descriptors.cwd=t->descriptors.capture=0; t->descriptors.running=1;
-    if (statistics) { ++statistics->compact_close; ++statistics->calls[SYS_close].trace; }
+    if (statistics) ++statistics->compact_close;
     resume(t->pid,0); return 1;
 }
 
@@ -622,13 +659,12 @@ int fd_duplicate_prepared(struct thread *t,const struct seccomp_data *call,unsig
             || !t->resources.files || t->descriptors.job || t->descriptors.running || t->descriptors.order.table
             || t->descriptors.fs_order.fs || t->debug.options || t->debug.call_active || t->debug.step_call
             || md_debugger_traced(debugger,t->pid)) return 0;
-    if (nr!=SYS_dup && nr!=SYS_dup3 && !(nr==SYS_fcntl
-            && ((unsigned)call->args[1]==F_DUPFD || (unsigned)call->args[1]==F_DUPFD_CLOEXEC))) return 0;
+    if (!md_descriptor_duplicate_call(nr,(unsigned)call->args[1])) return 0;
     /* All possible destinations already have every provider selector. There
      * is no adapter discovery or filter installation left to do. The normal
      * mutation owner still serializes the table, retires loans and publishes
      * the copied authority only after the actual kernel result. */
-    return md_fd_selector_has_mask(t->descriptors.selector,MD_FD_SANDBOX_SELECTORS,-1)==1;
+    return duplicate_selectors_ready(t);
 }
 
 int fd_native_classify(struct thread *t,const struct seccomp_data *call,unsigned cookie) {
@@ -735,11 +771,20 @@ void fd_control(struct thread *t,const struct supervisor_control_request *contro
                 md_fd_object_release(object);
             }
         }
+    } else if (operation==MD_FD_RECHECK_SLOT) {
+        if (!t->entry.control || t->phase!=IDLE || t->entry.execution || !t->ready
+                || t->descriptors.order.table || t->descriptors.running || t->descriptors.job
+                || id>=MD_FD_EXACT_SLOTS || control->args[1] || control->args[2]) result=-EINVAL;
+        else {
+            t->descriptors.request=*control; t->descriptors.job=operation;
+            int ready=md_fd_order_begin(t->resources.files,&t->descriptors.order,fd_wakeup);
+            if (ready<0) { t->descriptors.job=0; result=ready; }
+            else { if (ready) fd_start(t); else retry_wait(t,RETRY_FD); return; }
+        }
     } else if (operation==MD_FD_DUPLICATE_BEGIN) {
         long nr=t->execution.request.nr;
         unsigned command=(unsigned)t->execution.request.args[1];
-        int duplicate=nr==SYS_dup || nr==SYS_dup3 || nr==SYS_pidfd_getfd
-            || (nr==SYS_fcntl && (command==F_DUPFD || command==F_DUPFD_CLOEXEC));
+        int duplicate=nr==SYS_pidfd_getfd || md_descriptor_duplicate_call(nr,command);
         if (t->phase!=DISPATCHING || !duplicate || (nr==SYS_pidfd_getfd ? id || !t->descriptors.foreign : !id)
                 || control->args[1] || control->args[2]
                 || t->descriptors.order.table || t->descriptors.running || t->descriptors.job) result=-EINVAL;

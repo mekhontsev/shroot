@@ -246,6 +246,38 @@ static void descriptor_lease(void) {
     struct md_entry_channel c={0};
     assert(md_entry_view_descriptor(&c)==-1);
     md_fd_view_publish(&c.descriptor,43,FD_CLOEXEC,S_IFREG);
+    uint64_t args[6]={42,F_DUPFD_CLOEXEC,3};
+    assert(!md_fd_view_native_mutation(&c.descriptor,SYS_close,args));
+    struct md_fd_absence absent={.source=0,.result=1025,.occupied=UINT64_C(1)<<md_fd_group(1024)};
+    md_fd_view_publish_absence(&c.descriptor,&absent);
+    assert(md_entry_view_descriptor(&c)==-1 && md_fd_view_native_mutation(&c.descriptor,SYS_close,args));
+    args[0]=1025; assert(md_fd_view_native_mutation(&c.descriptor,SYS_close,args));
+    args[0]=1024; assert(!md_fd_view_native_mutation(&c.descriptor,SYS_close,args));
+    args[0]=0; args[2]=2048;
+    assert(md_fd_view_native_mutation(&c.descriptor,SYS_fcntl,args)==MD_FD_CHECK_ROUTE);
+    absent.duplicates=1; md_fd_view_publish_absence(&c.descriptor,&absent);
+    assert(md_fd_view_native_mutation(&c.descriptor,SYS_fcntl,args)==MD_FD_LOCAL);
+    args[2]=1025; assert(!md_fd_view_native_mutation(&c.descriptor,SYS_fcntl,args));
+    args[2]=(unsigned)-1; assert(!md_fd_view_native_mutation(&c.descriptor,SYS_fcntl,args));
+    args[1]=1024; assert(!md_fd_view_native_mutation(&c.descriptor,SYS_dup3,args));
+    args[1]=8; assert(md_fd_view_native_mutation(&c.descriptor,SYS_dup3,args));
+    assert(!md_fd_view_native_mutation(&c.descriptor,SYS_dup,args));
+    absent.occupied=UINT64_C(1)<<4;
+    absent.checkable=absent.occupied; absent.duplicates=0;
+    assert(md_fd_checked_prefix(&absent,3,5)==absent.occupied);
+    assert(!md_fd_checked_prefix(&absent,3,4) && !md_fd_checked_prefix(&absent,5,9));
+    md_fd_view_publish_absence(&c.descriptor,&absent);
+    args[1]=F_DUPFD; args[2]=3;
+    assert(md_fd_view_native_mutation(&c.descriptor,SYS_fcntl,args)==MD_FD_CHECK_ROUTE_RESULT);
+    absent.duplicates=1; md_fd_view_publish_absence(&c.descriptor,&absent);
+    assert(md_fd_view_native_mutation(&c.descriptor,SYS_fcntl,args)==MD_FD_CHECK_RESULT);
+    args[2]=5;
+    assert(md_fd_view_native_mutation(&c.descriptor,SYS_fcntl,args)==MD_FD_LOCAL);
+    args[1]=4; assert(!md_fd_view_native_mutation(&c.descriptor,SYS_dup3,args));
+    assert(md_fd_group(INT32_MAX)-MD_FD_EXACT_SLOTS==MD_FD_WIDE_GROUPS-1);
+    md_fd_view_revoke(&c.descriptor);
+    assert(!md_fd_view_native_mutation(&c.descriptor,SYS_close,args));
+    md_fd_view_publish(&c.descriptor,43,FD_CLOEXEC,S_IFREG);
     assert(md_entry_view_descriptor(&c)==42 && c.descriptor.flags==FD_CLOEXEC);
     md_fd_view_publish(&c.descriptor,MD_FD_VIEW_RESULT,0,S_IFREG);
     c.native.number=SYS_openat; c.native.result=42;
@@ -259,12 +291,22 @@ static void descriptor_lease(void) {
     c.native.result=42; c.native.number=SYS_close; assert(md_entry_view_descriptor(&c)==-1);
     c.native.number=SYS_openat; md_fd_view_revoke(&c.descriptor);
     assert(md_entry_view_descriptor(&c)==-1);
-    uint64_t args[6]={42,FIONREAD,0};
-    assert(md_fd_view_query(SYS_ioctl,args,S_IFREG));
-    assert(!md_fd_view_query(SYS_ioctl,args,S_IFCHR));
-    assert(!md_fd_view_query(SYS_ioctl,args,S_IFIFO));
+    args[0]=42; args[1]=FIONREAD; args[2]=0;
+    assert(md_fd_view_query(SYS_ioctl,args,S_IFREG,0));
+    assert(!md_fd_view_query(SYS_ioctl,args,S_IFCHR,0));
+    assert(!md_fd_view_query(SYS_ioctl,args,S_IFIFO,0));
     args[1]=F_GETFL;
-    assert(md_fd_view_query(SYS_fcntl,args,S_IFIFO));
+    assert(md_fd_view_query(SYS_fcntl,args,S_IFIFO,0));
+    assert(!md_fd_view_query(SYS_fcntl,args,0,0));
+    args[1]=F_GETFD; assert(md_fd_view_query(SYS_fcntl,args,0,0));
+    args[1]=F_SETFD; args[2]=FD_CLOEXEC;
+    assert(md_fd_view_query(SYS_fcntl,args,0,FD_CLOEXEC));
+    assert(!md_fd_view_query(SYS_fcntl,args,0,0));
+    md_entry_set_worker_fd(&c,63,1); assert(md_entry_worker_fd(&c,63));
+    md_entry_set_worker_fd(&c,127,0); assert(md_entry_worker_fd(&c,63));
+    md_entry_set_worker_fd(&c,1024,1); assert(md_entry_worker_fd(&c,1024));
+    assert(!md_entry_worker_fd(&c,63) && !md_entry_worker_fd(&c,0));
+    md_entry_set_worker_fd(&c,1024,0); assert(!md_entry_worker_fd(&c,1024));
     puts("PASS native descriptor lease: exact FD or successful open, cancellation, failure and revocation");
 }
 static pthread_barrier_t phase;
@@ -301,7 +343,7 @@ static void retirement(void) {
     puts("PASS native retirement: synchronous receipt, idle owner and 1000 next-request publication races");
 }
 static void withdrawal(void) {
-    for (unsigned order=0;order<3;++order) {
+    for (unsigned order=0;order<4;++order) {
         channel.sequence=1; channel.call.reserved=MD_ENTRY_SYSCALL;
         atomic_store(&channel.state,MD_ENTRY_RETIRING);
         if (order==0) assert(!md_entry_native_retire(&channel,1,MD_ENTRY_COMPLETED,42));
@@ -311,9 +353,19 @@ static void withdrawal(void) {
         if (order==1) assert(!md_entry_native_retire(&channel,1,MD_ENTRY_COMPLETED,42));
         assert(md_entry_withdraw_fd(&channel));
         assert(channel.sequence==1 && !channel.input.sequence);
-        assert(atomic_load(&channel.state)==(order==2 ? MD_ENTRY_RETIRING : MD_ENTRY_IDLE));
+        assert(atomic_load(&channel.state)==(order>=2 ? MD_ENTRY_RETIRING : MD_ENTRY_IDLE));
         if (order==2) assert(!md_entry_native_retire(&channel,1,MD_ENTRY_COMPLETED,42));
-        assert(atomic_load(&channel.state)==MD_ENTRY_IDLE && channel.receipt==1);
+        if (order!=3) assert(atomic_load(&channel.state)==MD_ENTRY_IDLE && channel.receipt==1);
+
+        /* Reuse the withdrawn sequence for a different owner. Even the
+         * latest retirement must not publish an old response over that call. */
+        ++channel.sequence; channel.call.reserved=MD_ENTRY_BUFFER_CONTROL;
+        md_entry_publish_request(&channel,MD_ENTRY_REQUEST);
+        if (order==3) assert(!md_entry_native_retire(&channel,1,MD_ENTRY_COMPLETED,42));
+        assert(channel.sequence==2 && channel.receipt==1 && !channel.input.sequence);
+        assert(atomic_load(&channel.state)==MD_ENTRY_REQUEST);
+        assert(md_entry_prepare_wait(&channel,MD_ENTRY_SUPERVISOR_OWNER)&MD_ENTRY_PENDING_CALL);
+        assert(!(md_entry_prepare_wait(&channel,MD_ENTRY_WORKER_OWNER)&MD_ENTRY_PENDING_CALL));
     }
     /* First requests and requests following a non-native reply have no debt. */
     for (unsigned sequence=1;sequence<=2;++sequence) {
@@ -375,12 +427,44 @@ static void park_handoff(void) {
     assert(!pthread_join(peer,NULL) && !pthread_barrier_destroy(&phase));
     puts("PASS exchange park: 2000 worker/supervisor request/completion handoffs cannot lose both readiness and wake");
 }
+static void *read_once(void *arg) {
+    md_cooperative_native(arg);
+    return NULL;
+}
+static void cancellation_custody(void) {
+    for (unsigned cancel_first=0;cancel_first<2;++cancel_first) {
+        int pipefd[2]; assert(!pipe2(pipefd,O_CLOEXEC));
+        char byte=0;
+        struct md_entry_native n={.number=SYS_read,.args={pipefd[0],(uintptr_t)&byte,1}};
+        md_native_offer(&n,0);
+        if (cancel_first) assert(md_native_cancel_ready(&n)==MD_NATIVE_CANCELLED);
+        pthread_t caller; assert(!pthread_create(&caller,NULL,read_once,&n));
+        if (!cancel_first) {
+            /* EVENT_WAIT: the caller has claimed the offer; the empty pipe
+             * prevents completion even if the host schedules it first. */
+            while (atomic_load_explicit(&n.state,memory_order_acquire)!=MD_NATIVE_RUNNING) sched_yield();
+            assert(md_native_cancel_ready(&n)==MD_NATIVE_RUNNING);
+        }
+        assert(write(pipefd[1],"ab",2)==2 && !close(pipefd[1]));
+        assert(!pthread_join(caller,NULL));
+        unsigned expected=cancel_first ? MD_NATIVE_CANCELLED : MD_NATIVE_DONE;
+        assert(md_native_cancel_ready(&n)==expected && n.result==(cancel_first ? -EINTR : 1));
+        md_cooperative_native(&n);
+        assert(atomic_load(&n.state)==expected && byte==(cancel_first ? 0 : 'a'));
+        char remaining[3];
+        int count=cancel_first ? 2 : 1;
+        assert(read(pipefd[0],remaining,sizeof(remaining))==count);
+        assert(!memcmp(remaining,cancel_first ? "ab" : "b",count) && !close(pipefd[0]));
+    }
+    puts("PASS native effect custody: cancel before claim reads nothing; after claim exactly one byte is consumed");
+}
 int main(void) {
     alarm(30); unsigned count=0;
     descriptor_lease();
     string_operands();
     open_admission();
     park_handoff();
+    cancellation_custody();
     for (int kind=0;kind<11;++kind)
         for (uintptr_t pc=(uintptr_t)md_cooperative_native;pc<=(uintptr_t)md_cooperative_native_end;pc+=4) {
             boundary(pc,kind); ++count;

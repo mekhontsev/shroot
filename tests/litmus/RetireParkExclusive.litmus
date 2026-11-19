@@ -1,0 +1,13 @@
+AArch64 RetireParkExclusive
+(* Same successful retirement on a host without LSE. Failed store-exclusive
+   attempts do not publish the response or reach the sleeping-bit check. *)
+{
+0:X1=state; 0:X2=sleeping; 0:X3=1;
+1:X1=sleeping; 1:X2=state; 1:X3=1;
+}
+ P0               | P1           ;
+ LDAXR W5,[X1]    | STLR W3,[X1] ;
+ STLXR W6,W3,[X1] | LDAR W4,[X2] ;
+ LDAR W4,[X2]     |              ;
+filter (0:X5=0 /\ 0:X6=0)
+exists (0:X4=0 /\ 1:X4=0)

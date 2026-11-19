@@ -39,6 +39,7 @@ struct md_fd_order {
 int md_fd_order_begin(struct md_fd_origins *, struct md_fd_order *, struct md_resource_wakeup *);
 enum md_resource_order_state md_fd_order_state(const struct md_fd_order *);
 int md_fd_order_start(struct md_fd_order *);
+int md_fd_order_move(struct md_fd_order *from,struct md_fd_order *to);
 /* Cancel returns 1 if kernel completion is still required, otherwise 0.
  * A newly ready successor wakes its owner without exposing its request pointer.
  * Complete follows the kernel result AND its metadata publication, except an
@@ -122,6 +123,10 @@ int md_fd_origins_exclusive(const struct md_fd_order *);
  * metadata. Invalidates optimistic discovery; does not claim kernel success
  * or remove an origin. Filters and the kernel retain the actual result. */
 int md_fd_origins_close_untracked(const struct md_fd_order *,int number);
+/* Inspect both actual slots under exclusive ownership, after duplication. */
+struct md_fd_absence;
+int md_fd_origins_absence(const struct md_fd_order *,int source,int destination,struct md_fd_absence *);
+int md_fd_origins_recheck(const struct md_fd_order *,pid_t actor,int number);
 /* Borrow value-only native authority under a RUNNING turn. Unknown,
  * provisional and uncertain slots, including typed objects with path origins,
  * are not native authority. Does not retain an object or capture a data OFD.
@@ -129,6 +134,8 @@ int md_fd_origins_close_untracked(const struct md_fd_order *,int number);
 /* The anchor is borrowed until this running file-table turn completes. No
  * slot mutation can invalidate it while the caller retains that turn. */
 struct md_fd_native { unsigned kind, flags; struct md_fs_anchor *origin; };
+/* Confirmed slot flags. Only a non-null origin also proves native OFD access. */
+int md_fd_origins_describe(const struct md_fd_order *,int number,struct md_fd_native *);
 int md_fd_origins_native(const struct md_fd_order *,int number,struct md_fd_native *);
 int md_fd_origins_native_regular(const struct md_fd_order *,int number);
 /* Regular data files, metadata-only anonymous pipes and proven kernel IO,
@@ -154,6 +161,8 @@ int md_fd_origins_channel_candidate(struct md_fd_origins *, int *number, struct 
 int md_fd_origins_channel_resolve(struct md_fd_origins *, int number, struct md_fd_channel *, int same, unsigned flags);
 void md_fd_origins_finish(struct md_fd_origin_update *, int result_fd);
 void md_fd_origins_finish_closed(struct md_fd_origin_update *,int result_fd,struct md_fd_closed *);
+void md_fd_origins_commit(struct md_fd_origin_update *,int result_fd,struct md_fd_closed *,
+        const struct md_fd_order *,int source,struct md_fd_absence *);
 /* Terminal mutation with no trustworthy result may have installed an alias.
  * Notify inventory-dependent owners before discarding unpublished metadata. */
 void md_fd_origins_abandon(struct md_fd_origin_update *);

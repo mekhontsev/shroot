@@ -937,6 +937,18 @@ uncertain, provisional, channel and typed-wrapper slots are not native authority
 regular IO additionally requires a known regular-file kind. A dup3 destination
 must also have an unambiguous selector observation.
 
+Close and duplication start at the task owner unless the resident caller saw the
+filesystem worker issue the source FD or holds its native lease. A word of recent
+worker-issued slots only selects the destination. Inherited FDs, reuse, or a
+different range of numbers need no synchronization of hints: both owners validate
+the live slot before acting. No periodic worker probe is needed.
+
+Descriptor-slot authority is narrower than open-file-description authority.
+A confirmed virtual object's slot can supply `F_GETFD` and an unchanged
+`F_SETFD`; an exclusive table can publish those values to the resident caller.
+That publication grants no native `F_GETFL`, seek, or device ioctl. Changes to
+flags and provider-specific effects retain their respective owners.
+
 An admitted existing regular-file open, seek or native descriptor query on an
 exclusively owned table can publish one value-only `md_fd_view`. Open binds it only to its
 completed native result, never an expected FD or a provisional file birth.
@@ -952,8 +964,8 @@ Changing flags retains the ordinary mutation owner. Every new channel request,
 ordinary kernel notification, task stop/resume or borrowed execution revokes
 the lease. Shared tables never receive it. The explicit entry API does not use
 this shortcut: only the resident private frame defers signal handlers until the
-call completes. No descriptor bitmap, cached offset, or predicted future close
-is involved. Direct cursor calls use the existing raw service gate after the
+call completes. No routing hint grants a native effect or supplies a cached
+offset. Direct cursor calls use the existing raw service gate after the
 same original-call policy check as other admitted effects.
 
 The original file-table turn owns the operation until result bookkeeping and pin
@@ -966,6 +978,12 @@ outcomes abandon the metadata claim, never replay the effect. No allocation is
 required to publish an already-created native FD.
 
 #### Cancellation And Completed Effects
+
+A native offer initializes its withdrawn result (`-EINTR`) before publishing
+`READY`. Cancellation racing the caller may claim only `READY`; it does not
+write the result slot. Once the caller claims `RUNNING`, a live observer must
+wait for completion or reconcile an actual stopped boundary. The state, not
+the errno, tells the resource owner whether an effect occurred.
 
 A cancelled-before-effect plan returns explicit pre-execution handoff after its
 owners retire, not a synthetic `EINTR` to libc. If the signal handler returns,
@@ -1019,13 +1037,24 @@ ownership, ACLs and catalogue directories retain that path. Failure to capture
 the pin removes the hidden name before returning the original error; a cleanup
 failure is reported without retry. Conflicts never remove another creator's file.
 
-If publication fails, the existing task-action/FD-loan owner closes the exact
-provisional FD under its original table turn before the error is returned.
+If publication fails, the worker keeps the original file-table turn while
+the supervisor retires the provisional FD. A close requires both the original
+table and the matching loan in that slot. A busy holder delays retirement;
+if no live holder remains, kernel teardown owns the close. Reuse of the PID
+or FD number does not transfer this obligation. The supervisor publishes one
+receipt; only the worker releases the turn and admits its successor.
 The same retirement owner serves readiness aliases and other temporary FDs.
 An available resident caller executes the close through its native-effect
 journal, without a ptrace stop. Base and orphan cleanup retain the borrowed
 actor path. Both use the same mutation receipt and close-range fallback;
 terminal cleanup reconciles the receipt before releasing a borrowed table turn.
+For a borrowed close, observing its kernel result and restoring the actor are
+separate events. Losing the actor between them does not erase the result. If
+the requester exits first, the in-flight close retains its place in the table
+queue. If execution may have started but no result is known, Shroot does not
+close the slot again: it stops the guest rather than risking another FD when
+a holder remains. A queued exit or reap is evidence that the actor will not
+reuse the slot; an exec is not. With no live holder, kernel teardown suffices.
 Native task observation is shared by capture, mapping, robust cleanup and guest
 debugging. Repeated owners reuse installed exit observation; birth inherits both
 the installed policy and any pending update. A borrowed user boundary must still
@@ -1413,8 +1442,53 @@ generation read across native cycles, independent SQLite commit visibility,
 rollback, live caller permissions, physical-directory reuse, exact birth
 ownership and fresh external changes after release. Deterministic SIGKILL
 tests also kill owners while their operation window is still held.
-Another 2000 concurrent park/publication
-checks cover both requests and completed native effects.
+The [exchange model](tests/test_exchange_model.c) schedules the actual C
+publication and wait-registration helpers. For one channel and one eligible
+owner, it exhausts the 20 orders of two ordered three-step parties: publish,
+inspect peer, deliver wake; register wait, inspect state, park. Request wakes
+are queued; reply wakes act on an atomic futex compare-and-park. The negative
+control omits a required wake and reports an order that strands the waiter.
+This is a finite sequentially consistent handshake check, not a model of Linux
+scheduling, weak memory, transport failures or task teardown. The
+[native fixture](tests/test_cooperative_native.c) separately races 2000
+request/effect publications against park and checks withdrawn-sequence reuse
+before and after the old effect retires.
+
+The [two-operation model](tests/test_exchange_lifecycle.c) enumerates legal
+orders at the channel-helper boundaries. A native result can be claimed early
+or received after worker retirement; a cancelled effect cannot return early.
+The next worker or supervisor request can reuse a withdrawn, unadmitted FD
+sequence, but cannot be admitted before the old owner releases its turn.
+An old futex wake may prompt the new caller to recheck: it is not a response.
+The oracle checks request identity, payload, receipt and result, including at
+the last valid sequence. Owner exclusion and eventual delivery are assumptions
+of this model. The [broker identity test](tests/test_broker_identity.c) drives
+the production control callback and completion queue: a second request is
+published before the first callback retires, and a synthetic stop, exec or
+exit status is retained. Reusing the PID before dispatch, before delivery or
+after delivery must neither transfer the old event nor stall the new caller.
+The [worker tests](tests/test_namespace_broker.c) exercise queued filesystem
+turns and a delegated request whose successor is published before retirement.
+These checks establish observable ownership at those boundaries, not a proof
+of every kernel interleaving or of ARM memory ordering.
+
+The [AArch64 litmus tests](tests/litmus) separately check memory ordering with
+the herdtools7 `aarch64.cat` model. They project the aligned accesses of one
+handoff: request/reply publication versus park, native completion versus
+worker park (fenced or early claim), successful native reply (LSE and exclusive
+CAS), and payload visibility after observing publication. A lost wake decision
+or a stale published payload is forbidden in these projections. Weakening a
+single acquire load in the simple park and payload tests admits the bad
+outcome. The fixtures describe instruction sequences, not compiled C: recheck
+the lowering if the atomics, assembly or compiler target changes. These are
+ordering checks, not a guarantee of scheduling progress or signal delivery.
+
+Run `python tests/test_exchange_ordering.py` with `herd7` on PATH. CTest also
+registers `model_exchange_ordering` when it finds that tool at configure time.
+Alternatively, pass `--jerd /path/to/jerd.js` for the
+[upstream web build](https://diy.inria.fr/www/) under Node.js. Neither frontend
+is a build or runtime dependency.
+
 `--statistics` reports direct completions, declines and kernel notification wakes
 separately. `cooperativeWakes` counts notification wakes, not direct queued
 control hints or all cross-thread exchanges. The ready handshake enables resident

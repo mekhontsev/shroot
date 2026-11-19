@@ -7,6 +7,9 @@
 
 enum md_task_call_boundary { MD_TASK_CALL_USER, MD_TASK_CALL_ENTRY,
     MD_TASK_CALL_EXIT, MD_TASK_CALL_SECCOMP, MD_TASK_CALL_EMULATED_ENTRY };
+/* Describes the effect, independently of whether restoration of the actor's
+ * original boundary completed. Only RETURNED carries a final result. */
+enum md_task_call_effect { MD_EFFECT_UNSTARTED, MD_EFFECT_UNCERTAIN, MD_EFFECT_RETURNED };
 /* One task-affine syscall, driven by the supervisor event loop. The owner
  * retains the actor, argument storage and original event until completion.
  * No guest FD, helper thread or application-memory write is allocated.
@@ -32,6 +35,7 @@ struct md_task_call {
     long (*trace)(int,pid_t,void *,void *);
     pid_t actor;
     unsigned stage;
+    enum md_task_call_effect effect;
     int restarting, restart_pending, replaced_entry, cancelled_entry, retire_entry, admitted_entry;
     int interrupt_requested, interrupt_pending, interrupted_entry;
     enum md_task_call_boundary boundary;

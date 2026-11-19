@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/syscall.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 int md_task_pidfd_open(pid_t actor, int *thread_handle) {
@@ -44,4 +45,11 @@ int md_task_descriptor_pin(pid_t actor,int number) {
     char path[64]; snprintf(path,sizeof(path),"/proc/%d/fd/%d",actor,number);
     int fd=open(path,O_PATH|O_CLOEXEC);
     return fd<0 ? -errno : fd;
+}
+int md_task_descriptor_stat(pid_t actor,int number,struct stat *st) {
+    if (actor<=0 || number<0 || !st) return -EINVAL;
+    char path[64]; snprintf(path,sizeof(path),"/proc/%d/fd/%d",actor,number);
+    int r;
+    do r=stat(path,st); while (r<0 && errno==EINTR);
+    return r<0 ? -errno : 0;
 }

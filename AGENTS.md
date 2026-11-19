@@ -18,6 +18,13 @@ paths. Frontends adapt arguments, descriptors and results; they must not duplica
 filesystem, policy, lifecycle or namespace implementations. Ordinary native IO
 must remain direct. Guest policy checks and signals remain meaningful.
 
+Implement guest behavior using mechanisms available on Android under app UID,
+shell UID 2000, or both. Prefer one implementation across both identities and
+ordinary ARM64 Linux. Add a distinct execution path only for a real capability
+difference between supported Android identities; select it by capability, not
+by UID or OS name. Do not add a Linux-only guest execution path merely because
+the host permits it.
+
 The public C management API starts the native runtime out of process. Do not
 load its syscall adapter or process-global supervision into an embedding host.
 Runtime thread topology and filesystem-worker readiness belong to the existing

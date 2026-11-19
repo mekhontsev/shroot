@@ -4,7 +4,8 @@
 enum md_fd_control { MD_FD_INPUT=1, MD_FD_SENT, MD_FD_RECEIVE, MD_FD_RECEIVED, MD_FD_END,
     MD_FD_USE, MD_FD_RELEASE, MD_FD_PAIR_BEGIN, MD_FD_PAIR_END,
     MD_FD_SELECTOR_QUERY, MD_FD_SELECTOR_INSTALL, MD_FD_KIND, MD_FD_SELECTOR_EXIT,
-    MD_FD_SELECTORS, MD_FD_DUPLICATE_BEGIN, MD_FD_DUPLICATE_END, MD_FD_SELECTOR_BEFORE_ALLOCATION };
+    MD_FD_SELECTORS, MD_FD_DUPLICATE_BEGIN, MD_FD_DUPLICATE_END, MD_FD_SELECTOR_BEFORE_ALLOCATION,
+    MD_FD_RECHECK_SLOT };
 /* These C replies never inject a task call or restore application registers. */
 static inline int md_fd_control_scalar(unsigned long command) {
     return command==MD_FD_KIND || command==MD_FD_SELECTORS
@@ -17,7 +18,7 @@ static inline int md_fd_control_scalar(unsigned long command) {
 static inline int md_fd_control_shared(unsigned long command) {
     return md_fd_control_scalar(command) || command==MD_FD_INPUT
         || command==MD_FD_RECEIVE || command==MD_FD_USE || command==MD_FD_PAIR_BEGIN
-        || command==MD_FD_DUPLICATE_BEGIN;
+        || command==MD_FD_DUPLICATE_BEGIN || command==MD_FD_RECHECK_SLOT;
 }
 /* USE/RELEASE bracket short task-affine native descriptor operations only.
  * They allocate no exchange and must not cover blocking reads or rendezvous. */

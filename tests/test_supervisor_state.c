@@ -777,6 +777,12 @@ static long continuation_trace(int request,pid_t pid,void *address,void *data) {
     }
     return 0;
 }
+static long native_receipt_value;
+static unsigned native_receipts;
+static void collect_native_receipt(struct thread *t,long value) {
+    assert(!t->entry.effect && !t->entry.waiting);
+    ++native_receipts; native_receipt_value=value;
+}
 static void native_terminal_journal(void) {
     struct md_interception_abi saved=abi;
     abi.native_begin=0x1000; abi.native_call=0x1004; abi.native_end=0x1010;
@@ -797,6 +803,27 @@ static void native_terminal_journal(void) {
         if (terminal || outside) assert(!memcmp(&continuation_registers,&before,sizeof(before)));
         else assert(continuation_registers.pc==abi.native_end);
         if (terminal) assert(!cooperative_native_observe(t.pid,&native,1));
+    }
+    /* Both observers can visit one offer before EFFECT_DONE consumes it.
+     * A completed -EINTR and an unstarted cancellation have distinct custody. */
+    const unsigned starts[]={MD_NATIVE_READY,MD_NATIVE_RUNNING,MD_NATIVE_DONE,MD_NATIVE_DONE};
+    for (unsigned i=0;i<4;++i) for (unsigned stop_first=0;stop_first<2;++stop_first) {
+        struct md_entry_channel channel={.call.reserved=MD_ENTRY_EFFECT_DONE};
+        md_broker_entry_effect(broker,&channel,SYS_close,(uint64_t[6]){7});
+        t.entry.control=&channel; t.entry.effect=collect_native_receipt; t.entry.waiting=1;
+        const int cancelled=i<2;
+        const long expected=i==3 ? 0 : -EINTR;
+        if (starts[i]==MD_NATIVE_RUNNING) continuation_registers.pc=abi.native_call;
+        if (starts[i]==MD_NATIVE_DONE) channel.native.result=expected;
+        atomic_store(&channel.native.state,starts[i]);
+        if (stop_first) assert(!entry_effect_observe(&t));
+        assert(entry_effect_reconcile(&t)==(cancelled ? MD_NATIVE_CANCELLED : MD_NATIVE_DONE));
+        assert(!entry_effect_observe(&t));
+        unsigned before=native_receipts;
+        entry_control(t.pid,&channel);
+        assert(native_receipts==before+1 && native_receipt_value==expected);
+        assert(t.entry.effect_cancelled==cancelled && atomic_load(&channel.native.state)==MD_NATIVE_EMPTY);
+        t.entry.control=NULL;
     }
     checkpoints.trace=checkpoint_native_trace; thread_index[t.pid%THREAD_BUCKETS]=NULL; abi=saved;
     puts("PASS terminal native journal: exact results retained, displaced execution unknown, no terminal register mutation");
@@ -3394,9 +3421,18 @@ static void resident_loan_retirement(void) {
 static void resident_loan_abandonment(void) {
     int previous_fd_ready=fd_ready;
     fd_ready=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK); assert(fd_ready>=0);
-    checkpoints.trace=no_trace;
-    const unsigned states[]={MD_NATIVE_READY,MD_NATIVE_CANCELLED,MD_NATIVE_DONE,MD_NATIVE_RUNNING,MD_NATIVE_UNKNOWN};
-    for (unsigned i=0;i<sizeof(states)/sizeof(*states);++i) {
+    struct md_interception_abi saved=abi;
+    abi.native_begin=0x1000; abi.native_call=0x1004; abi.native_end=0x1010;
+    const struct { unsigned state; uintptr_t pc; long value; int remaining; } cases[]={
+        {MD_NATIVE_READY,0,0,1}, {MD_NATIVE_CANCELLED,0,0,1},
+        {MD_NATIVE_DONE,0,0,0}, {MD_NATIVE_DONE,0,-EINTR,0},
+        {MD_NATIVE_RUNNING,0,0,-ESTALE}, {MD_NATIVE_UNKNOWN,0,0,-ESTALE},
+        {MD_NATIVE_RUNNING,abi.native_call,14,1},
+        {MD_NATIVE_RUNNING,abi.native_call+4,-EINTR,0},
+        {MD_NATIVE_RUNNING,abi.native_end+4,14,-ESTALE}
+    };
+    for (unsigned i=0;i<sizeof(cases)/sizeof(*cases);++i) {
+        checkpoints.trace=no_trace;
         struct md_fd_origins *files=md_fd_origins_new(); assert(files);
         struct md_fd_loan *loan=md_fd_loan_new(files); assert(loan);
         struct md_fd_origin_update update;
@@ -3408,21 +3444,100 @@ static void resident_loan_abandonment(void) {
         owner->loan=loan; owner->loan_table=md_fd_origins_pin(files); owner->number=14;
         assert(md_fd_order_begin(files,&t.descriptors.order,NULL)==1 && !md_fd_order_start(&t.descriptors.order));
         loan_retire(owner,&t,&t.descriptors.order,resident_loan_complete); loan_start(owner);
-        channel.native.result=0; atomic_store(&channel.native.state,states[i]);
+        if (cases[i].state==MD_NATIVE_DONE) channel.native.result=cases[i].value;
+        atomic_store(&channel.native.state,cases[i].state);
+        if (cases[i].pc) {
+            assert(!thread_index[t.pid%THREAD_BUCKETS]); thread_index[t.pid%THREAD_BUCKETS]=&t;
+            t.kernel_stopped=t.terminal_stop=1; checkpoints.trace=continuation_trace;
+            continuation_registers=(struct user_pt_regs){.pc=cases[i].pc,.regs={cases[i].value}};
+        }
         fd_discard(&t);
+        if (cases[i].pc) thread_index[t.pid%THREAD_BUCKETS]=NULL;
         assert(!t.action && !t.entry.effect && !owner->resident && !owner->loan_turn && !owner->requester);
         assert(!t.descriptors.order.table);
         struct md_fd_order turn={0};
         assert(md_fd_order_begin(files,&turn,NULL)==1 && !md_fd_order_start(&turn));
         int remaining=md_fd_origins_loan_matches(&turn,14,loan);
-        assert(remaining==(i<2 ? 1 : i==2 ? 0 : -ESTALE));
+        assert(remaining==cases[i].remaining);
         assert(!md_fd_order_complete(&turn)); task_action_release(owner);
         md_fd_origins_release(files);
         assert(!task_action_calls && !loan_retirements);
     }
-    checkpoints.trace=checkpoint_native_trace;
+    checkpoints.trace=checkpoint_native_trace; abi=saved;
     close(fd_ready); fd_ready=previous_fd_ready;
     puts("PASS resident loan cancellation: receipt before borrowed-turn release, withdrawn plans and uncertain effects never replayed");
+}
+struct retirement_receipt {
+    struct md_fd_order original,successor;
+    unsigned calls;
+};
+static void observe_retirement(void *context,int error) {
+    struct retirement_receipt *r=context;
+    assert(!error && !r->calls);
+    ++r->calls;
+    assert(md_fd_order_state(&r->original)==MD_RESOURCE_ORDER_RUNNING);
+    assert(md_fd_order_state(&r->successor)==MD_RESOURCE_ORDER_QUEUED);
+}
+static void provisional_retirement_order(unsigned submit,unsigned exit_caller) {
+    struct retirement_receipt r={0};
+    struct md_fd_origins *home=md_fd_origins_new(); assert(home);
+    struct md_fd_loan *loan=md_fd_loan_new(home); assert(loan);
+    struct md_fd_channel *marker=NULL; assert(!md_fd_channel_new(&marker));
+    struct md_fd_origin_update update;
+    assert(md_fd_order_begin(home,&r.original,NULL)==1 && !md_fd_order_start(&r.original));
+    assert(!md_fd_origins_prepare_channel(home,marker,0,&update));
+    assert(!md_fd_origins_prepare_custody(&update,loan,&r.original)); md_fd_origins_finish(&update,14);
+    assert(!md_fd_order_begin(home,&r.successor,NULL));
+
+    struct thread caller={.pid=123,.resources.files=home,.signals.return_pending=1};
+    struct thread peer={.pid=124,.resources.files=home,.signals.return_pending=1};
+    struct md_fd_origins *copy=md_fd_origins_fork(home,0); assert(copy);
+    struct thread replacement={.pid=caller.pid,.resources.files=copy,.next=&peer};
+    struct md_broker_retirement request={.task=caller.pid,.number=14,.turn=&r.original,.loan=loan,
+        .complete=observe_retirement,.context=&r};
+    /* Same PID, same FD, even the same copied loan. Only the original table
+     * counts: the surviving peer delays completion, the replacement cannot. */
+    threads=&caller; caller.next=&peer;
+    for (unsigned i=0;i<3;++i) {
+        if (i==submit) assert(!broker_retire(&request));
+        else if (i==exit_caller) { replacement.next=caller.next; threads=&replacement; }
+        else threads->next=NULL;
+        /* A lost close receipt cannot leave a kernel FD in a table that no
+         * task still holds. The same-numbered slot in the copy is independent. */
+        if (i==2 && submit!=2) assert(!md_fd_origins_abandon_range(home,14,14));
+        task_action_schedule();
+        assert(r.calls==(i==2) && task_action_calls==(i>=submit && i<2));
+    }
+    task_action_schedule();
+    assert(r.calls==1 && !task_action_calls && !loan_retirements);
+    assert(md_fd_order_state(&r.successor)==MD_RESOURCE_ORDER_QUEUED);
+    assert(!md_fd_order_complete(&r.original));
+    assert(md_fd_order_state(&r.successor)==MD_RESOURCE_ORDER_READY);
+    assert(!md_fd_order_start(&r.successor) && !md_fd_order_complete(&r.successor));
+
+    struct md_fd_order turn={0};
+    assert(md_fd_order_begin(copy,&turn,NULL)==1 && !md_fd_order_start(&turn));
+    assert(md_fd_origins_loan_matches(&turn,14,loan)==1);
+    struct md_fd_loan *fresh=md_fd_loan_new(copy); assert(fresh);
+    assert(!md_fd_origins_prepare_channel(copy,marker,0,&update));
+    assert(!md_fd_origins_prepare_custody(&update,fresh,&turn)); md_fd_origins_finish(&update,14);
+    request.turn=&turn;
+    assert(broker_retire(&request)==-ESTALE && !task_action_calls && r.calls==1);
+    assert(md_fd_origins_loan_matches(&turn,14,fresh)==1 && !md_fd_order_complete(&turn));
+    threads=NULL; md_fd_channel_release(marker); md_fd_loan_release(fresh); md_fd_loan_release(loan);
+    md_fd_origins_release(copy); md_fd_origins_release(home);
+}
+static void provisional_retirement_identity(void) {
+    struct thread *saved=threads;
+    int previous_fd_ready=fd_ready;
+    fd_ready=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK); assert(fd_ready>=0);
+    checkpoints.trace=no_trace;
+    for (unsigned submit=0;submit<3;++submit) for (unsigned exit_caller=0;exit_caller<3;++exit_caller)
+        if (submit!=exit_caller) provisional_retirement_order(submit,exit_caller);
+    threads=saved;
+    checkpoints.trace=checkpoint_native_trace;
+    close(fd_ready); fd_ready=previous_fd_ready;
+    puts("PASS provisional FD retirement: six admission/exit schedules, exact table and slot, one receipt before successor admission");
 }
 static void queued_loan_retirement(void) {
     int previous_fd_ready=fd_ready;
@@ -3832,11 +3947,13 @@ static void fd_native_retirement(void) {
     assert(result.fd>=0);
     md_view_capture(&fs,NULL,NULL,&result,&output);
     assert(!result.error && origin); close(result.fd);
-    for (unsigned operation=0;operation<2;++operation) for (unsigned mode=0;mode<6;++mode) {
+    /* Compact kernel close, ordered F_SETFD, and ordinary ordered close. */
+    for (unsigned operation=0;operation<3;++operation) for (unsigned mode=0;mode<6;++mode) {
         struct thread t={.pid=123,.phase=IDLE};
         struct md_fd_origins *files=md_fd_origins_new(),*peer=NULL; assert(files);
         t.resources.files=files;
-        int tracked=operation || (mode>=2 && mode!=5);
+        int setfd=operation==1;
+        int tracked=setfd || (mode>=2 && mode!=5);
         if (tracked) {
             struct md_fd_origin_update update;
             assert(!md_fd_origins_prepare(files,origin,FD_CLOEXEC,&update));
@@ -3848,13 +3965,13 @@ static void fd_native_retirement(void) {
         if (mode==5) t.seccomp.application_filter=1;
         /* Abandoning an ordinary origin removes it; it is not an uncertain
          * infrastructure slot. Close remains metadata-free, flags do not. */
-        int direct=mode==0 || mode==5 || (!operation && mode==3);
+        int direct=mode==0 || mode==5 || (!setfd && mode==3);
         fd_test_operation=operation; fd_test_mode=mode;
         fd_expected_resume=direct ? PTRACE_CONT : PTRACE_SYSCALL;
         fd_resume_calls=0; checkpoints.trace=fd_resume_trace;
         thread_index[t.pid%THREAD_BUCKETS]=&t;
         if (operation) {
-            t.descriptors.call=(struct seccomp_data){.nr=SYS_fcntl,
+            t.descriptors.call=(struct seccomp_data){.nr=setfd ? SYS_fcntl : SYS_close,
                 .args={5,(UINT64_C(1)<<32)|F_SETFD,mode==2 ? 0 : FD_CLOEXEC}};
             memset(&t.descriptors.registers,0xa5,sizeof(t.descriptors.registers));
             assert(md_fd_order_begin(files,&t.descriptors.order,NULL)==1 && !md_fd_order_start(&t.descriptors.order));
@@ -6495,11 +6612,34 @@ static void terminal_capture_complete(struct thread *t,struct md_task_helper_res
     assert(t->pid==456 && result.value==-ECANCELED && result.descriptor==-1);
     ++terminal_capture_completions;
 }
-static void borrowed_action_terminal(void) {
+/* Advance the real executor to a chosen boundary, using synthetic kernel
+ * observations. No native descriptor is closed by this fixture. */
+static void borrowed_close_boundary(struct md_task_call *call,long nr,unsigned steps,long result) {
+    struct user_pt_regs saved={.pc=0x2004,.regs={[8]=SYS_getpid}};
+    struct md_task_call_arguments args={.number=nr,.value={14,nr==SYS_close_range ? 14 : 0}};
+    continuation_info=(struct ptrace_syscall_info){.op=PTRACE_SYSCALL_INFO_EXIT,.instruction_pointer=saved.pc};
+    continuation_mask=0;
+    assert(!md_task_call_begin(call,continuation_trace,123,MD_TASK_CALL_EXIT,&saved,0x1000,0x1004,&args));
+    for (unsigned i=0;i<steps;++i) {
+        continuation_info=(struct ptrace_syscall_info){.op=i ? PTRACE_SYSCALL_INFO_EXIT : PTRACE_SYSCALL_INFO_ENTRY,
+            .instruction_pointer=0x1004};
+        if (i) continuation_info.exit.rval=result;
+        else { continuation_info.entry.nr=nr; memcpy(continuation_info.entry.args,args.value,sizeof(args.value)); }
+        assert(!md_task_call_event(call,((SIGTRAP|0x80)<<8)|0x7f));
+    }
+}
+static __attribute__((noinline)) void borrowed_action_terminal(void) {
     const int terminal[]={(PTRACE_EVENT_EXIT<<16)|(SIGTRAP<<8)|0x7f,
         (PTRACE_EVENT_EXEC<<16)|(SIGTRAP<<8)|0x7f,SIGKILL,7<<8};
     int saved_fd=fd_ready; fd_ready=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC); assert(fd_ready>=0);
+    const struct { unsigned steps; long nr,result; int remaining; } closes[]={
+        {0,SYS_close,0,1},{1,SYS_close,0,-ESTALE},{2,SYS_close,0,0},
+        {2,SYS_close,-EINTR,0},{2,SYS_close,-EIO,0},{2,SYS_close,-EBADF,0},{2,SYS_close,-EPERM,1},
+        {2,SYS_close,-512,-ESTALE}, /* kernel restart, not a final result */
+        {0,SYS_close_range,0,1},{1,SYS_close_range,0,-ESTALE},{2,SYS_close_range,0,0}
+    };
     for (unsigned helper=0;helper<2;++helper) for (unsigned outer=0;outer<2;++outer)
+        for (unsigned c=0;c<(helper ? 1 : sizeof(closes)/sizeof(*closes));++c)
         for (unsigned i=0;i<sizeof(terminal)/sizeof(*terminal);++i) {
         struct thread actor={.pid=123,.tgid=123,.born=1,.initial_stop=1,.kernel_resume=PTRACE_CONT};
         assert(!thread_index[123%THREAD_BUCKETS]); thread_index[123%THREAD_BUCKETS]=&actor;
@@ -6515,9 +6655,10 @@ static void borrowed_action_terminal(void) {
         struct md_task_quiesce_stop stop;
         assert(!md_task_quiesce_borrow(*slot,actor.pid,&stop) && stop.kind==MD_TASK_QUIESCE_SYNTHETIC);
         struct task_action loan_owner={.actor=&actor,.remote=1,.borrowed=1,.synthetic=1,
-            .loan=loan,.loan_table=files,.native.stage=1,.outer_barrier=outer ? *slot : NULL};
+            .loan=loan,.loan_table=files,.number=14,.outer_barrier=outer ? *slot : NULL};
         struct thread requester={.pid=456};
         struct task_action *owner=&loan_owner;
+        struct md_fd_order successor={0};
         if (helper) {
             assert(!helpers && !thread_index[456%THREAD_BUCKETS]);
             thread_index[456%THREAD_BUCKETS]=&requester;
@@ -6529,22 +6670,54 @@ static void borrowed_action_terminal(void) {
                 .complete=terminal_capture_complete,.result.descriptor=-1};
             owner->capture=requester.capture;
             terminal_capture_completions=0;
+        } else {
+            struct md_fd_order *turn=&owner->files;
+            if (outer) {
+                requester.action=owner; owner->requester=&requester;
+                owner->loan_turn=turn=&requester.descriptors.order;
+            }
+            assert(md_fd_order_begin(files,turn,NULL)==1 && !md_fd_order_start(turn));
+            assert(!md_fd_order_begin(files,&successor,NULL));
+            struct md_fd_origin_update update;
+            assert(!md_fd_origins_prepare(files,NULL,FD_CLOEXEC,&update));
+            assert(!md_fd_origins_prepare_loan(&update,loan)); md_fd_origins_finish(&update,14);
+            borrowed_close_boundary(&owner->native,closes[c].nr,closes[c].steps,closes[c].result);
         }
         task_action_execution=owner;
+        if (!helper && outer) {
+            fd_discard(&requester);
+            assert(!requester.descriptors.order.table && !owner->requester && !owner->loan_turn);
+            assert(md_fd_order_state(&owner->files)==MD_RESOURCE_ORDER_RUNNING);
+        }
         struct rusage usage={.ru_stime.tv_usec=789};
         assert(task_action_event(actor.pid,terminal[i],&usage)==1);
         if (helper) {
             /* Model the independently reaped helper's completion. Its parent
              * already finished the call, so helper_call returns NULL. */
             assert(task_action_execution==owner && !owner->borrowed && !owner->synthetic);
-            assert(!terminal_capture_completions && md_task_quiesce_pending(*slot,actor.pid));
+            assert(!terminal_capture_completions && md_task_quiesce_pending(*slot,actor.pid,NULL));
             assert(!task_continuation_available(&actor) && !debugger_continuations);
             capture_borrowed_complete(owner,(struct md_task_helper_result){.value=-ECANCELED,.descriptor=-1});
             assert(terminal_capture_completions==1 && !requester.capture && !requester.action);
             thread_index[456%THREAD_BUCKETS]=NULL;
-        } else assert(!owner->actor && !owner->borrowed && !owner->synthetic);
+        } else {
+            assert(!owner->actor && !owner->borrowed && !owner->synthetic);
+            assert(md_fd_origins_loan_matches(&owner->files,14,loan)==closes[c].remaining);
+            requester.resources.files=files; requester.next=threads; threads=&requester;
+            assert(loan_close_needed(owner,&owner->files)==closes[c].remaining);
+            threads=requester.next;
+            if (closes[c].remaining==-ESTALE) {
+                actor.resources.files=files; actor.next=threads; threads=&actor;
+                int exec=(unsigned)terminal[i]>>16==PTRACE_EVENT_EXEC;
+                assert(loan_close_needed(owner,&owner->files)==(exec ? -ESTALE : 0));
+                threads=actor.next;
+            }
+            assert(md_fd_order_state(&successor)==MD_RESOURCE_ORDER_QUEUED);
+            assert(!owner->native.stage && !md_fd_order_complete(&owner->files));
+            assert(md_fd_order_state(&successor)==MD_RESOURCE_ORDER_READY && !md_fd_order_cancel(&successor));
+        }
         assert(!task_action_execution);
-        assert(!debugger_continuations && md_task_quiesce_pending(*slot,actor.pid));
+        assert(!debugger_continuations && md_task_quiesce_pending(*slot,actor.pid,NULL));
         assert(!task_continuation_available(&actor));
         assert(!md_task_quiesce_release(*slot) && !debugger_continuations);
         int status; struct rusage returned;
@@ -8774,7 +8947,7 @@ int main(void) {
     event_completion();
     lost_stop_delivery();
     orphan_loan_retirement();
-    queued_loan_retirement();
+    queued_loan_retirement(); provisional_retirement_identity();
     resident_loan_retirement();
     resident_loan_abandonment();
     readiness_local_duplicate();

@@ -1,0 +1,11 @@
+AArch64 ExchangePayload
+(* The payload represents request bytes, the response receipt/result, or
+   the native result. The receiver may read it only after observing ready. *)
+{
+0:X1=payload; 0:X2=state; 0:X3=1;
+1:X1=state; 1:X2=payload;
+}
+ P0           | P1           ;
+ STR W3,[X1]  | LDAR W4,[X1] ;
+ STLR W3,[X2] | LDR W5,[X2]  ;
+exists (1:X4=1 /\ 1:X5=0)

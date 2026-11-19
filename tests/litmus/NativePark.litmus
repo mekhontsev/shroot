@@ -1,0 +1,12 @@
+AArch64 NativePark
+(* The caller has published DONE and cannot claim the result early.
+   The worker resets awake, then scans native.state before parking. *)
+{
+0:X1=done; 0:X2=park; 0:X3=1;
+1:X1=park; 1:X2=done; 1:X3=1;
+}
+ P0           | P1           ;
+ STLR W3,[X1] | STLR W3,[X1] ;
+ DMB ISH      | LDAR W4,[X2] ;
+ LDAR W4,[X2] |              ;
+exists (0:X4=0 /\ 1:X4=0)

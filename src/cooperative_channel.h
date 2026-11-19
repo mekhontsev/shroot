@@ -16,6 +16,7 @@
 #include "identity_view.h"
 #include "uts_view.h"
 #include "fd_view.h"
+#include "descriptor_calls.h"
 
 static inline int md_entry_open(int number) {
     return number==SYS_openat || number==SYS_openat2;
@@ -25,14 +26,17 @@ static inline int md_entry_native_open(int number,const uint64_t args[6]) {
     return number==SYS_openat2 || (number==SYS_openat && md_open_native_plan(args[2],1));
 }
 
+static inline int md_entry_close_or_dup(int number,const uint64_t args[6]) {
+    return number==SYS_close || md_descriptor_duplicate_call(number,(unsigned)args[1]);
+}
+
 static inline int md_entry_native_fd(int number,const uint64_t args[6]) {
     if (number==SYS_epoll_pwait) return !(int)args[3] && !args[4];
     if (number==SYS_ioctl) return (unsigned)args[1]==FIONREAD;
-    if (number==SYS_close || number==SYS_dup || number==SYS_dup3 || number==SYS_lseek) return 1;
+    if (number==SYS_lseek || md_entry_close_or_dup(number,args)) return 1;
     if (number!=SYS_fcntl) return 0;
     switch ((unsigned)args[1]) {
-    case F_SETFD: case F_GETFD: case F_GETFL: case F_SETFL:
-    case F_DUPFD: case F_DUPFD_CLOEXEC: return 1;
+    case F_SETFD: case F_GETFD: case F_GETFL: case F_SETFL: return 1;
     default: return 0;
     }
 }
@@ -70,7 +74,7 @@ struct md_entry_channel {
     atomic_uint enabled, awake, control_awake, sleeping;
     /* Published by the coordinator before enabling this thread's channel. */
     atomic_uintptr_t policy;
-    /* fd+1 or MD_FD_VIEW_RESULT, issued under an exclusive table turn.
+    /* Numbered, open-result or absence view issued under an exclusive table turn.
      * Only the identified resident
      * entry may use it: its signal delivery is deferred until entry completes.
      * Every new request, task stop and borrowed execution revokes this lease. */
@@ -78,6 +82,9 @@ struct md_entry_channel {
     _Alignas(64) atomic_uint copying, caller;
     int32_t owner, control_target;
     struct md_spin_policy feedback[MD_ENTRY_WAITS];
+    /* Caller-owned destination hints, never authority to execute an effect. */
+    unsigned worker_fd_base;
+    uint64_t worker_fds;
     uint64_t sequence;
     _Alignas(64) struct md_entry_request {
         uint64_t args[6];
@@ -133,10 +140,25 @@ struct md_entry_channel {
 };
 static inline int md_entry_view_descriptor(const struct md_entry_channel *c) {
     unsigned lease=atomic_load_explicit(&c->descriptor.descriptor,memory_order_acquire);
-    if (!lease) return -1;
+    if (!lease || lease==MD_FD_VIEW_UNTRACKED) return -1;
     if (lease!=MD_FD_VIEW_RESULT) return (int)(lease-1);
     if (atomic_load_explicit(&c->native.state,memory_order_acquire)!=MD_NATIVE_DONE
             || c->native.number!=SYS_openat || c->native.result<0 || c->native.result>INT32_MAX) return -1;
     return (int)c->native.result;
+}
+static inline int md_entry_worker_fd(const struct md_entry_channel *c,unsigned fd) {
+    unsigned offset=fd-c->worker_fd_base;
+    return offset<64 && ((c->worker_fds>>offset)&1);
+}
+static inline void md_entry_set_worker_fd(struct md_entry_channel *c,unsigned fd,int present) {
+    unsigned base=fd&~63u;
+    if (base!=c->worker_fd_base) {
+        if (!present) return;
+        c->worker_fd_base=base;
+        c->worker_fds=0;
+    }
+    uint64_t bit=UINT64_C(1)<<(fd-base);
+    if (present) c->worker_fds|=bit;
+    else c->worker_fds&=~bit;
 }
 #endif

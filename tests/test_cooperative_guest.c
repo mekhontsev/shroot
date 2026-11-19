@@ -22,6 +22,8 @@
 #include <signal.h>
 #include <setjmp.h>
 #include <sys/socket.h>
+#include <sys/eventfd.h>
+#include <sys/epoll.h>
 #include <sys/sem.h>
 #include <sys/inotify.h>
 #include <sys/utsname.h>
@@ -85,6 +87,25 @@ __attribute__((noinline)) static long discovery_fd(int number,long a,long b,long
     __asm__ volatile("svc 0" : "+r"(x0) : "r"(x1),"r"(x2),"r"(x8) : "memory","cc");
     return x0;
 }
+static volatile sig_atomic_t dup_signals;
+static void dup_signal(int sig) { if (sig==SIGALRM) ++dup_signals; }
+static void interrupted_dup(int source,int floor) {
+    int expected=fcntl(source,F_DUPFD_CLOEXEC,floor);
+    assert(expected>=floor && !close(expected));
+    struct sigaction action={.sa_handler=dup_signal},previous;
+    sigemptyset(&action.sa_mask);
+    assert(!sigaction(SIGALRM,&action,&previous));
+    struct itimerval timer={.it_interval={0,1000},.it_value={0,1000}},old;
+    assert(!setitimer(ITIMER_REAL,&timer,&old));
+    for (unsigned i=0;i<1024 || !dup_signals;++i) {
+        long alias=discovery_fd(SYS_fcntl,source,F_DUPFD_CLOEXEC,floor);
+        assert(alias==expected && !discovery_close(alias));
+    }
+    timer=(struct itimerval){0};
+    assert(!setitimer(ITIMER_REAL,&timer,NULL) && dup_signals);
+    assert(!sigaction(SIGALRM,&previous,NULL));
+    assert(!setitimer(ITIMER_REAL,&old,NULL));
+}
 static void fd_discovery(void) {
     const char *name="/tmp/fd-discovery";
     int retired=-1;
@@ -106,6 +127,40 @@ static void fd_discovery(void) {
     }
     /* Error admission must not warm the valid-close site for this test. */
     assert(discovery_close(retired)==-EBADF && discovery_close(-1)==-EBADF);
+    /* Reuse one numeric slot for anonymous and file-backed OFDs. Changing
+     * the preferred owner must never change the descriptor being mutated. */
+    int counter=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK); assert(counter>=0);
+    int file=open(name,O_RDWR); assert(file>=0);
+    interrupted_dup(counter,file);
+    for (unsigned i=0;i<256;++i) {
+        int source=i%8 ? counter : file;
+        long copy=discovery_fd(SYS_fcntl,source,F_DUPFD_CLOEXEC,16);
+        assert(copy>=16);
+        if (source==file) assert(discovery_fd(SYS_lseek,copy,1,SEEK_CUR)==(long)i/8+1);
+        else if (i==1) assert(eventfd_write(copy,1)==0);
+        assert(!discovery_close(copy));
+        if (source==counter) assert(discovery_close(copy)==-EBADF);
+        if (i==2) {
+            assert(discovery_fd(SYS_dup3,file,copy,O_CLOEXEC)==copy);
+            struct stat st;
+            assert(!fstat(copy,&st) && S_ISREG(st.st_mode));
+            assert(!discovery_close(copy));
+            assert(discovery_fd(SYS_dup3,counter,copy,O_CLOEXEC)==copy);
+            assert(!fstat(copy,&st) && !S_ISREG(st.st_mode));
+            assert(!discovery_close(copy));
+        }
+    }
+    eventfd_t value; assert(!eventfd_read(counter,&value) && value==1);
+    assert(lseek(file,0,SEEK_CUR)==32);
+    assert(!close(file) && !close(counter));
+    int queue=epoll_create1(EPOLL_CLOEXEC); assert(queue>=0);
+    for (int on=1;on>=0;--on) {
+        int flags=on ? FD_CLOEXEC : 0;
+        assert(!discovery_fd(SYS_fcntl,queue,F_SETFD,flags));
+        for (unsigned i=0;i<256;++i)
+            assert(discovery_fd(SYS_fcntl,queue,F_GETFD,0)==flags);
+    }
+    assert(!close(queue));
     int fd=open(name,O_RDWR); assert(fd>=0);
     assert(discovery_fd(SYS_lseek,fd,0,SEEK_SET)==0);
     assert(discovery_fd(SYS_lseek,fd,1,SEEK_CUR)==1);
@@ -314,6 +369,33 @@ static void shared_object_queries(void) {
     free(stack);
 }
 static void object_queries(void) {
+    pid_t filtered=fork(); assert(filtered>=0);
+    if (!filtered) {
+        int counter=eventfd(0,EFD_CLOEXEC); assert(counter>=0);
+        int floor=open("/dev/null",O_RDONLY|O_CLOEXEC); assert(floor>=0);
+        struct sock_filter code[]={
+            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_close,0,1),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EDOM),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_dup3,0,1),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EACCES),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_fcntl,0,3),
+            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,args[1])),
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,F_DUPFD,0,1),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EPERM),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)
+        };
+        struct sock_fprog program={.len=sizeof(code)/sizeof(*code),.filter=code};
+        assert(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
+        assert(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
+        int copy=discovery_fd(SYS_fcntl,counter,F_DUPFD_CLOEXEC,floor); assert(copy>floor);
+        assert(discovery_fd(SYS_fcntl,counter,F_DUPFD,floor)==-EPERM);
+        assert(discovery_fd(SYS_dup3,counter,copy,0)==-EACCES);
+        assert(discovery_close(copy)==-EDOM && discovery_close(counter)==-EDOM);
+        assert(fcntl(copy,F_GETFD)==FD_CLOEXEC);
+        _exit(0);
+    }
+    reap(filtered);
     pid_t shared=fork(); assert(shared>=0);
     if (!shared) { shared_object_queries(); _exit(0); }
     reap(shared);

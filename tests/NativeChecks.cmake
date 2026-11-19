@@ -10,6 +10,12 @@ add_test(NAME fixture_contracts COMMAND "${Python3_EXECUTABLE}" -m unittest disc
     -s "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit")
 set_tests_properties(fixture_contracts PROPERTIES LABELS transport TIMEOUT 120)
 set(component_runner "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_component.py")
+find_program(SHROOT_HERD7 herd7)
+if(SHROOT_HERD7)
+    add_test(NAME model_exchange_ordering COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_exchange_ordering.py" --herd "${SHROOT_HERD7}")
+    set_tests_properties(model_exchange_ordering PROPERTIES LABELS model TIMEOUT 100)
+endif()
 add_custom_target(shroot-check-fixtures DEPENDS
     shroot-cli test_client test_client_worker test_client_integration client-guest
     bootstrap supervisor run service image resource_guest test_database test_image_registry test_host_policy
@@ -23,7 +29,7 @@ endfunction()
 foreach(name socket_routes host_open process_limits pid_namespace mapping_reader
         task_memory received_fds netlink_attributes directory_record interception_memory
         interception_buffers input_devices input_uinput render_device launch_registry
-        native_mounts binfmt_rule cooperative_native guest_copy freestanding_memory
+        native_mounts binfmt_rule cooperative_native exchange_model guest_copy freestanding_memory
         signal_delivery seccomp_policy image_arguments argument_vector
         open_job robust_futex)
     shroot_component(${name} test_${name})
@@ -43,6 +49,7 @@ shroot_component(task_wait_live task_wait_live --live)
 shroot_component(task_wait_cancel task_wait_live --cancel)
 shroot_component(kernel_baseline kernel_baseline)
 shroot_component(fs_worker fs_dispatch --worker-pause @WORK@/store)
+shroot_component(broker_identity fs_dispatch --broker-identity @WORK@/store)
 add_dependencies(shroot-check-fixtures test_signal_checkpoint)
 add_test(NAME component_signal_checkpoint COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_signal_checkpoint.py" "${CMAKE_CURRENT_BINARY_DIR}" --executor local --mode controls)

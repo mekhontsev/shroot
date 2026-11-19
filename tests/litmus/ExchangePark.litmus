@@ -1,0 +1,11 @@
+AArch64 ExchangePark
+(* Publication versus park. Use 1 for either party's new value: the real
+   awake bit goes low on park; the sleeping bit goes high on reply wait. *)
+{
+0:X1=state; 0:X2=park; 0:X3=1;
+1:X1=park;  1:X2=state; 1:X3=1;
+}
+ P0           | P1           ;
+ STLR W3,[X1] | STLR W3,[X1] ;
+ LDAR W4,[X2] | LDAR W4,[X2] ;
+exists (0:X4=0 /\ 1:X4=0)

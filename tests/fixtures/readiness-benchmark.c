@@ -42,7 +42,8 @@ int main(int argc,char **argv) {
     int cycle=!strcmp(argv[1],"file-cycle"),opening=!strcmp(argv[1],"file-open");
     int files=cycle || opening || !strcmp(argv[1],"file-stat");
     int memory=!strcmp(argv[1],"memory");
-    int duplicate=!strcmp(argv[1],"fd-dup"),metadata=!strcmp(argv[1],"fd-stat");
+    int dup_floor=!strcmp(argv[1],"fd-dup-floor") ? 64 : 0;
+    int duplicate=dup_floor || !strcmp(argv[1],"fd-dup"),metadata=!strcmp(argv[1],"fd-stat");
     int flags=!strcmp(argv[1],"fd-flags"),control=!strcmp(argv[1],"fd-ioctl");
     int bytes=!strcmp(argv[1],"fd-bytes");
     int identity=!strcmp(argv[1],"identity"),uts=!strcmp(argv[1],"uname");
@@ -138,8 +139,8 @@ int main(int argc,char **argv) {
                 assert(send(pair[0],"s",1,MSG_DONTWAIT|MSG_NOSIGNAL)==1);
                 assert(recv(pair[1],&value,1,MSG_DONTWAIT)==1 && value=='s');
             } else if (duplicate) {
-                int copy=fcntl(fd,F_DUPFD_CLOEXEC,0);
-                assert(copy>=0 && !close(copy));
+                int copy=fcntl(fd,F_DUPFD_CLOEXEC,dup_floor);
+                assert(copy>=dup_floor && !close(copy));
             } else if (metadata) {
                 struct stat st; assert(!fstat(fd,&st));
             } else if (flags) {

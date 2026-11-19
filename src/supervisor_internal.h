@@ -55,7 +55,7 @@ struct interception_statistics {
     struct md_cost event_collect, event_sleep;
     struct md_cost retained_progress, task_progress, entry_progress, pid_collect;
     uint64_t retirement_group_scans, retirement_actor_scans;
-    struct { uint64_t trace, notification, entry; } calls[512];
+    struct { uint64_t trace, notification, entry, native_decisions; } calls[512];
 };
 #define SUPERVISOR_TRACE(...) do { if (diagnostics) fprintf(stderr, __VA_ARGS__); } while (0)
 #define SUPERVISOR_SIGNAL_TRACE(...) do { if (diagnostics || signal_diagnostics) fprintf(stderr, __VA_ARGS__); } while (0)

@@ -26,6 +26,7 @@
 #include "supervisor_actors.h"
 #include "supervisor_descriptors.h"
 #include "supervisor_domain.h"
+#include "descriptor_calls.h"
 #include "supervisor_execution.h"
 #include "supervisor_fs.h"
 #include "supervisor_internal.h"
@@ -300,9 +301,7 @@ int domain_call(struct thread *t,const struct seccomp_data *call,struct user_pt_
     /* FD selectors require adapter admission for the new slot as well as the
      * kernel table mutation. A restricted root does not turn that dispatch
      * into an unobserved native dup, losing the retained object's identity. */
-    if (cookie==MD_INTERCEPT_DISPATCH && (nr==SYS_dup || nr==SYS_dup3
-            || (nr==SYS_fcntl && ((unsigned)call->args[1]==F_DUPFD
-                || (unsigned)call->args[1]==F_DUPFD_CLOEXEC)))) return 0;
+    if (cookie==MD_INTERCEPT_DISPATCH && md_descriptor_duplicate_call(nr,(unsigned)call->args[1])) return 0;
     /* These selectors operate on retained descriptions, not paths. Their
      * owners validate typed IO and recheck reused slots before native IO;
      * a restricted root must not revoke an already opened pipe or proc file. */

@@ -33,6 +33,11 @@ struct md_fs_anchor *md_fs_anchor_retain(struct md_fs_anchor *p) {
 void md_fs_anchor_release(struct md_fs_anchor *p) { md_fd_object_release(md_fs_anchor_object(p)); }
 int md_fs_anchor_fd(const struct md_fs_anchor *p) { return p ? p->fd : -1; }
 unsigned md_fs_anchor_kind(const struct md_fs_anchor *p) { return p ? p->kind : 0; }
+unsigned md_fs_anchor_carrier_kind(const struct md_fd_object *object) {
+    if (!object || object->type!=&type) return 0;
+    const struct md_fs_anchor *p=(const void *)object;
+    return !p->child && !p->endpoint.inode ? p->kind : 0;
+}
 int md_fs_anchor_virtual(const struct md_fs_anchor *p) { return p && p->child; }
 int md_fs_anchor_native_leaf(const struct md_fs_anchor *p,const struct md_inode_store *s,int fd) {
     return p && p->native_leaf && fd==p->fd && md_inode_lifetime_same(p->lifetime,md_inode_store_lifetime(s));

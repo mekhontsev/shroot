@@ -1,0 +1,16 @@
+AArch64 NativeClaimPark
+(* Successful LL/SC claim of OFFERED. Failed/retried attempts do not return
+   a result; the fallback wake check is a separate litmus. The worker's scan
+   of unrelated call state is omitted; it cannot strengthen this test. *)
+{
+0:X1=done; 0:X2=state; 0:X3=park; 0:X4=1;
+1:X1=park; 1:X2=done;  1:X4=1;
+}
+ P0                | P1           ;
+ STLR W4,[X1]      | STLR W4,[X1] ;
+ LDAR W5,[X1]      | LDAR W6,[X2] ;
+ LDAXR W7,[X2]     |              ;
+ STLXR W8,W4,[X2]  |              ;
+ LDAR W6,[X3]      |              ;
+filter (0:X5=1 /\ 0:X7=0 /\ 0:X8=0)
+exists (0:X6=0 /\ 1:X6=0)

@@ -3,6 +3,9 @@
 #include <sys/syscall.h>
 #include <fcntl.h>
 #include "terminal_calls.h"
+static inline int md_descriptor_duplicate_call(long nr,unsigned command) {
+    return nr==SYS_dup || nr==SYS_dup3 || (nr==SYS_fcntl && (command==F_DUPFD || command==F_DUPFD_CLOEXEC));
+}
 #define MD_DESCRIPTOR_IOCTL_QUERIES(X) \
     X(ioctl,FIONREAD) X(ioctl,TIOCGWINSZ) X(ioctl,TCGETS) X(ioctl,TCGETS2)
 #define MD_DESCRIPTOR_SERVICE_QUERIES(X) \

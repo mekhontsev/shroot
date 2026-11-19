@@ -1,6 +1,7 @@
 #include "fd_origins.h"
 #include "fd_channel.h"
 #include "fd_selector.h"
+#include "fd_view.h"
 #include "descriptor_inode.h"
 #include "operation_result.h"
 #include "task_descriptor.h"
@@ -47,10 +48,15 @@ struct md_fd_origins {
     struct md_resource_queue order;
     uint64_t generation;
     unsigned readiness;
+    uint64_t occupied;
+    unsigned wide_counts[MD_FD_WIDE_GROUPS];
     atomic_uint loans;
     struct md_fd_loan_slot *loan_head;
 };
 static void entry_link(struct md_fd_origins *t,struct md_fd_origin_entry *e) {
+    unsigned group=md_fd_group((unsigned)e->fd);
+    if (group>=MD_FD_EXACT_SLOTS) ++t->wide_counts[group-MD_FD_EXACT_SLOTS];
+    t->occupied|=UINT64_C(1)<<group;
     if (md_fd_object_has_readiness(e->object)) ++t->readiness;
     if (!e->loan) return;
     struct md_fd_loan_slot *slot=e->loan;
@@ -60,6 +66,9 @@ static void entry_link(struct md_fd_origins *t,struct md_fd_origin_entry *e) {
     atomic_fetch_add_explicit(&t->loans,1,memory_order_release);
 }
 static void entry_unlink(struct md_fd_origins *t,struct md_fd_origin_entry *e) {
+    unsigned group=md_fd_group((unsigned)e->fd);
+    if (group<MD_FD_EXACT_SLOTS || !--t->wide_counts[group-MD_FD_EXACT_SLOTS])
+        t->occupied&=~(UINT64_C(1)<<group);
     if (md_fd_object_has_readiness(e->object)) --t->readiness;
     if (!e->loan) return;
     struct md_fd_loan_slot *slot=e->loan;
@@ -174,6 +183,9 @@ static struct md_fd_origin_entry **slot(struct md_fd_origins *t, int fd) {
     while (*p && (*p)->fd!=fd) p=&(*p)->next;
     return p;
 }
+static struct md_fd_origin_entry *existing(struct md_fd_origins *t,int fd) {
+    return fd>=0 && (t->occupied&(UINT64_C(1)<<md_fd_group((unsigned)fd))) ? *slot(t,fd) : NULL;
+}
 static void changed(struct md_fd_origins *t) {
     /* Saturation must invalidate discovery, not allow an ABA after wrapping. */
     if (t->generation!=UINT64_MAX) ++t->generation;
@@ -194,16 +206,24 @@ int md_fd_origins_validate(const struct md_fd_order *turn,uint64_t generation) {
     int error=t->generation==UINT64_MAX ? -EOVERFLOW : t->generation!=generation ? -EAGAIN : 0;
     pthread_mutex_unlock(&t->lock); return error;
 }
-int md_fd_origins_native(const struct md_fd_order *turn,int fd,struct md_fd_native *out) {
-    if (!turn || !turn->table || fd<0 || md_fd_order_state(turn)!=MD_RESOURCE_ORDER_RUNNING) return 0;
+int md_fd_origins_describe(const struct md_fd_order *turn,int fd,struct md_fd_native *out) {
+    if (!turn || !turn->table || !out || fd<0 || md_fd_order_state(turn)!=MD_RESOURCE_ORDER_RUNNING) return 0;
     struct md_fd_origins *t=turn->table;
     pthread_mutex_lock(&t->lock);
     struct md_fd_origin_entry *e=t->buckets ? *slot(t,fd) : NULL;
-    struct md_fs_anchor *origin=e && !e->uncertain && !e->loan ? md_fs_anchor_from_object(e->object) : NULL;
-    int native=origin && !e->channel && md_fs_anchor_object(origin)==e->object
-        && !md_fd_object_selectors(e->object);
-    if (native && out) *out=(struct md_fd_native){.kind=md_fs_anchor_kind(origin),.flags=e->flags,.origin=origin};
-    pthread_mutex_unlock(&t->lock); return native;
+    int known=e && e->object && !e->uncertain && !e->loan && !e->channel && !e->native_io;
+    if (known) {
+        struct md_fs_anchor *origin=md_fs_anchor_from_object(e->object);
+        if (origin && (md_fs_anchor_object(origin)!=e->object || md_fd_object_selectors(e->object))) origin=NULL;
+        *out=(struct md_fd_native){.kind=origin ? md_fs_anchor_kind(origin) : 0,.flags=e->flags,.origin=origin};
+    }
+    pthread_mutex_unlock(&t->lock); return known;
+}
+int md_fd_origins_native(const struct md_fd_order *turn,int fd,struct md_fd_native *out) {
+    struct md_fd_native slot;
+    if (!md_fd_origins_describe(turn,fd,&slot) || !slot.origin) return 0;
+    if (out) *out=slot;
+    return 1;
 }
 int md_fd_origins_native_regular(const struct md_fd_order *turn,int fd) {
     struct md_fd_native native;
@@ -253,7 +273,7 @@ int md_fd_origins_native_anonymous_io(const struct md_fd_order *turn,pid_t actor
     if (!t->buckets) t->buckets=calloc(BUCKETS,sizeof(*t->buckets));
     if (t->buckets && !*slot(t,fd)) {
         struct md_fd_origin_entry **p=slot(t,fd);
-        e->next=*p; *p=e; e=NULL;
+        entry_link(t,e); e->next=*p; *p=e; e=NULL;
     }
     pthread_mutex_unlock(&t->lock);
     free(e);
@@ -265,11 +285,41 @@ int md_fd_origins_close_untracked(const struct md_fd_order *turn,int number) {
     pthread_mutex_lock(&t->lock);
     struct md_fd_origin_entry **p=t->buckets && number>=0 ? slot(t,number) : NULL;
     struct md_fd_origin_entry *hint=p && *p && (*p)->native_io ? *p : NULL;
-    if (hint) *p=hint->next;
+    if (hint) { entry_unlink(t,hint); *p=hint->next; }
     int empty=number<0 || !p || !*p || hint;
     if (empty) changed(t);
     pthread_mutex_unlock(&t->lock);
     free(hint); return empty;
+}
+static unsigned verifiable_kind(const struct md_fd_origin_entry *e) {
+    return e && !e->loan && !e->channel && !e->uncertain && !e->native_io
+        ? md_fs_anchor_carrier_kind(e->object) : 0;
+}
+static int absence_locked(struct md_fd_origins *t,int source,int destination,struct md_fd_absence *out) {
+    int empty=!existing(t,source) && !existing(t,destination);
+    if (empty) {
+        *out=(struct md_fd_absence){.occupied=t->occupied,.source=source,.result=destination};
+        /* Bound publication work independently of table size. A grouped,
+         * occupied high slot remains with the ordinary mutation owner. */
+        uint32_t slots=(uint32_t)t->occupied;
+        while (slots) {
+            unsigned n=(unsigned)__builtin_ctz(slots);
+            slots&=slots-1;
+            unsigned kind=verifiable_kind(*slot(t,(int)n));
+            if (!kind) continue;
+            out->checkable|=UINT64_C(1)<<n;
+            out->carrier_kinds|=md_fd_kind_bit(kind);
+        }
+    }
+    return empty;
+}
+int md_fd_origins_absence(const struct md_fd_order *turn,int source,int destination,struct md_fd_absence *out) {
+    if (!out || source<0 || destination<0 || !md_fd_origins_exclusive(turn)) return 0;
+    struct md_fd_origins *t=turn->table;
+    pthread_mutex_lock(&t->lock);
+    int empty=absence_locked(t,source,destination,out);
+    pthread_mutex_unlock(&t->lock);
+    return empty;
 }
 int md_fd_origins_native_poll(const struct md_fd_order *turn) {
     if (!turn || !turn->table || md_fd_order_state(turn)!=MD_RESOURCE_ORDER_RUNNING) return 0;
@@ -460,16 +510,23 @@ int md_fd_origins_loan_matches(const struct md_fd_order *turn,int number,const s
 }
 int md_fd_origins_prepare_copy(struct md_fd_origins *t, int source, unsigned flags,
         struct md_fd_origin_update *out) {
-    if (!t) { *out=(struct md_fd_origin_update){0}; return -EINVAL; }
+    *out=(struct md_fd_origin_update){0};
+    if (!t || (flags&~FD_CLOEXEC)) return -EINVAL;
     pthread_mutex_lock(&t->lock);
-    struct md_fd_origin_entry *e=t->buckets && source>=0 ? *slot(t,source) : NULL;
-    struct md_fd_object *origin=md_fd_object_retain(e ? e->object : NULL);
+    struct md_fd_origin_entry *e=existing(t,source);
+    struct md_fd_object *object=md_fd_object_retain(e ? e->object : NULL);
     struct md_fd_channel *channel=md_fd_channel_retain(e ? e->channel : NULL);
     int uncertain=e && e->uncertain;
     pthread_mutex_unlock(&t->lock);
-    int error=prepare(t,origin,channel,flags,out);
-    if (!error && out->entry) out->entry->uncertain=uncertain;
-    md_fd_object_release(origin); md_fd_channel_release(channel); return error;
+    /* A binding copied within this table already has buckets. Transfer the
+     * snapshot references once; never allocate under the metadata lock. */
+    struct md_fd_origin_entry *copy=NULL;
+    if (object || channel) {
+        copy=calloc(1,sizeof(*copy));
+        if (!copy) { md_fd_object_release(object); md_fd_channel_release(channel); return -ENOMEM; }
+        copy->object=object; copy->channel=channel; copy->flags=flags; copy->uncertain=uncertain;
+    }
+    out->table=md_fd_origins_pin(t); out->entry=copy; return 0;
 }
 int md_fd_origins_channel(struct md_fd_origins *t, int *number, struct md_fd_channel **out) {
     if (!t || !number || !out || *out) return -EINVAL;
@@ -491,9 +548,8 @@ static struct md_fd_origin_entry *install(struct md_fd_origins *t,
     if (!t->buckets) return NULL;
     struct md_fd_origin_entry **p=slot(t,fd), *retired=*p;
     if (retired) entry_unlink(t,retired);
-    if (entry) entry_link(t,entry);
     if (entry) {
-        entry->fd=fd; entry->next=retired ? retired->next : NULL; *p=entry;
+        entry->fd=fd; entry_link(t,entry); entry->next=retired ? retired->next : NULL; *p=entry;
         if (entry->object && entry->object->type->published)
             entry->object->type->published(entry->object);
     } else if (retired) *p=retired->next;
@@ -523,16 +579,43 @@ int md_fd_origins_channel_resolve(struct md_fd_origins *t, int number, struct md
     }
     pthread_mutex_unlock(&t->lock); dispose(retired); return error;
 }
-void md_fd_origins_finish_closed(struct md_fd_origin_update *update,int result_fd,struct md_fd_closed *closed) {
+int md_fd_origins_recheck(const struct md_fd_order *turn,pid_t actor,int number) {
+    if (number<0 || !md_fd_origins_exclusive(turn)) return -EINVAL;
+    struct md_fd_origins *t=turn->table;
+    pthread_mutex_lock(&t->lock);
+    struct md_fd_origin_entry *e=existing(t,number);
+    unsigned expected=verifiable_kind(e);
+    pthread_mutex_unlock(&t->lock);
+    if (!e) return 0;
+    if (!expected) return -ESTALE;
+    struct stat st;
+    int error=md_task_descriptor_stat(actor,number,&st);
+    if (error) return error;
+    if ((st.st_mode&S_IFMT)==expected) return -ESTALE;
+    /* The turn protects the entry across the kernel observation. A caller's
+     * numeric receipt alone can never erase live provenance or a provider. */
+    pthread_mutex_lock(&t->lock);
+    struct md_fd_origin_entry *retired=install(t,NULL,number);
+    pthread_mutex_unlock(&t->lock);
+    dispose(retired); return 0;
+}
+void md_fd_origins_commit(struct md_fd_origin_update *update,int result_fd,struct md_fd_closed *closed,
+        const struct md_fd_order *turn,int source,struct md_fd_absence *view) {
     struct md_fd_origins *t=update->table;
     struct md_fd_origin_entry *retired=update->entry;
+    if (view) view->source=-1;
     if (t && result_fd>=0) {
+        int inspect=view && !update->entry && source>=0 && turn && turn->table==t && md_fd_origins_exclusive(turn);
         pthread_mutex_lock(&t->lock);
         retired=install(t,update->entry,result_fd);
+        if (inspect) absence_locked(t,source,result_fd,view);
         pthread_mutex_unlock(&t->lock);
     }
     *update=(struct md_fd_origin_update){0};
     collect_closed(retired,result_fd>=0 ? closed : NULL); md_fd_origins_unpin(t);
+}
+void md_fd_origins_finish_closed(struct md_fd_origin_update *update,int result_fd,struct md_fd_closed *closed) {
+    md_fd_origins_commit(update,result_fd,closed,NULL,-1,NULL);
 }
 void md_fd_origins_finish(struct md_fd_origin_update *update,int result_fd) {
     md_fd_origins_finish_closed(update,result_fd,NULL);
@@ -653,6 +736,13 @@ enum md_resource_order_state md_fd_order_state(const struct md_fd_order *op) {
 }
 int md_fd_order_start(struct md_fd_order *op) {
     return md_resource_order_start(op ? &op->order : NULL);
+}
+int md_fd_order_move(struct md_fd_order *from,struct md_fd_order *to) {
+    if (!from || !from->table || !to) return -EINVAL;
+    if (to->table) return -EBUSY;
+    int error=md_resource_order_move(&from->order,&to->order);
+    if (!error) { to->table=from->table; from->table=NULL; }
+    return error;
 }
 static int retired(struct md_fd_order *op, int result) {
     if (op && !op->order.queue) { md_fd_origins_unpin(op->table); op->table=NULL; }
