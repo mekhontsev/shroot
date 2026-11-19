@@ -6,23 +6,27 @@
 #include <limits.h>
 
 static long input(struct md_poll_frame *f,const unsigned long *a) {
+    if (!f->count) return 0;
     if (!f->select) {
         long error=md_read_memory(f->items,(void *)(a[0]+f->offset*sizeof(struct pollfd)),
             f->count*sizeof(struct pollfd));
         if (error) return error;
     } else {
-        for (unsigned i=0;i<f->count;++i) {
-            unsigned fd=f->offset+i;
-            short events=0;
-            for (unsigned set=0;set<3;++set) if (a[1+set]) {
-                unsigned long bits;
-                long error=md_read_memory(&bits,(void *)(a[1+set]+(fd/64)*sizeof(bits)),sizeof(bits));
-                if (error) return error;
-                if (bits&(1UL<<(fd%64))) events|=set==0 ? POLLIN|POLLRDNORM|POLLRDBAND
-                    : set==1 ? POLLOUT|POLLWRNORM|POLLWRBAND : POLLPRI;
-            }
-            f->items[i]=(struct pollfd){events ? (int)fd : -1,events,0};
+        _Static_assert(MD_POLL_CHUNK%64==0,"select chunks start on a mask word");
+        unsigned long bits[3][MD_POLL_CHUNK/64]={0};
+        size_t bytes=((f->count+63)/64)*sizeof(unsigned long);
+        for (unsigned set=0;set<3;++set) if (a[1+set]) {
+            long error=md_read_memory(bits[set],(void *)(a[1+set]+f->offset/8),bytes);
+            if (error) return error;
         }
+        for (unsigned i=0;i<f->count;++i) {
+            unsigned long bit=1UL<<(i%64);
+            short events=(bits[0][i/64]&bit ? POLLIN|POLLRDNORM|POLLRDBAND : 0)
+                |(bits[1][i/64]&bit ? POLLOUT|POLLWRNORM|POLLWRBAND : 0)
+                |(bits[2][i/64]&bit ? POLLPRI : 0);
+            f->items[i]=(struct pollfd){events ? (int)(f->offset+i) : -1,events,0};
+        }
+        return 0;
     }
     for (unsigned i=0;i<f->count;++i) f->items[i].revents=0;
     return 0;
@@ -67,7 +71,7 @@ long md_poll_call(long nr,const unsigned long *a,unsigned long prepared) {
     if (select && a[5]) {
         struct { unsigned long mask,size; } sig;
         result=md_read_memory(&sig,(void *)a[5],sizeof(sig));
-        mask=sig.mask; size=sig.size;
+        if (!result) { mask=sig.mask; size=sig.size; }
     }
     if (!result && mask) {
         if (size!=8) result=-EINVAL;

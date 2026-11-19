@@ -658,6 +658,26 @@ static void shared_races(int fd) {
         printf("PASS shared epoll custody mode=%d: exact queue and no retained alias\n",mode);
     }
 }
+static void select_across_chunks(int provider,int event) {
+    int high=fcntl(event,F_DUPFD_CLOEXEC,257);
+    assert(high>=257 && high<FD_SETSIZE);
+    fd_set r,w,x; FD_ZERO(&r); FD_ZERO(&w); FD_ZERO(&x);
+    FD_SET(event,&r); FD_SET(high,&r); FD_SET(high,&w); FD_SET(provider,&x);
+    struct timespec zero={0};
+    assert(syscall(SYS_pselect6,high+1,&r,&w,&x,&zero,NULL)==3);
+    assert(FD_ISSET(event,&r) && FD_ISSET(high,&r) && FD_ISSET(high,&w) && !FD_ISSET(provider,&x));
+    assert(!close(high));
+}
+static void epoll_wait_capacity(int ep) {
+    struct epoll_event out;
+    struct timespec timeout={.tv_nsec=1000};
+    long oversize=(long)(INT_MAX/sizeof(out))+1;
+    assert(syscall(SYS_epoll_pwait2,ep,&out,oversize,&timeout,NULL,8)==-1 && errno==EINVAL);
+    /* maxevents is an int in both kernel ABIs, including on ARM64. */
+    long one=(1L<<32)|1;
+    assert(syscall(SYS_epoll_pwait,ep,&out,one,0,NULL,8)==1 && out.data.u64==43);
+    assert(syscall(SYS_epoll_pwait2,ep,&out,one,&timeout,NULL,8)==1 && out.data.u64==43);
+}
 static void mixed(int filtered,int shared) {
     assert(!unshare(CLONE_NEWNS|CLONE_NEWUTS));
     assert(!mount("proc","/proc","proc",0,NULL));
@@ -703,6 +723,8 @@ static void mixed(int filtered,int shared) {
     }
     assert(!epoll_wait(ep,out,4,0));
     uint64_t one=1; assert(write(event,&one,sizeof(one))==sizeof(one));
+    epoll_wait_capacity(ep);
+    select_across_chunks(fd,event);
     assert(epoll_wait(ep,out,4,0)==1 && out[0].data.u64==43);
     assert(read(event,&one,sizeof(one))==sizeof(one));
     assert(!sethostname("epoll-test",10));

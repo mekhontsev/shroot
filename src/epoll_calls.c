@@ -18,8 +18,7 @@ long md_epoll_call(long nr,const unsigned long *a) {
         if ((int)a[1]!=EPOLL_CTL_DEL) result=md_read_memory(&f->event,(void *)a[3],sizeof(f->event));
     } else {
         f->output=a[1];
-        if ((int)a[2]<=0 || a[2]>INT_MAX/sizeof(struct epoll_event)) result=-EINVAL;
-        f->capacity=a[2]>MD_EPOLL_EVENTS ? MD_EPOLL_EVENTS : (int)a[2];
+        int count=(int)a[2];
         if (nr==SYS_epoll_pwait2 && a[3]) {
             result=md_read_memory(&f->timeout,(void *)a[3],sizeof(f->timeout));
             f->timed=1;
@@ -27,6 +26,8 @@ long md_epoll_call(long nr,const unsigned long *a) {
         } else if (nr==SYS_epoll_pwait && (int)a[3]>=0) {
             f->timed=1; f->timeout=(struct timespec){(int)a[3]/1000,((int)a[3]%1000)*1000000L};
         }
+        if (!result && (count<=0 || (unsigned)count>INT_MAX/sizeof(struct epoll_event))) result=-EINVAL;
+        f->capacity=count>MD_EPOLL_EVENTS ? MD_EPOLL_EVENTS : count;
         if (!result && a[4]) {
             if (a[5]!=sizeof(f->mask)) result=-EINVAL;
             else result=md_read_memory(&f->mask,(void *)a[4],sizeof(f->mask));

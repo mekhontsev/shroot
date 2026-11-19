@@ -16,6 +16,7 @@
 #include <sys/prctl.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
+#include <sys/select.h>
 #include <sys/signalfd.h>
 #include <sys/stat.h>
 #include <sys/msg.h>
@@ -40,6 +41,7 @@ int main(int argc,char **argv) {
     unsigned blocks=argc==4 ? (unsigned)strtoul(argv[3],NULL,10) : 1;
     assert(blocks && blocks<=64);
     int mixed=!strcmp(argv[1],"epoll-signalfd-ready");
+    int sparse=!strcmp(argv[1],"select-sparse");
     int vector=mixed || !strcmp(argv[1],"epoll-vector-ready");
     int blocking=vector || !strcmp(argv[1],"epoll-ready");
     int idle=!strcmp(argv[1],"idle"),epoll=blocking || !strcmp(argv[1],"epoll");
@@ -54,7 +56,7 @@ int main(int argc,char **argv) {
     int process=!strcmp(argv[1],"process-identity");
     int rights=!strcmp(argv[1],"socket-rights");
     int messages=!strcmp(argv[1],"ipc-nowait"),sockets=rights || !strcmp(argv[1],"socket-nowait");
-    assert(files || memory || idle || epoll || duplicate || metadata || flags || control || bytes
+    assert(files || memory || idle || epoll || sparse || duplicate || metadata || flags || control || bytes
         || identity || process || uts || messages || sockets || !strcmp(argv[1],"poll"));
     pid_t pid=getpid(),tid=(pid_t)syscall(SYS_gettid);
     if (getenv("MD_BENCH_PID_NAMESPACE")) assert(pid==1 && tid==1);
@@ -89,6 +91,14 @@ int main(int argc,char **argv) {
         if (mixed) assert(!epoll_ctl(queue,EPOLL_CTL_ADD,signals,&signal_event));
     }
     struct pollfd p={.fd=fd,.events=POLLIN};
+    int high=-1,provider=-1;
+    if (sparse) {
+        assert(!unshare(CLONE_NEWUTS));
+        provider=open("/proc/sys/kernel/hostname",O_RDONLY|O_CLOEXEC);
+        assert(provider>=0 && provider<FD_SETSIZE);
+        high=fcntl(fd,F_DUPFD_CLOEXEC,provider>=257 ? provider+1 : 257);
+        assert(high>=257 && high<FD_SETSIZE);
+    }
     uid_t uid=getuid(),euid=geteuid(); gid_t gid=getgid(),egid=getegid();
     int message_queue=-1,pair[2]={-1,-1};
     if (messages) { message_queue=msgget(IPC_PRIVATE,IPC_CREAT|0600); assert(message_queue>=0); }
@@ -170,6 +180,12 @@ int main(int argc,char **argv) {
                 assert(address!=MAP_FAILED);
                 *(volatile unsigned char *)address=(unsigned char)i;
                 assert(!munmap(address,size));
+            } else if (sparse) {
+                fd_set r,w,x; FD_ZERO(&r); FD_ZERO(&w); FD_ZERO(&x);
+                FD_SET(high,&r); FD_SET(high,&w); FD_SET(provider,&x);
+                struct timespec zero={0};
+                assert(syscall(SYS_pselect6,high+1,&r,&w,&x,&zero,NULL)==2);
+                assert(FD_ISSET(high,&r) && FD_ISSET(high,&w) && !FD_ISSET(provider,&x));
             } else if (epoll) {
                 assert(epoll_wait(queue,received,vector ? 32 : 1,blocking ? -1 : 0)==1);
                 assert(received[0].events==EPOLLIN && received[0].data.u64==42);
@@ -203,6 +219,7 @@ int main(int argc,char **argv) {
         assert(read(signals,&info,sizeof(info))==sizeof(info) && info.ssi_signo==SIGUSR1);
         assert(!close(signals) && !sigprocmask(SIG_SETMASK,&saved,NULL));
     }
+    if (sparse) assert(!close(high) && !close(provider));
     assert(!close(queue) && !close(fd));
     if (messages) assert(!msgctl(message_queue,IPC_RMID,NULL));
     if (sockets) assert(!close(pair[0]) && !close(pair[1]));
