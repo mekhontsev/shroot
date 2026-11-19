@@ -47,6 +47,7 @@ struct md_fs_worker {
     const struct md_network_profile *network;
     struct md_device_events *device_events;
     struct md_fs_work *completed, **completed_tail;
+    int completion_announced; /* new publications since the supervisor took its batch */
     struct md_fs_work *submitted, **submitted_tail;
     struct md_fs_work *waiting, **waiting_tail; /* worker-only continuations */
     int stopping;
@@ -91,36 +92,46 @@ static void execute_work(struct md_fs_worker *w,struct md_filesystem *fs,
         md_fs_worker_publish(w,work);
     }
 }
-static void resume_ready(struct md_fs_worker *w,struct md_filesystem *fs) {
+static int resume_ready(struct md_fs_worker *w,struct md_filesystem *fs) {
     /* Detach this pass so a multi-stage continuation is not resumed twice in
      * the same pass. No wait exists on ordinary synchronous workloads. */
     struct md_fs_work *list=w->waiting;
+    struct md_fs_work **tail=w->waiting_tail;
     w->waiting=NULL; w->waiting_tail=&w->waiting;
     unsigned resumed=0;
-    while (list) {
+    while (list && resumed<32 && !pause_requested(w)) {
         struct md_fs_work *work=list; list=work->next; work->next=NULL;
-        int state=0;
-        if (resumed<32 && !pause_requested(w)) state=work->await(work);
+        int state=work->await(work);
         if (state) { ++resumed; execute_work(w,fs,work,state<0 ? state : 0); }
         else { *w->waiting_tail=work; w->waiting_tail=&work->next; }
     }
-    if (resumed==32) md_queue_signal_send(&w->wake);
+    if (list) {
+        /* The untouched suffix owns the next turn, ahead of rearmed jobs.
+         * Its original tail is still live, so no second scan is needed. */
+        *tail=w->waiting;
+        if (!w->waiting) w->waiting_tail=tail;
+        w->waiting=list;
+    }
+    return resumed==32 && w->waiting;
 }
 static void run_ready(void *context, struct md_filesystem *fs) {
     struct md_fs_worker *w = context;
     md_queue_signal_acknowledge(&w->wake);
-    if (w->waiting) resume_ready(w,fs);
+    int revisit=w->waiting && resume_ready(w,fs);
     /* Bound a producer burst without starving socket requests, notifications
      * or stop readiness. No queue lock covers execution or publication. */
-    for (unsigned i=0;i<32;++i) {
+    unsigned i=0;
+    for (;i<32;++i) {
         int stopping;
         struct md_fs_work *work=take_submitted(w,&stopping);
-        if (!work) return;
+        if (!work) break;
         if (w->statistics) md_cost_end(&w->queued,work->queued_at);
         execute_work(w,fs,work,stopping ? -ESHUTDOWN : 0);
     }
-    pthread_mutex_lock(&w->lock); int more=w->submitted && !w->pause; pthread_mutex_unlock(&w->lock);
-    if (more) md_queue_signal_send(&w->wake);
+    if (!revisit && i==32) {
+        pthread_mutex_lock(&w->lock); revisit=w->submitted && !w->pause; pthread_mutex_unlock(&w->lock);
+    }
+    if (revisit) md_queue_signal_send(&w->wake);
 }
 static int paused(void *context) {
     struct md_fs_worker *w=context;
@@ -477,20 +488,24 @@ void md_fs_worker_publish(struct md_fs_worker *w, struct md_fs_work *work) {
     work->next = NULL;
     work->published_at=md_cost_begin(w->statistics ? &w->delivery : NULL);
     pthread_mutex_lock(&w->lock);
+    int notify=!w->completion_announced;
+    w->completion_announced=1;
     *w->completed_tail = work; w->completed_tail = &work->next;
-    pthread_mutex_unlock(&w->lock); md_fs_worker_notify(w);
+    pthread_mutex_unlock(&w->lock);
+    if (notify) md_fs_worker_notify(w);
 }
 int md_fs_worker_submit(struct md_fs_worker *w, struct md_fs_work *work) {
     if (!w || !work || !work->run || !work->complete) return -EINVAL;
     work->queued_at=md_cost_begin(w->statistics ? &w->queued : NULL);
     pthread_mutex_lock(&w->lock);
     int error=w->stopping ? -ESHUTDOWN : w->error;
+    int notify=!error && !w->submitted && !w->pause;
     if (!error) {
         work->next=NULL;
         *w->submitted_tail=work; w->submitted_tail=&work->next;
     }
     pthread_mutex_unlock(&w->lock);
-    if (!error) md_queue_signal_send(&w->wake);
+    if (notify) md_queue_signal_send(&w->wake);
     return error;
 }
 int md_fs_worker_dispatch(struct md_fs_worker *w) {
@@ -498,6 +513,7 @@ int md_fs_worker_dispatch(struct md_fs_worker *w) {
     pthread_mutex_lock(&w->lock);
     struct md_fs_work *completed = w->completed;
     w->completed = NULL; w->completed_tail = &w->completed;
+    w->completion_announced=0; /* requeuing unready work does not announce it */
     pthread_mutex_unlock(&w->lock);
     int error=0;
     while (completed) {

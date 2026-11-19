@@ -4928,6 +4928,25 @@ static void entry_fence_ownership(void) {
     threads=NULL;
     entry_fence_progress();
     assert(!entry_fence_memory);
+    /* Replaying a held event can queue a new waiter while the previous fence
+     * is releasing peers. It needs its own drain and timeout result. */
+    a.memory=b.memory=md_memory_new(); assert(a.memory);
+    threads=&a; entry_fence_memory=md_memory_fork(a.memory,1);
+    entry_fence_stage=3; entry_fence_error=-EBUSY;
+    a.entry.fence_waiting=1; a.entry.fence_result=0; entry_fence_waiters=1;
+    b.entry.fence_held=1;
+    assert(entry_fence_take(&status,&usage)==b.pid && status==19);
+    assert(!entry_fence_take(&status,&usage) && !entry_fence_memory);
+    assert(!entry_fence_owner && a.entry.fence_waiting && entry_fence_waiters==1);
+    entry_fence_progress();
+    assert(entry_fence_memory==a.memory && !entry_fence_error);
+    b.phase=DISPATCHING;
+    assert(!entry_fence_take(&status,&usage) && !entry_fence_owner && a.entry.fence_waiting);
+    b.phase=IDLE;
+    assert(entry_fence_take(&status,&usage)==a.pid && !a.entry.fence_result);
+    entry_fence_owner=NULL;
+    assert(!entry_fence_take(&status,&usage) && !entry_fence_waiters);
+    md_memory_release(a.memory); threads=NULL;
     struct thread peer={.phase=DISPATCHING,.initial_stop=1};
     entry_fence_memory=md_memory_new(); assert(entry_fence_memory);
     peer.memory=entry_fence_memory; entry_fence_stage=2;

@@ -1217,6 +1217,9 @@ TSYNC thread group's authoritative eligibility. A rejected installation can rear
 the unchanged policy through the same drained-entry and immutable-view checks;
 missing proofs retain Base. Unfiltered callers retain their unfiltered registration
 mode, including after capability probes with invalid programs or flags.
+Once a fence starts releasing held events it cannot admit another installer.
+A request queued by a released peer gets a new drain and deadline; it cannot
+inherit the successful drain or timeout of the previous fence.
 Already admitted operations complete before kernel
 filter installation. Revocation disables discovery immediately and retains
 unfinished admission/code writes if a task's stop is lost to exit or exec.

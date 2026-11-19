@@ -186,6 +186,18 @@ does not authorize releasing worker storage or an unobserved descriptor result.
 Releasing a memory-admission barrier also rechecks retained worker completions
 and descriptor continuations: their original readiness notification may already
 have been consumed while admission was closed.
+
+The worker's queues own the work; pipe tokens only wake their readers. The
+first submission to an empty runnable queue signals the worker. A paused queue
+is awakened by resume, and a batch that leaves work behind signals another
+pass. Unexamined continuations take precedence over jobs rearmed in that pass.
+In the reverse direction, the supervisor drains the signal **before** detaching
+the completion batch and clearing its announcement under the queue lock. A
+publication before that detach joins the batch; a later one must announce a
+new batch, even if an older completion is still held. A delayed token can cause
+an empty dispatch, never duplicate delivery. Neither direction needs a spin
+or a timer for progress.
+
 A terminal event can supersede a broker-held stop when SIGKILL advances the
 task. The broker retains one event lease through worker retirement, publishing
 the terminal status and usage instead of replaying a stale continuation.

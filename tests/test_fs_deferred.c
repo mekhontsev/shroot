@@ -43,6 +43,37 @@ static void fence(struct md_fs_worker *w) {
     while (!d.completed) event(w);
     assert(d.runs==1 && !d.error);
 }
+struct turn_batch { atomic_int released; unsigned turns; struct md_fs_worker *worker; };
+struct turn_job { struct delayed d; struct turn_batch *batch; unsigned first; };
+static int turn_ready(struct md_fs_work *work) {
+    return atomic_load(&((struct turn_job *)work)->batch->released);
+}
+static void turn_run(struct md_fs_work *work,struct md_filesystem *fs,int error) {
+    struct turn_job *j=(void *)work;
+    assert(fs && !error);
+    if (j->d.runs) {
+        ++j->batch->turns;
+        if (!j->first) j->first=j->batch->turns;
+    }
+    if (++j->d.runs<=j->d.stages) {
+        work->await=turn_ready;
+        if (j->d.runs>1) md_fs_worker_wake(j->batch->worker);
+    }
+}
+static void continuation_turns(struct md_fs_worker *w) {
+    struct turn_batch batch={.worker=w};
+    struct turn_job jobs[33];
+    for (unsigned i=0;i<33;++i) {
+        prepare(&jobs[i].d,i==32 ? 1 : 2); jobs[i].d.work.run=turn_run;
+        jobs[i].batch=&batch; jobs[i].first=0;
+        assert(!md_fs_worker_submit(w,&jobs[i].d.work));
+    }
+    fence(w); /* all 33 are now waiting, in submission order */
+    atomic_store(&batch.released,1); md_fs_worker_wake(w);
+    for (unsigned i=0;i<33;++i) while (!jobs[i].d.completed) event(w);
+    printf("worker turns: last first served at %u of %u\n",jobs[32].first,batch.turns);
+    assert(batch.turns==65 && jobs[32].first==33);
+}
 struct pause_boundary {
     struct md_fs_work work;
     struct md_fs_worker_pause pause;
@@ -107,6 +138,7 @@ void md_test_fs_deferred(const char *store) {
     struct md_fs_worker *w=NULL;
     assert(!md_fs_worker_start(store,endpoint,NULL,NULL,NULL,NULL,&w));
     struct delayed jobs[97];
+    continuation_turns(w);
     for (unsigned i=0;i<97;++i) { prepare(&jobs[i],2); assert(!md_fs_worker_submit(w,&jobs[i].work)); }
     fence(w);
     for (unsigned i=0;i<97;++i) assert(atomic_load(&jobs[i].started)==1 && !jobs[i].completed);

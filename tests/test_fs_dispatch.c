@@ -549,7 +549,7 @@ static void path_request(const char *store, unsigned kind, int protected, int sl
 }
 struct queued {
     struct md_fs_work work;
-    int gate, started, called, completed, error, callback_error;
+    int gate, started, called, completed, error, callback_error, held;
 };
 static void queued_run(struct md_fs_work *work, struct md_filesystem *fs, int error) {
     struct queued *q=(struct queued *)work;
@@ -565,6 +565,73 @@ static void queued_run(struct md_fs_work *work, struct md_filesystem *fs, int er
 static int queued_complete(struct md_fs_work *work) {
     struct queued *q=(struct queued *)work;
     assert(q->called==1 && !q->completed++); return q->callback_error;
+}
+static _Thread_local unsigned *count_queue_writes;
+static _Thread_local struct md_fs_worker *ack_worker;
+static _Thread_local struct md_fs_work *ack_publication;
+ssize_t __real_read(int,void *,size_t);
+ssize_t __wrap_read(int fd,void *data,size_t size) {
+    if (ack_worker && fd==md_fs_worker_fd(ack_worker)) {
+        struct md_fs_worker *w=ack_worker; ack_worker=NULL;
+        md_fs_worker_publish(w,ack_publication);
+    }
+    return __real_read(fd,data,size);
+}
+ssize_t __real_write(int,const void *,size_t);
+ssize_t __wrap_write(int fd,const void *data,size_t size) {
+    ssize_t n=__real_write(fd,data,size);
+    if (count_queue_writes && n==(ssize_t)sizeof(uint64_t)) ++*count_queue_writes;
+    return n;
+}
+static int queued_ready(struct md_fs_work *work) { return !((struct queued *)work)->held; }
+static int notice_complete(struct md_fs_work *work) {
+    struct queued *q=(void *)work; assert(!q->completed++); return 0;
+}
+static void queue_gate_started(int fd) {
+    uint64_t one=0;
+    /* EVENT_WAIT: the worker has taken the gate, and cannot take the next
+     * item until the test releases it. No scheduler delay or spin assumed. */
+    assert(md_event_wait_fd(fd,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(read(fd,&one,sizeof(one))==sizeof(one) && one==1);
+}
+static void queue_handoff(struct md_fs_worker *w) {
+    enum { BURST=96 };
+    int gate=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC),started=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC);
+    assert(gate>=0 && started>=0);
+    struct queued jobs[BURST+1];
+    for (unsigned i=0;i<=BURST;++i) jobs[i]=(struct queued){.work={.run=queued_run,.complete=queued_complete},
+        .gate=i==0 || i==BURST ? gate : -1,.started=started};
+    jobs[1].work.ready=queued_ready; jobs[1].held=1;
+    assert(!md_fs_worker_submit(w,&jobs[0].work)); queue_gate_started(started);
+    unsigned writes=0; count_queue_writes=&writes;
+    for (unsigned i=1;i<=BURST;++i) assert(!md_fs_worker_submit(w,&jobs[i].work));
+    count_queue_writes=NULL;
+    uint64_t one=1;
+    assert(write(gate,&one,sizeof(one))==sizeof(one)); queue_gate_started(started);
+    int bytes=-1;
+    assert(!ioctl(md_fs_worker_fd(w),FIONREAD,&bytes));
+    printf("worker handoff: burst=%d submissionWrites=%u completionTokens=%d\n",
+        BURST,writes,bytes/(int)sizeof(one));
+    assert(!md_fs_worker_dispatch(w));
+    for (unsigned i=0;i<BURST;++i) assert(jobs[i].completed==(i!=1));
+    struct pollfd fd={md_fs_worker_fd(w),POLLIN,0}; assert(!poll(&fd,1,0));
+    /* The blocked completion is still queued. Publishing behind it must wake
+     * the supervisor; no release, time-based polling or unrelated IO helps. */
+    assert(write(gate,&one,sizeof(one))==sizeof(one));
+    assert(md_event_wait_fd(fd.fd,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(!md_fs_worker_dispatch(w) && jobs[BURST].completed && !jobs[1].completed);
+    jobs[1].held=0;
+    md_fs_worker_notify(w);
+    assert(poll(&fd,1,0)==1 && !md_fs_worker_dispatch(w) && jobs[1].completed);
+    /* Publish a second record exactly at the acknowledgement read. If
+     * dispatch detached first, that read could consume the next batch's wake. */
+    struct queued a={.work.complete=notice_complete},b={.work.complete=notice_complete};
+    md_fs_worker_publish(w,&a.work);
+    ack_worker=w; ack_publication=&b.work;
+    assert(!md_fs_worker_dispatch(w) && !ack_worker && a.completed && b.completed);
+    ack_publication=NULL;
+    assert(!close(started) && !close(gate));
+    assert(writes==1 && bytes==(int)sizeof(one));
 }
 static int fail_worker(void *context, struct md_filesystem *fs, short events) {
     (void)context; (void)fs; return events ? -EIO : 0;
@@ -715,16 +782,19 @@ static void worker_pause(const char *store) {
         char endpoint[80]; snprintf(endpoint,sizeof(endpoint),"md-worker-pause-%d-%d",getpid(),stop);
         struct md_fs_worker *worker=NULL;
         assert(!md_fs_worker_start(store,endpoint,NULL,NULL,NULL,NULL,&worker));
+        if (!stop) queue_handoff(worker);
         struct md_fs_worker_pause pause={0}, other={0};
         atomic_int allowed=0;
         struct pause_job jobs[8]={0};
         assert(!md_fs_worker_pause_begin(worker,&pause));
         assert(md_fs_worker_pause_begin(worker,&other)==-EBUSY && !other.owner);
         pause_wait(worker,&pause);
+        unsigned writes=0; count_queue_writes=&writes;
         for (unsigned i=0;i<8;++i) {
             jobs[i]=(struct pause_job){.work={.run=pause_job_run,.complete=pause_job_complete},.allowed=&allowed};
             assert(!md_fs_worker_submit(worker,&jobs[i].work));
         }
+        count_queue_writes=NULL; assert(!writes);
         if (stop) {
             assert(!md_fs_worker_stop(worker) && !pause.owner);
             for (unsigned i=0;i<8;++i)

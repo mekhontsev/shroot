@@ -42,6 +42,7 @@ shroot_component(task_wait_small task_wait_live --small)
 shroot_component(task_wait_live task_wait_live --live)
 shroot_component(task_wait_cancel task_wait_live --cancel)
 shroot_component(kernel_baseline kernel_baseline)
+shroot_component(fs_worker fs_dispatch --worker-pause @WORK@/store)
 add_dependencies(shroot-check-fixtures test_signal_checkpoint)
 add_test(NAME component_signal_checkpoint COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_signal_checkpoint.py" "${CMAKE_CURRENT_BINARY_DIR}" --executor local --mode controls)

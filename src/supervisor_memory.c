@@ -4,6 +4,7 @@
 #include "adapter_buffer.h"
 #include "control_file.h"
 #include "cooperative_channel.h"
+#include "event_signal.h"
 #include "event_wait.h"
 #include "fd_object.h"
 #include "fd_origins.h"
@@ -1340,15 +1341,15 @@ pid_t entry_fence_take(int *status,struct rusage *usage) {
         struct md_svc_registry *registry=md_memory_svc(entry_fence_memory);
         if (registry) registry->entry_fence_drained=1;
     }
-    for (struct thread *p=threads;p;p=p->next) if (p->pid && p->memory==entry_fence_memory && p->entry.fence_waiting) {
-        entry_fence_cancel(p);
-        entry_fence_owner=p;
-        p->entry.fence_result=entry_fence_error; *status=p->entry.fence_status;
-        if (usage) *usage=p->entry.fence_usage;
-        return p->pid;
-    }
     if (entry_fence_stage!=3) {
-        entry_fence_stage=3;
+        for (struct thread *p=threads;p;p=p->next) if (p->pid && p->memory==entry_fence_memory && p->entry.fence_waiting) {
+            entry_fence_cancel(p);
+            entry_fence_owner=p;
+            p->entry.fence_result=entry_fence_error; *status=p->entry.fence_status;
+            if (usage) *usage=p->entry.fence_usage;
+            return p->pid;
+        }
+        entry_fence_stage=3; entry_fence_deadline=INT64_MAX;
         task_action_unpark();
     }
     for (struct thread *p=threads;p;p=p->next) if (p->pid && p->entry.fence_held) {
@@ -1358,6 +1359,9 @@ pid_t entry_fence_take(int *status,struct rusage *usage) {
     }
     md_memory_release(entry_fence_memory); entry_fence_memory=NULL; entry_fence_stage=0; entry_fence_error=0;
     entry_fence_retry_at=0;
+    /* A replayed peer may have queued a new request. Its drain and deadline
+     * belong to the next fence, even when the address space is unchanged. */
+    if (entry_fence_waiters) CHECK(!md_event_signal(fd_ready));
     return 0;
 }
 

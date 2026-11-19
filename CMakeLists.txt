@@ -557,7 +557,7 @@ if(SHROOT_BUILD_TESTS)
         tests/test_fs_deferred.c)
     target_link_libraries(fs_dispatch PRIVATE guest-database guest-sha256 m)
     target_link_options(fs_dispatch PRIVATE -Wl,--wrap=calloc -Wl,--wrap=flock -Wl,--wrap=md_fs_send_fds -Wl,--wrap=md_received_fds_annotate -Wl,--wrap=process_vm_writev -Wl,--wrap=ioctl -Wl,--wrap=md_fd_order_begin)
-    target_link_options(fs_dispatch PRIVATE -Wl,--wrap=md_fs_context_execute)
+    target_link_options(fs_dispatch PRIVATE -Wl,--wrap=md_fs_context_execute -Wl,--wrap=write -Wl,--wrap=read)
     guest_executable(fd_handoff tests/test_fd_handoff.c tests/test_ipc_connections.c
         ${origins} ${src}/fd_install.c ${src}/mount_namespace.c ${src}/ipc_credentials.c ${identity})
     target_compile_options(fd_handoff PRIVATE -iquote ${src} -UNDEBUG)
