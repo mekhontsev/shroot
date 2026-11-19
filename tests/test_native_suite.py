@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 
 from client_fixture import archive_fixture
@@ -15,6 +16,9 @@ def main():
     parser.add_argument('build', type=Path)
     args = parser.parse_args()
     build = args.build.resolve()
+    reserve = 'reserve-large-range'
+    native_reserve = subprocess.run([build / 'client-guest', reserve]).returncode
+    assert native_reserve in (0, 77), native_reserve
     with tempfile.TemporaryDirectory(prefix='shroot-native-suite-') as temporary:
         root = Path(temporary)
         metadata = root / 'metadata'
@@ -38,6 +42,8 @@ def main():
                         '--', '/bin/resource-guest', 'native-metadata', '/native-metadata'))
                     assert 'PASS native metadata:' in output
                     suite.command(suite.guest(store, '--', '/bin/client-guest', 'exit42'), expected=42)
+                    if profile == 'native' and native_reserve == 0:
+                        suite.command(suite.guest(store, '--', '/bin/client-guest', reserve))
                     output = suite.command(suite.run(store, '--env', "LIBSHROOT_TEST=retained ' value",
                         '--', '/bin/client-guest', "spaces ' ; $(false)"))
                     assert 'PASS guest: arguments, environment, metadata and descriptor isolation' in output

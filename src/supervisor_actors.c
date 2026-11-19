@@ -1028,8 +1028,8 @@ int task_call_signal(struct thread *t,struct md_task_call *call,int status) {
     siginfo_t info;
     if (!tracee_request(t,PTRACE_GETSIGINFO,NULL,&info,"task-call-signal")) return 1;
     if (md_signal_synchronous(&info)) return 0;
-    int retained=md_signal_delivery_retain(&t->signals.delivery,t->pid,&info); CHECK(retained>=0);
-    task_call_resume(t,call,retained);
+    int retained=signal_retain_stopped(t,&info);
+    if (retained>=0) task_call_resume(t,call,retained);
     return 1;
 }
 

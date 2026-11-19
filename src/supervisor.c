@@ -1028,7 +1028,7 @@ int main(int argc, char **argv) {
         if (WIFSTOPPED(status) && !((unsigned)status>>16)) {
             int deliver=0;
             int owned=md_signal_delivery_event(&t->signals.delivery,pid,WSTOPSIG(status),&deliver);
-            CHECK(owned>=0);
+            if (!tracee_stop_valid(t,owned,"signal-delivery")) continue;
             if (owned==MD_SIGNAL_CARRIER) { resume(pid,deliver); continue; }
             restored_signal=owned==MD_SIGNAL_RESTORED;
             if (restored_signal) status=(deliver<<8)|0x7f;
@@ -1040,7 +1040,8 @@ int main(int argc, char **argv) {
             siginfo_t info;
             if (!tracee_request(t,PTRACE_GETSIGINFO,NULL,&info,"shielded-signal")) continue;
             if (!md_signal_synchronous(&info)) {
-                int retained=md_signal_delivery_retain(&t->signals.delivery,pid,&info); CHECK(retained>=0);
+                int retained=signal_retain_stopped(t,&info);
+                if (retained<0) continue;
                 notification_interrupted(t);
                 resume(pid,retained); continue;
             }

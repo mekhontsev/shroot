@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <linux/netlink.h>
 #include <linux/capability.h>
@@ -15,6 +16,16 @@
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "reserve-large-range")) {
+        size_t length = ((size_t)256 << 30) + sysconf(_SC_PAGESIZE);
+        void *area = mmap(NULL, length, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (area == MAP_FAILED) {
+            if (errno == ENOMEM) return 77;
+            perror("reserve large address range");
+            return 1;
+        }
+        return munmap(area, length) ? 1 : 0;
+    }
     if (argc == 3 && !strcmp(argv[1], "fork-exec")) {
         pid_t child = fork();
         if (child < 0) return 12;

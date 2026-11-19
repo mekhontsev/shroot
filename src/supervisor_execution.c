@@ -200,12 +200,14 @@ int tracee_request(struct thread *t, int request, void *address, void *data, con
         if (request==PTRACE_INTERRUPT) t->interrupt_pending=1;
         return 1;
     }
-    if (errno!=ESRCH) {
-        int error=errno;
-        fprintf(stderr,"guest-runtime: ptrace failure pid=%d phase=%d operation=%s request=%d errno=%d\n",
-            t->pid,t->phase,operation,request,error);
-        errno=error;
-        CHECK(errno == ESRCH);
+    return tracee_stop_error(t,errno,operation);
+}
+
+int tracee_stop_error(struct thread *t,int error,const char *operation) {
+    if (error!=ESRCH) {
+        fprintf(stderr,"guest-runtime: stopped task failure pid=%d phase=%d operation=%s errno=%d\n",
+            t->pid,t->phase,operation,error);
+        errno=error; CHECK(error==ESRCH);
     }
     /* EVENT_WAIT: concurrent group death/exec may invalidate a reported stop.
      * Keep ownership until its exact exit/exec event; the tree deadline bounds

@@ -586,8 +586,9 @@ int interrupted_metadata_event(struct thread *t,int status,const struct rusage *
     t->broker_event.has_info=1; t->broker_event.info=info;
     if (!save_signal_mask(t,&restart->mask,"metadata-signal-mask")
             || !shield(t)) return 1;
-    t->signals.retained=md_signal_delivery_retain(&t->signals.delivery,t->pid,&info);
-    CHECK(t->signals.retained>=0);
+    int retained=signal_retain_stopped(t,&info);
+    if (retained<0) return 1;
+    t->signals.retained=retained;
     restart->requeued_signal=t->signals.retained;
     if (copied!=sizeof(instruction))
         transfer_begin(t,&regs,regs.pc,&restart->instruction,sizeof(restart->instruction),
@@ -605,7 +606,8 @@ int metadata_restart_event(struct thread *t,int status) {
         siginfo_t info;
         if (!tracee_request(t,PTRACE_GETSIGINFO,NULL,&info,"metadata-deferred-signal")) return 1;
         if (!md_signal_synchronous(&info)) {
-            int retained=md_signal_delivery_retain(&t->signals.delivery,t->pid,&info); CHECK(retained>=0);
+            int retained=signal_retain_stopped(t,&info);
+            if (retained<0) return 1;
             notification_interrupted(t);
             resume(t->pid,retained); return 1;
         }
@@ -707,8 +709,9 @@ int completed_notification_event(struct thread *t,int status,const struct rusage
                 /* Transfer signal custody only after result admission. On
                  * failure the original delivery stop still owns the signal. */
                 if (t->broker_event.has_info) {
-                    t->signals.retained=md_signal_delivery_retain(&t->signals.delivery,t->pid,&t->broker_event.info);
-                    CHECK(t->signals.retained>=0);
+                    int retained=signal_retain_stopped(t,&t->broker_event.info);
+                    if (retained<0) return 1;
+                    t->signals.retained=retained;
                 }
                 t->fs.direct=DIRECT_OPEN; t->phase=DISPATCHING;
                 t->fs.direct_flags=result->flags; t->fs.direct_mode=0;

@@ -112,6 +112,24 @@ static void scalar_stopped_transport(void) {
     assert(waitpid(child,&status,0)==child && WIFSIGNALED(status));
     puts("PASS scalar stopped transport: signed results, bounded reads and unchanged arguments, PC, SP and PSTATE");
 }
+static void signal_stop_after_exit(void) {
+    pid_t pid=fork(); assert(pid>=0);
+    if (!pid) _exit(0);
+    int status; assert(waitpid(pid,&status,0)==pid && WIFEXITED(status));
+    struct thread t={.pid=pid};
+    siginfo_t info={.si_signo=SIGCONT,.si_code=SI_USER};
+    assert(signal_retain_stopped(&t,&info)==-ESRCH && t.resume_lost);
+    t.resume_lost=0; info.si_signo=SIGUSR1;
+    assert(!md_signal_delivery_hold(&t.signals.delivery,&info));
+    t.signals.delivery.active=1;
+    int deliver=0;
+    int result=md_signal_delivery_event(&t.signals.delivery,pid,SIGUSR1,&deliver);
+    assert(result==-ESRCH && !tracee_stop_valid(&t,result,"signal-delivery"));
+    assert(t.resume_lost && !deliver && md_signal_delivery_pending(&t.signals.delivery));
+    md_signal_delivery_clear(&t.signals.delivery);
+    puts("PASS expired signal stop: retire with the task, never resume or abort the supervisor");
+}
+
 static void bootstrap_reservation(void) {
     assert(!bootstrap_layout.segments && !bootstrap_layout.size);
     pid_t child=fork(); assert(child>=0);
@@ -120,7 +138,7 @@ static void bootstrap_reservation(void) {
     struct thread t={.pid=child,.kernel_stopped=1};
     assert(!thread_index[(unsigned)child%THREAD_BUCKETS]);
     thread_index[(unsigned)child%THREAD_BUCKETS]=&t;
-    struct bootstrap_move move={.source=0x1234567000}; t.bootstrap_move=&move;
+    struct bootstrap_move move={.source=0x7934567000}; t.bootstrap_move=&move;
     bootstrap_layout.size=3*md_page_size; bootstrap_layout.count=1;
     bootstrap_layout.base=0x80000000;
     for (size_t alignment=md_page_size;alignment<=2*1024*1024;alignment*=2) {
@@ -130,6 +148,12 @@ static void bootstrap_reservation(void) {
             struct user_pt_regs regs={0};
             assert(image_layout_call(&t,&regs));
             assert(regs.regs[8]==SYS_mmap && !(regs.regs[0]&(alignment-1)));
+            if (initial) {
+                /* A typical 39-bit arm64 PIE heap still has a contiguous
+                 * 256 GiB reservation below it, outside the 32-bit range. */
+                assert(regs.regs[0]>=UINT64_C(1)<<32);
+                assert(regs.regs[0]+regs.regs[1]+(UINT64_C(256)<<30)<UINT64_C(0x5500000000));
+            } else assert(regs.regs[0]==bootstrap_layout.base);
             assert(regs.regs[1]==bootstrap_layout.size+(initial ? alignment-md_page_size : 0));
             assert(!!(regs.regs[3]&MAP_FIXED_NOREPLACE)==!initial);
             assert(regs.regs[2]==PROT_NONE);
@@ -8761,6 +8785,7 @@ int main(void) {
     mapping_shared_admission();
     scalar_stopped_transport();
     bootstrap_reservation();
+    signal_stop_after_exit();
     signal_group_resource();
     thread_exit_target();
     stopped_call_context();

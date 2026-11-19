@@ -19,7 +19,8 @@ ELF and raw SVC programs use the same entry admission. No PRoot process, externa
 container manager or SELinux change is required.
 
 The freestanding bootstrap is a self-relocating PIE. Initial admission requests
-a free placement below the ordinary top-down mmap region and retains the address
+a free placement just above the 32-bit address range, leaving the large gap
+below the native PIE heap available for guest reservations. It retains the address
 selected by the kernel, aligned to the ELF's largest load-segment requirement.
 The exec owner restores that placement before relocation and
 guest entry on subsequent execs, preserving inherited seccomp service addresses.

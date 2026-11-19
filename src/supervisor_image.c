@@ -126,11 +126,13 @@ static int image_layout_call(struct thread *t,struct user_pt_regs *regs) {
     memset(regs->regs,0,6*sizeof(*regs->regs));
     if (!move->step) {
         number=SYS_mmap;
-        /* Keep the retained service addresses away from the top-down mmap
-         * region used by loaders after exec. This is a hint, not a claim on
-         * an address: the kernel chooses a free range on initial admission. */
+        /* Keep the 32-bit guest range free without splitting the large hole
+         * below the native PIE heap. Preserve ASLR bits from the source; the
+         * first mmap is only a hint, including for nested launches. */
+        const uintptr_t low_va_end=UINT64_C(1)<<32;
         regs->regs[0]=move->initial_placement
-            ? (move->source/2)&~(bootstrap_layout.alignment-1) : bootstrap_layout.base;
+            ? (low_va_end+(move->source&(low_va_end-1)))&~(bootstrap_layout.alignment-1)
+            : bootstrap_layout.base;
         regs->regs[1]=bootstrap_layout.size
             +(move->initial_placement ? bootstrap_layout.alignment-md_page_size : 0);
         regs->regs[2]=PROT_NONE;

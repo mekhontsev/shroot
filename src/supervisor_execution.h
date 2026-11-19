@@ -11,6 +11,10 @@ int checkpoint_restricted(pid_t pid);
 int trace_continues(int request);
 long native_trace(int request,pid_t pid,void *address,void *data);
 int tracee_request(struct thread *t, int request, void *address, void *data, const char *operation);
+int tracee_stop_error(struct thread *,int error,const char *operation);
+static inline int tracee_stop_valid(struct thread *t,int result,const char *operation) {
+    return result>=0 || tracee_stop_error(t,-result,operation);
+}
 int lost_stop_event(struct thread *t,unsigned event);
 int machine_observe(struct thread *t,uintptr_t pc,long number);
 int machine_discovery(struct thread *t);

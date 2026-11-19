@@ -275,6 +275,11 @@ static int signal_logical_receive(struct thread *t,int sig,struct md_task_signal
     return 0;
 }
 
+int signal_retain_stopped(struct thread *t,const siginfo_t *info) {
+    int retained=md_signal_delivery_retain(&t->signals.delivery,t->pid,info);
+    return tracee_stop_valid(t,retained,"retain-signal") ? retained : -ESRCH;
+}
+
 static void signal_deliver(pid_t pid,int sig,int restored,struct md_task_signal_stop *stop) {
     struct thread *t=thread(pid);
     struct md_task_signal_stop local;
@@ -289,8 +294,9 @@ static void signal_deliver(pid_t pid,int sig,int restored,struct md_task_signal_
         if (!signal_observe(t,stop,0)) return;
         siginfo_t info=stop->info;
         if (!md_signal_synchronous(&info) && info.si_signo<32) {
-            int retained=md_signal_delivery_retain(&t->signals.delivery,pid,&info); CHECK(retained>=0);
-            resume(pid,retained); return;
+            int retained=signal_retain_stopped(t,&info);
+            if (retained>=0) resume(pid,retained);
+            return;
         }
     }
     if (sig) {

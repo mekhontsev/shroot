@@ -37,6 +37,8 @@ void signal_origin_translate(struct thread *t,const struct md_signal_origin *ori
 void signal_origin_consumed(struct thread *t,const siginfo_t *info);
 void process_reap(struct thread *t,pid_t child);
 int signal_observe(struct thread *t,struct md_task_signal_stop *stop,int with_registers);
+/* Negative only when the observed stop was lost to group exit or exec. */
+int signal_retain_stopped(struct thread *t,const siginfo_t *info);
 int signal_replace_info(struct thread *t,struct md_task_signal_stop *stop,const siginfo_t *info);
 /* Mirror a kernel-committed fatal SIGSYS disposition in the logical view. */
 void signal_host_fatal(struct thread *t);
