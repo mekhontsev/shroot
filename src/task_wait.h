@@ -11,6 +11,7 @@ struct md_task_wait_member {
 };
 struct md_task_wait {
     struct md_task_wait_member *cursor;
+    struct md_task_wait_exit *exit_first, *exit_last;
     pid_t hints[8];
     pid_t recent[4];
     unsigned first, count;
@@ -26,6 +27,9 @@ struct md_task_wait {
 void md_task_wait_track(struct md_task_wait *, struct md_task_wait_member *, pid_t);
 void md_task_wait_untrack(struct md_task_wait *, struct md_task_wait_member *);
 void md_task_wait_hint(struct md_task_wait *, pid_t);
+/* Make an already terminal tracee waitable by its real parent. Its separate
+ * tracer status still passes through the normal event and accounting owner. */
+int md_task_wait_handoff_exit(struct md_task_wait *, pid_t);
 /* Transfer an already collected status, including during fatal cleanup.
  * Never queries the kernel or infers that its event queue is empty. */
 pid_t md_task_wait_take(struct md_task_wait *, int *, struct rusage *);

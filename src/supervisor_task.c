@@ -29,6 +29,7 @@
 #include "namespace_broker.h"
 #include "native_identity.h"
 #include "pid_calls.h"
+#include "pid_descriptor.h"
 #include "pid_namespace.h"
 #include "proc_paths.h"
 #include "process_access.h"
@@ -587,6 +588,27 @@ static int process_wait_interrupt(struct thread *t) {
 }
 
 static void process_retry(struct thread *t);
+static int handoff_wait_exit(struct thread *t,const struct seccomp_data *call) {
+    pid_t pid=0;
+    if (call->nr==SYS_wait4) {
+        if (!(call->args[2]&WNOHANG)) return 0;
+        pid=native_pid(t,(pid_t)call->args[0]);
+    } else {
+        if ((call->args[3]&(WNOHANG|WEXITED))!=(WNOHANG|WEXITED)) return 0;
+        if (call->args[0]==P_PID) pid=native_pid(t,(pid_t)call->args[1]);
+        else if (call->args[0]==P_PIDFD) {
+            struct md_fd_object *object=md_fd_origins_object(t->resources.files,(int)call->args[1],NULL);
+            pid=md_pid_identity_native(md_pid_descriptor_identity(object));
+            md_fd_object_release(object);
+            if (!pid) pid=md_pid_descriptor_hint(t->pid,(int)call->args[1]);
+        }
+    }
+    struct thread *child=pid>0 ? find_thread(pid) : NULL;
+    if (!child || !child->born || child->parent!=t->tgid || md_debugger_traced(debugger,pid)) return 0;
+    int result=md_task_wait_handoff_exit(&task_wait,pid);
+    if (result>0) SUPERVISOR_TRACE("PROBE wait-exit-handoff parent=%d child=%d\n",t->pid,pid);
+    return result<0 ? result : 0;
+}
 pid_t process_self(const struct thread *t,long number) {
     CHECK(number==SYS_getpid || number==SYS_gettid);
     const struct md_pid_identity *identity=number==SYS_getpid ? t->resources.pid_group : t->resources.pid;
@@ -597,6 +619,10 @@ pid_t process_self(const struct thread *t,long number) {
 }
 int process_call(struct thread *t,const struct seccomp_data *call,struct user_pt_regs *r,unsigned long *cookie) {
     long nr=call->nr;
+    if ((nr==SYS_wait4 || nr==SYS_waitid) && t->phase==IDLE && call->instruction_pointer!=RAW_GATE) {
+        int error=handoff_wait_exit(t,call);
+        if (error) { return_value(t,r,error); return 1; }
+    }
     if (t->phase==IDLE && robust_call(t,call,r,MD_TASK_CALL_SECCOMP)) return 1;
     int signaling=nr==SYS_kill || nr==SYS_tkill || nr==SYS_tgkill
         || nr==SYS_rt_sigqueueinfo || nr==SYS_rt_tgsigqueueinfo || nr==SYS_pidfd_send_signal;

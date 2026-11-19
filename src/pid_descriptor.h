@@ -8,4 +8,7 @@ struct md_pid_identity *md_pid_descriptor_identity(struct md_fd_object *);
 /* Exact captured description, not a reopened application pathname.
  * Zero PID means another descriptor kind; -1 is a retired pidfd target. */
 int md_pid_descriptor_read(int fd,pid_t *);
+/* A numeric slot can be replaced concurrently. This scheduling hint must
+ * never select a wait result, authorize access or replace the caller's FD. */
+pid_t md_pid_descriptor_hint(pid_t actor,int fd);
 #endif

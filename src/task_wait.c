@@ -2,7 +2,15 @@
 #include "task_wait.h"
 #include <errno.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <sys/wait.h>
+
+struct md_task_wait_exit {
+    struct md_task_wait_exit *next;
+    pid_t pid;
+    int status;
+    struct rusage usage;
+};
 
 void md_task_wait_track(struct md_task_wait *w,struct md_task_wait_member *m,pid_t pid) {
     ++w->members;
@@ -60,6 +68,25 @@ void md_task_wait_hint(struct md_task_wait *w, pid_t pid) {
         if (w->hints[(w->first+i)%capacity]==pid) return;
     if (w->count<capacity) w->hints[(w->first+w->count++)%capacity]=pid;
 }
+int md_task_wait_handoff_exit(struct md_task_wait *w,pid_t pid) {
+    siginfo_t info={0};
+    if (pid<=0) return 0;
+    /* Even with WEXITED, __WALL can expose a ptrace stop. Only take a
+     * proven termination; this never advances a still-running child. */
+    int found;
+    do found=waitid(P_PID,pid,&info,__WALL|WEXITED|WNOHANG|WNOWAIT); while (found<0 && errno==EINTR);
+    if (found<0 || info.si_pid!=pid || (info.si_code!=CLD_EXITED && info.si_code!=CLD_KILLED
+            && info.si_code!=CLD_DUMPED)) return 0;
+    struct md_task_wait_exit *event=malloc(sizeof(*event));
+    if (!event) return -ENOMEM;
+    pid_t collected;
+    do collected=wait4(pid,&event->status,__WALL|WNOHANG,&event->usage); while (collected<0 && errno==EINTR);
+    if (collected<=0) { free(event); return 0; }
+    event->pid=collected; event->next=NULL;
+    if (w->exit_last) w->exit_last->next=event; else w->exit_first=event;
+    w->exit_last=event;
+    return 1;
+}
 pid_t md_task_wait_take(struct md_task_wait *w, int *status, struct rusage *usage) {
     if (w->pending_count) {
         unsigned i=w->pending_first++;
@@ -67,6 +94,13 @@ pid_t md_task_wait_take(struct md_task_wait *w, int *status, struct rusage *usag
         *status=w->pending[i].status;
         if (usage) *usage=w->pending[i].usage;
         return remember(w,w->pending[i].pid,*status);
+    }
+    if (w->exit_first) {
+        struct md_task_wait_exit *event=w->exit_first;
+        if (!(w->exit_first=event->next)) w->exit_last=NULL;
+        pid_t pid=event->pid; *status=event->status;
+        if (usage) *usage=event->usage;
+        free(event); return remember(w,pid,*status);
     }
     return 0;
 }

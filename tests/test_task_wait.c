@@ -11,6 +11,14 @@ static struct call calls[40];
 static unsigned queued, taken;
 static struct rusage *expected_usage;
 static int batch_usage;
+static int exit_code,exit_status;
+static pid_t exit_target;
+int __wrap_waitid(idtype_t type,id_t id,siginfo_t *info,int flags) {
+    assert(type==P_PID && (pid_t)id==exit_target && flags==(__WALL|WEXITED|WNOHANG|WNOWAIT));
+    *info=(siginfo_t){.si_code=exit_code};
+    info->si_pid=exit_code ? exit_target : 0;
+    return 0;
+}
 static struct {
     unsigned population, queries;
     unsigned char ready[4096];
@@ -39,13 +47,36 @@ pid_t __wrap_wait4(pid_t selected, int *status, int options, struct rusage *usag
     assert(call.selected == selected && options == (__WALL | WNOHANG));
     assert(batch_usage ? usage!=NULL : usage == expected_usage);
     if (call.result > 0) {
-        *status = 0x7057f;
+        *status = exit_status ? exit_status : 0x7057f;
         if (usage) usage->ru_utime.tv_usec = 1234;
     }
     errno = call.error;
     return call.result;
 }
 static void done(void) { assert(taken == queued); taken = queued = 0; }
+
+static void terminal_handoff(void) {
+    struct md_task_wait w={.drained=1};
+    struct rusage usage={0};
+    int status=0;
+    exit_target=75;
+    assert(!md_task_wait_handoff_exit(&w,75));
+    exit_code=CLD_TRAPPED;
+    assert(!md_task_wait_handoff_exit(&w,75));
+    assert(!md_task_wait_take(&w,&status,&usage)); done();
+    batch_usage=1; exit_status=37<<8; exit_code=CLD_EXITED;
+    for (;exit_target<=76;++exit_target) {
+        expect(exit_target,exit_target,0);
+        assert(md_task_wait_handoff_exit(&w,exit_target)==1);
+    }
+    done();
+    for (int pid=75;pid<=76;++pid) {
+        assert(md_task_wait_ready(&w,&status,&usage,0)==pid && WIFEXITED(status) && WEXITSTATUS(status)==37);
+        assert(usage.ru_utime.tv_usec==1234);
+    }
+    assert(!md_task_wait_ready(&w,&status,NULL,0)); done();
+    batch_usage=exit_status=exit_code=0;
+}
 
 static void drained_bursts(void) {
     struct md_task_wait w={.members=388,.directed=388};
@@ -131,6 +162,7 @@ static void fair_discovery(unsigned population,unsigned hot) {
 }
 
 int main(void) {
+    terminal_handoff();
     drained_bursts();
     int status;
     struct md_task_wait w = {0};

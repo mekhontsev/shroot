@@ -6,7 +6,7 @@ from pathlib import Path
 from test_oci_services import Suite, add_machine_entry_argument
 
 MODES = ('exclusive', 'exclusive-filtered', 'mixed', 'filtered', 'shared', 'shared-filtered', 'concurrent-admission', 'admission-file-waiters', 'cold-admission', 'native-ready', 'native-capacity', 'close-filtered', 'retire-filtered',
-         'poll-sandbox', 'poll-sandbox-protected', 'wait-fence')
+         'poll-sandbox', 'poll-sandbox-protected', 'wait-fence', 'pidfd-exit')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

@@ -919,9 +919,53 @@ static void exclusive_sources(void) {
     close(signal); close(ep); assert(!sigprocmask(SIG_SETMASK,&previous,NULL));
     puts("PASS mixed epoll: exclusive FIFO and signalfd, aliases, masks, data and retirement");
 }
+static void pidfd_exit(void) {
+    int ep=epoll_create1(EPOLL_CLOEXEC); assert(ep>=0);
+    for (unsigned round=0;round<24;++round) {
+        int gate[2],fds[3]; pid_t children[3];
+        assert(!pipe(gate));
+        for (unsigned i=0;i<3;++i) {
+            children[i]=fork(); assert(children[i]>=0);
+            if (!children[i]) {
+                char c; close(gate[1]); assert(!read(gate[0],&c,1)); _exit(37);
+            }
+            fds[i]=syscall(SYS_pidfd_open,children[i],0); assert(fds[i]>=0);
+            struct epoll_event e={.events=EPOLLIN|EPOLLONESHOT,.data.u32=i};
+            assert(!epoll_ctl(ep,EPOLL_CTL_ADD,fds[i],&e));
+            siginfo_t info={0};
+            assert(!waitid(P_PID,children[i],&info,WEXITED|WNOHANG|WNOWAIT) && !info.si_pid);
+        }
+        close(gate[0]); close(gate[1]);
+        unsigned seen=0;
+        while (seen!=7) {
+            struct epoll_event events[3];
+            /* EVENT_WAIT: the exact pidfd signals exit; a timeout is a failure. */
+            int n=epoll_wait(ep,events,3,3000); assert(n>0);
+            for (int k=0;k<n;++k) {
+                unsigned i=events[k].data.u32;
+                assert(i<3 && !(seen&(1u<<i)) && (events[k].events&EPOLLIN));
+                seen|=1u<<i;
+                if (i!=1) {
+                    siginfo_t info={0};
+                    assert(!waitid(i==0 ? P_PID : P_PIDFD,i==0 ? children[i] : fds[i],
+                        &info,WEXITED|WNOWAIT|WNOHANG));
+                    if (info.si_pid!=children[i]) fprintf(stderr,"pidfd ready: round=%u selector=%s child=%d si_pid=%d code=%d status=%d\n",
+                        round,i ? "pidfd" : "pid",children[i],info.si_pid,info.si_code,info.si_status);
+                    assert(info.si_pid==children[i] && info.si_code==CLD_EXITED && info.si_status==37);
+                }
+                int status;
+                assert(waitpid(children[i],&status,WNOHANG)==children[i]);
+                assert(WIFEXITED(status) && WEXITSTATUS(status)==37);
+                close(fds[i]);
+            }
+        }
+    }
+    close(ep); puts("PASS mixed epoll: one-shot pidfd readiness publishes nonblocking child status");
+}
 int main(int argc,char **argv) {
     if (argc==2 && !strcmp(argv[1],"--wait-fence")) { wait_fence(); return 0; }
     setbuf(stdout,NULL);
+    if (argc==2 && !strcmp(argv[1],"--pidfd-exit")) { pidfd_exit(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--exclusive")) { exclusive_sources(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--exclusive-filtered")) {
         assert(!filter_probe()); exclusive_sources(); return 0;

@@ -24,8 +24,7 @@ struct md_fd_object *md_pid_descriptor_new(struct md_pid_identity *identity) {
 struct md_pid_identity *md_pid_descriptor_identity(struct md_fd_object *object) {
     return object && object->type==&type ? ((struct pid_descriptor *)object)->identity : NULL;
 }
-int md_pid_descriptor_read(int fd,pid_t *pid) {
-    char path[64]; snprintf(path,sizeof(path),"/proc/self/fdinfo/%d",fd);
+static int read_info(const char *path,pid_t *pid) {
     int info=open(path,O_RDONLY|O_CLOEXEC);
     if (info<0) return -errno;
     char text[1024]; ssize_t size;
@@ -44,4 +43,14 @@ int md_pid_descriptor_read(int fd,pid_t *pid) {
         line=next;
     }
     return 0;
+}
+int md_pid_descriptor_read(int fd,pid_t *pid) {
+    char path[64]; snprintf(path,sizeof(path),"/proc/self/fdinfo/%d",fd);
+    return read_info(path,pid);
+}
+pid_t md_pid_descriptor_hint(pid_t actor,int fd) {
+    char path[64]; pid_t target=0;
+    if (actor<=0 || fd<0) return 0;
+    snprintf(path,sizeof(path),"/proc/%d/fdinfo/%d",actor,fd);
+    return read_info(path,&target) ? 0 : target;
 }

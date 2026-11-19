@@ -54,6 +54,13 @@ statuses transfer exactly once, including during cancellation. Only an empty
 general wait establishes a drained queue, invalidated by SIGCHLD. Buffered
 delivery needs no extra signal read; the shared event loop still services all
 signal and resource sources within its progress budget.
+
+A pidfd can report exit before the kernel has handed the terminal status from
+the tracer to the child's real parent. Before a nonblocking wait for a specific
+child, the supervisor collects its own already-available terminal status and
+queues it for normal lifecycle processing. The parent's original kernel wait
+still owns selection, status, accounting and reaping. A live child or debugger
+stop is not consumed; blocking waits do not need this handoff.
 Productive shared-memory turns may defer a general scan within the same finite
 discovery budget. The caller must flush that discovery before parking; deferral
 neither proves an empty queue nor loses untracked births or terminal statuses.
