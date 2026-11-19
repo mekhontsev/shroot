@@ -46,12 +46,22 @@ for _ in range(3):
     print('metadata_seconds=%.6f paths=%d links=%d checksum=%d' % (time.monotonic()-start, len(paths), len(links), size), flush=True)
 '''))
         if args.lsof:
-            code = '''import subprocess, time
-for _ in range(3):
-    start = time.monotonic()
-    result = subprocess.run(['/usr/bin/lsof', '-nP', '-F', 'upnR', '-i', 'TCP@127.0.0.1:9'], capture_output=True)
-    assert result.returncode == 1, result
-    print('lsof_seconds=%.6f' % (time.monotonic() - start), flush=True)
+            code = '''import itertools, os, socket, subprocess, time
+with socket.socket() as listener:
+    listener.bind(('127.0.0.1', 0))
+    listener.listen()
+    endpoint = 'TCP@127.0.0.1:' + str(listener.getsockname()[1])
+    for _ in range(3):
+        start = time.monotonic()
+        result = subprocess.run(['/usr/bin/lsof', '-nP', '-F', 'upnR', '-i', endpoint],
+                                check=True, capture_output=True, text=True)
+        elapsed = time.monotonic() - start
+        lines = iter(result.stdout.splitlines())
+        owner = 'p' + str(os.getpid())
+        assert owner in lines, result
+        fields = set(itertools.takewhile(lambda line: not line.startswith('p'), lines))
+        assert {'u' + str(os.getuid()), 'R' + str(os.getppid())} <= fields, (owner, fields)
+        print('lsof_seconds=%.6f' % elapsed, flush=True)
 '''
             workloads.append(('lsof', code))
         for name, code in workloads:

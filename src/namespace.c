@@ -61,11 +61,7 @@ long md_namespace_open_result(struct md_fs_result *result, int flags) {
     int fd = result->fd;
     if (result->open_completion.kind != MD_OPEN_READY)
         return md_complete_open(fd, flags, result->open_completion);
-    if (!(flags & O_CLOEXEC)) {
-        long r = RAW3(fcntl, fd, F_SETFD, 0);
-        if (r < 0) { RAW1(close, fd); return r; }
-    }
-    return fd;
+    return md_fs_public_fd(fd,(unsigned)flags);
 }
 static long reopen_request(const struct md_fs *fs, int fd, int flags, unsigned mode) {
     struct md_fs_request q = {.operation=MD_FS_REOPEN, .directory={fd,-1},

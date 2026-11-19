@@ -91,9 +91,8 @@ long md_watch_call(const struct md_fs *fs, long nr, const unsigned long *a) {
         if (r) return r;
         int fd = out.result.fd;
         r = md_fd_filter_arm(MD_FD_SELECTOR_WATCH,fd);
-        if (!r && !(a[0] & IN_CLOEXEC)) r = RAW3(fcntl, fd, F_SETFD, 0);
         if (r) { RAW1(close, fd); return r; }
-        return fd;
+        return md_fs_public_fd(fd,(unsigned)a[0]);
     }
     if (nr == SYS_inotify_rm_watch)
         return request(fs, MD_FS_WATCH_REMOVE, (int)a[0], -1, (unsigned)a[1], &out);

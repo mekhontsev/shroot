@@ -10,6 +10,10 @@ struct md_fs_response {
     struct md_fs_result result;
     char data[sizeof(struct md_image_identity)];
 };
+/* For a public result, request.flags carries the caller's O_CLOEXEC bit.
+ * Private transport descriptors and unfinished open pins are close-on-exec. */
+unsigned md_fs_publication_flags(const struct md_fs_request *);
+long md_fs_public_fd(int fd,unsigned flags);
 /* Logical reply validation, shared by wire and mapped transports. Descriptor
  * custody/publication remains transport-owned; count includes retained results. */
 int md_fs_result_valid(const struct md_fs_request *, const struct md_fs_result *,

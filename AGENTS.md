@@ -18,6 +18,15 @@ paths. Frontends adapt arguments, descriptors and results; they must not duplica
 filesystem, policy, lifecycle or namespace implementations. Ordinary native IO
 must remain direct. Guest policy checks and signals remain meaningful.
 
+For performance work, first identify which guest operations cause stops,
+wakes or RPCs and which processes issue them. Before optimizing the exchange,
+ask whether the guest can complete the operation natively or locally using
+state it already owns. Delegate only what needs an authoritative owner. Prove
+eligibility by resource identity, lifetime and guest semantics, not by program
+or path name. When evidence is missing or changes concurrently, keep the
+authoritative path. Verify both paths and measure end-to-end CPU and latency,
+including helpers; fewer supervisor events alone do not establish a win.
+
 Implement guest behavior using mechanisms available on Android under app UID,
 shell UID 2000, or both. Prefer one implementation across both identities and
 ordinary ARM64 Linux. Add a distinct execution path only for a real capability

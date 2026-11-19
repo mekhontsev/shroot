@@ -83,7 +83,7 @@ static long receive_result(struct md_fs_buffer_frame *frame, const struct md_fs_
         if (fd<0) out->result.error=(int)fd;
         else out->result.fd=(int)fd;
     } else if (transfer==MD_FS_BUFFER_RIGHTS) {
-        long fd=md_adapter_receive_fd(frame,q->flags,MD_FS_BUFFER_RIGHTS_BEGIN);
+        long fd=md_adapter_receive_fd(frame,md_fs_publication_flags(q),MD_FS_BUFFER_RIGHTS_BEGIN);
         if (fd<0) out->result.error=(int)fd;
         else out->result.fd=(int)fd;
     } else if (transfer==MD_FS_BUFFER_ANCHOR || transfer==MD_FS_BUFFER_CALLER_OPEN) {

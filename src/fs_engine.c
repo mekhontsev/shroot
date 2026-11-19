@@ -647,7 +647,7 @@ static void inode_execute(struct md_filesystem *fs,
             }
         }
         goto opened;
-    case MD_FS_WATCH_CREATE: r = md_inode_watch_create(s, (int)q->flags); goto opened;
+    case MD_FS_WATCH_CREATE: r = md_inode_watch_create(s, (int)q->flags|O_CLOEXEC); goto opened;
     case MD_FS_WATCH_ADD:
         r = md_inode_watch_add(s, first, second, q->flags);
         if (r >= 0) { out->position = r; r = 0; }

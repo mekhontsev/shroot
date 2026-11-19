@@ -787,24 +787,22 @@ static void prepare_open(struct md_fs_buffer_request *r,struct md_filesystem *fs
             reply->delivery=MD_FS_REPLIED;
             return;
         }
+        r->opened.flags=md_fs_publication_flags(&r->request);
         if (r->opened.completion.kind==MD_OPEN_CALLER) {
             r->opened.flags=md_open_plan_path(r->output->source,(unsigned)getpid(),
-                (unsigned)r->opened.fd,r->request.flags,r->opened.completion.mode);
+                (unsigned)r->opened.fd,r->opened.flags,r->opened.completion.mode);
             r->output->source_flags=r->opened.flags;
             r->output->transfer=MD_FS_BUFFER_CALLER_OPEN;
             reply->delivery=MD_FS_REPLIED; return;
         }
         if (r->opened.completion.kind) {
-            r->opened.flags=O_CLOEXEC;
+            /* The worker retains the pin; ADDFD publishes the completed OFD. */
             r->output->transfer=MD_FS_BUFFER_ADDFD;
             reply->delivery=MD_FS_REPLIED;
             return;
         }
         int flags=fcntl(r->opened.fd,F_GETFL);
         if (flags<0) { r->error=-errno; return; }
-        r->opened.flags=(flags&O_PATH) || r->snapshot_phase || r->request.operation==MD_FS_FSOPEN || r->request.operation==MD_FS_FSPICK
-            || r->request.operation==MD_FS_FDINFO
-            ? r->request.flags : O_CLOEXEC;
         r->output->transfer=(flags&O_PATH) ? MD_FS_BUFFER_ANCHOR : MD_FS_BUFFER_ADDFD;
         if (!(flags&O_PATH)) {
             reply->delivery=MD_FS_REPLIED;

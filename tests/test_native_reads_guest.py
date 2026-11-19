@@ -2,10 +2,12 @@
 """Read-only namespace operations, including protected task-affine fallbacks."""
 import ctypes
 import errno
+import json
 import os
 from pathlib import Path
 import stat
 import socket
+import subprocess
 import sys
 import tempfile
 
@@ -21,6 +23,40 @@ def check_errno(expected, directory, name, buffer, count):
     ctypes.set_errno(0)
     assert libc.readlinkat(directory, name, buffer, count) == -1
     assert ctypes.get_errno() == expected, (name, ctypes.get_errno(), expected)
+
+
+def descriptor_inheritance(root):
+    os.mkfifo(root / 'fifo')
+    opened = {}
+    try:
+        for cloexec in (0, os.O_CLOEXEC):
+            for path, flags in ((root / 'target', os.O_RDONLY), (root, os.O_DIRECTORY),
+                                (root / 'link', os.O_PATH | os.O_NOFOLLOW),
+                                (root / 'fifo', os.O_RDONLY | os.O_NONBLOCK),
+                                ('/proc/self/exe', os.O_RDONLY), ('/proc/self/mountinfo', os.O_RDONLY),
+                                (None, os.O_NONBLOCK)):
+                # Python's os.open makes every fd non-inheritable regardless of the requested flags.
+                fd = libc.inotify_init1(flags | cloexec) if path is None else libc.open(os.fsencode(path), flags | cloexec)
+                assert fd >= 0, (path, ctypes.get_errno())
+                opened[fd] = None
+                assert os.get_inheritable(fd) == (not cloexec), (path, fd, cloexec)
+                st = os.fstat(fd)
+                if not cloexec:
+                    opened[fd] = (st.st_dev, st.st_ino)
+        child = """import errno, json, os, sys
+for fd, identity in json.loads(sys.argv[1]).items():
+    try:
+        st = os.fstat(int(fd))
+    except OSError as error:
+        assert error.errno == errno.EBADF and identity is None, (fd, identity, error)
+    else:
+        assert [st.st_dev, st.st_ino] == identity, (fd, identity, st)
+"""
+        subprocess.run([sys.executable, '-c', child, json.dumps(opened)], check=True, close_fds=False)
+        print('PASS descriptor inheritance across exec: file, directory, link, FIFO, proc and watch', flush=True)
+    finally:
+        for fd in opened:
+            os.close(fd)
 
 
 def ptrace_capability(enabled):
@@ -61,30 +97,31 @@ def managed_process_reads(root, protected, attached):
         try:
             # EVENT_WAIT: child publishes its protection/identity before observation.
             assert os.read(ready_r, 1) == b'r'
-            # This fixture starts as guest root. Test credential rejection
-            # without CAP_SYS_PTRACE, which explicitly authorizes foreign UIDs.
-            if restricted == 'identity':
-                authority = ptrace_capability(False)
-            for fd in (file, alias, namespace, left.fileno()):
-                path = f'/proc/{child}/fd/{fd}'
-                # Native descriptions retain kernel dumpability checks. An
-                # already admitted namespace handle uses its logical provider.
-                if restricted == 'identity' or (restricted == 'dumpable' and fd != namespace):
-                    try:
-                        os.stat(path)
-                    except OSError as error:
-                        assert error.errno in (errno.EACCES, errno.EPERM), error
-                    else:
-                        raise AssertionError(('protected target admitted', restricted, path))
-                    continue
-                expected = os.fstat(fd)
-                actual = os.stat(path)
-                assert (actual.st_dev, actual.st_ino, actual.st_mode) == (expected.st_dev, expected.st_ino, expected.st_mode)
-                link = os.readlink(path)
-                expected_link = os.readlink(f'/proc/self/fd/{fd}')
-                assert link == expected_link, (path, link, expected_link)
-                if restricted == 'none':
-                    assert stat.S_ISLNK(os.lstat(path).st_mode)
+            # Both credential mismatch and nondumpability require inspection
+            # authority. An inherited FD is not authority over the child's FD.
+            for capable in ((True,) if restricted == 'none' else (False, True)):
+                previous = ptrace_capability(capable)
+                if authority is None:
+                    authority = previous
+                for fd in (file, alias, namespace, left.fileno()):
+                    path = f'/proc/{child}/fd/{fd}'
+                    if not capable:
+                        for operation in (os.stat, os.readlink):
+                            try:
+                                operation(path)
+                            except OSError as error:
+                                assert error.errno in (errno.EACCES, errno.EPERM), error
+                            else:
+                                raise AssertionError(('protected target admitted', restricted, operation.__name__, path))
+                        continue
+                    expected = os.fstat(fd)
+                    actual = os.stat(path)
+                    assert (actual.st_dev, actual.st_ino, actual.st_mode) == (expected.st_dev, expected.st_ino, expected.st_mode)
+                    link = os.readlink(path)
+                    expected_link = os.readlink(f'/proc/self/fd/{fd}')
+                    assert link == expected_link, (path, link, expected_link)
+                    if restricted == 'none':
+                        assert stat.S_ISLNK(os.lstat(path).st_mode)
             print(f'PASS managed proc reads: observer_protected={protected} target={restricted}', flush=True)
         finally:
             if authority is not None:
@@ -104,6 +141,7 @@ def main():
         root = Path(temporary)
         (root / 'target').write_text('namespace data')
         (root / 'link').symlink_to('target')
+        descriptor_inheritance(root)
         for protected in (False, True):
             assert libc.prctl(4, 0 if protected else 1, 0, 0, 0) == 0
             try:

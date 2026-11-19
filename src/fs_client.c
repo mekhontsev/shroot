@@ -24,18 +24,30 @@ static int valid_entries(const char *data, size_t size) {
     }
     return 1;
 }
+enum descriptor_result { MD_FS_NO_DESCRIPTOR, MD_FS_PUBLIC_DESCRIPTOR, MD_FS_PRIVATE_DESCRIPTOR };
+static enum descriptor_result descriptor_result(const struct md_fs_request *request) {
+    switch (request->operation) {
+    case MD_FS_OPEN: case MD_FS_CREATE: case MD_FS_TEMPORARY: case MD_FS_OPEN_OBJECT:
+    case MD_FS_REOPEN: case MD_FS_MOUNT_TABLE: case MD_FS_WATCH_CREATE: case MD_FS_FDINFO:
+    case MD_FS_FSOPEN: case MD_FS_FSMOUNT: case MD_FS_FSPICK: case MD_FS_OPEN_TREE:
+        return MD_FS_PUBLIC_DESCRIPTOR;
+    case MD_FS_IOCTL: return md_filesystem_ioctl_opens(request->mode) ? MD_FS_PUBLIC_DESCRIPTOR : MD_FS_NO_DESCRIPTOR;
+    case MD_FS_BPF: return md_bpf_opens(request->mode) ? MD_FS_PUBLIC_DESCRIPTOR : MD_FS_NO_DESCRIPTOR;
+    case MD_FS_LANDLOCK: return request->mode==MD_LL_CREATE ? MD_FS_PUBLIC_DESCRIPTOR : MD_FS_NO_DESCRIPTOR;
+    case MD_FS_OPEN_IMAGE: case MD_FS_SHM_CHANNEL: case MD_FS_TASK_PATH: return MD_FS_PRIVATE_DESCRIPTOR;
+    case MD_FS_IPC: return request->flags==MD_IPC_MESSAGE_CREATE || request->flags==MD_IPC_MESSAGE_SENDER
+        ? MD_FS_PRIVATE_DESCRIPTOR : MD_FS_NO_DESCRIPTOR;
+    default: return MD_FS_NO_DESCRIPTOR;
+    }
+}
+unsigned md_fs_publication_flags(const struct md_fs_request *request) {
+    return request->flags | (descriptor_result(request)==MD_FS_PRIVATE_DESCRIPTOR ? O_CLOEXEC : 0);
+}
 int md_fs_result_valid(const struct md_fs_request *request, const struct md_fs_result *reply,
         const char *data, size_t capacity, unsigned descriptors) {
     uint32_t operation=request->operation;
     int peer=operation==MD_FS_IOCTL && md_filesystem_ioctl_opens(request->mode);
-    int opens = operation == MD_FS_MOUNT_TABLE || operation == MD_FS_OPEN || operation == MD_FS_CREATE || operation == MD_FS_TEMPORARY
-        || operation == MD_FS_OPEN_OBJECT || operation == MD_FS_OPEN_IMAGE || operation == MD_FS_WATCH_CREATE
-        || operation == MD_FS_REOPEN || operation==MD_FS_FSOPEN || operation==MD_FS_FSMOUNT || operation==MD_FS_FSPICK
-        || operation==MD_FS_FDINFO || operation==MD_FS_OPEN_TREE || operation==MD_FS_SHM_CHANNEL || peer
-        || (operation==MD_FS_BPF && md_bpf_opens(request->mode))
-        || (operation==MD_FS_LANDLOCK && request->mode==MD_LL_CREATE)
-        || operation == MD_FS_TASK_PATH || (operation == MD_FS_IPC
-            && (request->flags == MD_IPC_MESSAGE_CREATE || request->flags == MD_IPC_MESSAGE_SENDER));
+    int opens=descriptor_result(request)!=MD_FS_NO_DESCRIPTOR;
     if (reply->error > 0 || reply->error < -4095 || reply->host_path>2
             || (reply->proc_namespace && !reply->host_path)
             || (reply->host_path==2 && operation!=MD_FS_LINK && operation!=MD_FS_RENAME
@@ -220,6 +232,19 @@ static long receive_reply(int socket, int64_t *delivery_deadline, unsigned timeo
     return 0;
 }
 #endif
+long md_fs_public_fd(int fd,unsigned flags) {
+#ifdef MD_USE_LIBC
+    /* Native wire clients receive private CLOEXEC rights. Only a caller
+     * handing one to the application opts in to making it inheritable. */
+    if (fd>=0 && !(flags&O_CLOEXEC)) {
+        long error=RAW3(fcntl,fd,F_SETFD,0);
+        if (error<0) { RAW1(close,fd); return error; }
+    }
+#else
+    (void)flags; /* Mapped transport sets final descriptor flags at installation. */
+#endif
+    return fd;
+}
 long md_fs_call_deliver(const char *name, unsigned timeout_ms,
         const struct md_fs_request *request, struct md_fs_response *out,
         int (*deliver)(void *, const void *, size_t), void *context) {

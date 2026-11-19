@@ -43,11 +43,7 @@ long md_proc_executable_open(const struct md_fs *fs, const char *path, int flags
     long r = md_fs_call(fs->endpoint, 5000, &q, &result);
     if (r < 0) return r;
     if (result.result.error) return result.result.error;
-    if (!(flags & O_CLOEXEC)) {
-        r = RAW3(fcntl, result.result.fd, F_SETFD, 0);
-        if (r < 0) { RAW1(close, result.result.fd); return r; }
-    }
-    return result.result.fd;
+    return md_namespace_open_result(&result.result,flags);
 }
 void md_proc_image_init(struct md_process_image *image, const void *arguments,
         size_t argument_bytes, size_t environment_bytes, const void *auxv, size_t bytes) {

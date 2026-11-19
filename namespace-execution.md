@@ -63,8 +63,10 @@ its separate provenance requirements.
 
 - Atomic open/create resolves symlinks and performs name publication in one
   transaction. O_EXCL races have one winner; mode-zero creation returns the
-  requested access-mode FD without reopening it. CLOEXEC is applied in the guest,
-  independently of the service's safe descriptor-transfer defaults.
+  requested access-mode FD without reopening it. The mapped transport installs
+  the application's FD with its requested `O_CLOEXEC` bit. Private transfer FDs
+  remain close-on-exec; a native wire client changes the bit only when handing
+  its received FD to the application.
   Regular-file `mknodat` uses the same exclusive creation boundary.
 - The caller reads `Umask` from `/proc/thread-self/status`, without temporarily
   mutating a shared fs_struct. Forked clients with different masks share one
