@@ -224,6 +224,10 @@ static void selectors(void) {
     assert(!md_fd_selector_mark(a,MD_FD_SELECTOR_PROC,-1));
     assert(md_fd_selector_has(shared,MD_FD_SELECTOR_PROC,12345)==1);
     assert(md_fd_selector_has(shared,MD_FD_SELECTOR_WATCH,-1)==1);
+    assert(md_fd_selector_has(shared,MD_FD_SELECTOR_IOCTL,-1)==1);
+    struct md_fd_selector_view exported;
+    md_fd_selector_export(shared,&exported);
+    assert(exported.all==(1U<<MD_FD_SELECTOR_PROC));
     assert(!md_fd_selector_has(copy,MD_FD_SELECTOR_PROC,-1));
     struct md_fd_selector *prepared=md_fd_selector_fork(a,0); assert(prepared);
     assert(md_fd_selector_has(prepared,MD_FD_SELECTOR_PROC,-1)==1);
@@ -277,10 +281,10 @@ static void selectors(void) {
         assert(!md_fd_selector_installed(installed,kind,number,40));
         assert(++count<=MD_FD_SELECTOR_KINDS*3);
     }
-    assert(count==13); /* Four numbered kinds, one all-descriptor poll kind. */
+    assert(count==3*(MD_FD_SELECTOR_KINDS-1)+1); /* Three numbers per class, one global poll. */
     assert(!md_fd_selector_mark(required,MD_FD_SELECTOR_PROC,-1));
     assert(md_fd_selector_missing(required,installed,&kind,&number)==1);
-    assert(kind==MD_FD_SELECTOR_WATCH && number==-1);
+    assert(kind==MD_FD_SELECTOR_PROC && number==-1);
     assert(!md_fd_selector_installed(installed,MD_FD_SELECTOR_PROC,-1,40));
     assert(!md_fd_selector_missing(required,installed,&kind,&number));
     md_fd_selector_release(required); md_fd_selector_release(installed);

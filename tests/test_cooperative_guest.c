@@ -290,7 +290,33 @@ static int cursor_replace(void *argument) {
 }
 static volatile sig_atomic_t cursor_signals;
 static void cursor_signal(int sig) { (void)sig; ++cursor_signals; }
+static int shared_query_peer(void *argument) {
+    int pair[2];
+    assert(read(*(int *)argument,pair,sizeof(pair))==sizeof(pair));
+    for (unsigned i=0;i<2;++i) {
+        unsigned flags=0;
+        assert(!discovery_fd(SYS_ioctl,pair[i],TUNGETFEATURES,(uintptr_t)&flags));
+        assert(flags==(IFF_TUN|IFF_TAP|IFF_NO_PI|IFF_MULTI_QUEUE|IFF_VNET_HDR));
+    }
+    return 0;
+}
+static void shared_object_queries(void) {
+    int channel[2]; assert(!pipe(channel));
+    size_t size=1U<<20;
+    void *stack=malloc(size); assert(stack);
+    pid_t peer=clone(shared_query_peer,(char *)stack+size,CLONE_FILES|SIGCHLD,channel);
+    assert(peer>0);
+    int fd=open("/dev/net/tun",O_RDWR|O_CLOEXEC); assert(fd>=0);
+    int pair[2]={fd,dup(fd)}; assert(pair[1]>=0);
+    assert(write(channel[1],pair,sizeof(pair))==sizeof(pair));
+    reap(peer);
+    assert(!close(pair[0]) && !close(pair[1]) && !close(channel[0]) && !close(channel[1]));
+    free(stack);
+}
 static void object_queries(void) {
+    pid_t shared=fork(); assert(shared>=0);
+    if (!shared) { shared_object_queries(); _exit(0); }
+    reap(shared);
     int fd=open("/dev/net/tun",O_RDWR|O_CLOEXEC); assert(fd>=0);
     unsigned features=0;
     for (unsigned i=0;i<64;++i) {
@@ -315,16 +341,19 @@ static void object_queries(void) {
     if (!child) {
         fd=open("/dev/net/tun",O_RDWR); assert(fd>=0);
         assert(!discovery_fd(SYS_ioctl,fd,TUNGETFEATURES,(uintptr_t)&features));
+        int native=open("/dev/null",O_RDONLY); assert(native>=0);
         struct sock_filter code[]={
             BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
             BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_ioctl,0,1),
-            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EACCES),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EDOM),
             BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)
         };
         struct sock_fprog program={sizeof(code)/sizeof(*code),code};
         assert(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
         assert(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
-        assert(discovery_fd(SYS_ioctl,fd,TUNGETFEATURES,(uintptr_t)&features)==-EACCES);
+        assert(discovery_fd(SYS_ioctl,fd,TUNGETFEATURES,(uintptr_t)&features)==-EDOM);
+        assert(discovery_fd(SYS_ioctl,native,TUNGETFEATURES,(uintptr_t)&features)==-EDOM);
+        assert(!close(native));
         assert(!close(fd)); _exit(0);
     }
     reap(child);

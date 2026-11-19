@@ -260,7 +260,13 @@ static void socket_destroy(struct md_fd_object *object) {
     md_socket_filter_clear(&socket->filter);
     md_network_namespace_release(socket->space); free(socket);
 }
-static const struct md_fd_object_type socket_type={.destroy=socket_destroy};
+static unsigned socket_selectors(const struct md_fd_object *o) {
+    const struct network_socket *s=(const void *)o;
+    /* Routed fabrics have native ordinary sockets. A private fabric may
+     * change its packet topology; retain the namespace owner's ioctl check. */
+    return s->space->fabric->endpoints_enabled ? 0 : 1U<<MD_FD_SELECTOR_IOCTL;
+}
+static const struct md_fd_object_type socket_type={.destroy=socket_destroy,.selector_mask=socket_selectors};
 static const struct md_fd_object_type control_type={.destroy=socket_destroy,
     .selectors=1U<<MD_FD_SELECTOR_PROC};
 struct md_fd_object *md_network_socket_new(struct md_network_namespace *n) {

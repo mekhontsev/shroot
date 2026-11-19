@@ -216,15 +216,16 @@ int md_fd_filter_build(enum md_fd_selector_kind kind,int fd,
     int error=descriptor_operations(out,fd,operations,sizeof(operations)/sizeof(*operations)); \
     return error ? error : finish(gates,out,fd==-1); \
 } while (0)
-    if (kind==MD_FD_SELECTOR_WATCH) {
+    if (kind==MD_FD_SELECTOR_WATCH || kind==MD_FD_SELECTOR_IOCTL) {
         const struct sock_filter prefix[]={
-        /* Other ioctls have no watch semantics; provider filters own theirs. */
         BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_ioctl,0,4),
         BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,args[1])),
-        BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,FIONREAD,1,0),
+        BPF_JUMP(BPF_JMP|BPF_K|(kind==MD_FD_SELECTOR_WATCH ? BPF_JEQ : BPF_JSET),
+            kind==MD_FD_SELECTOR_WATCH ? FIONREAD : MD_IOCTL_DIRECTION_MASK,1,0),
         BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW),
         BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr))};
         for (unsigned i=0;i<sizeof(prefix)/sizeof(*prefix);++i) out->code[out->count++]=prefix[i];
+        if (kind==MD_FD_SELECTOR_IOCTL) SELECT_OPERATIONS(OP(ioctl,1,PROC));
         SELECT_OPERATIONS(OP(read,1,WATCH),OP(readv,1,WATCH),OP(ioctl,1,WATCH),
             OP(splice,1,WATCH),OP(tee,1,WATCH),OP(sendfile,2,WATCH));
     }

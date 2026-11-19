@@ -37,10 +37,15 @@ void md_fd_selector_release(struct md_fd_selector *a) {
     for (unsigned i=0;i<MD_FD_SELECTOR_KINDS;++i) free(a->bits[i]);
     free(a);
 }
+static int all_covered(const struct md_fd_selector *a,unsigned kind) {
+    unsigned mask=1U<<kind;
+    if (kind==MD_FD_SELECTOR_WATCH || kind==MD_FD_SELECTOR_IOCTL) mask|=1U<<MD_FD_SELECTOR_PROC;
+    return !!(a->all&mask);
+}
 int md_fd_selector_has(struct md_fd_selector *a, unsigned kind, int fd) {
     if (!a || kind>=MD_FD_SELECTOR_KINDS || fd< -1) return -EINVAL;
     if (kind==MD_FD_SELECTOR_POLL) fd=-1;
-    if (a->all&(1U<<kind)) return 1;
+    if (all_covered(a,kind)) return 1;
     if (fd==-1) return 0;
     fd &= MD_FD_SELECTOR_MASK;
     /* Allocate before installing an irreversible kernel filter. */
@@ -61,7 +66,6 @@ int md_fd_selector_mark(struct md_fd_selector *a, unsigned kind, int fd) {
     if (fd==-1) {
         ++a->revision;
         a->all|=1U<<kind;
-        if (kind==MD_FD_SELECTOR_PROC) a->all|=1U<<MD_FD_SELECTOR_WATCH;
         return 0;
     }
     fd &= MD_FD_SELECTOR_MASK;
@@ -72,7 +76,7 @@ int md_fd_selector_missing(const struct md_fd_selector *required,struct md_fd_se
         enum md_fd_selector_kind *kind,int *fd) {
     if (!required || !installed || !kind || !fd) return -EINVAL;
     for (unsigned k=0;k<MD_FD_SELECTOR_KINDS;++k) {
-        if (installed->all&(1U<<k)) continue;
+        if (all_covered(installed,k)) continue;
         if (required->all&(1U<<k)) { *kind=k; *fd=-1; return 1; }
         if (!required->bits[k]) continue;
         for (unsigned i=0;i<BYTES;++i) {

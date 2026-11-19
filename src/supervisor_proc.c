@@ -28,6 +28,7 @@
 #include "ipc_pid.h"
 #include "linux_abi.h"
 #include "network_namespace.h"
+#include "supervisor_domain.h"
 #include "network_proc.h"
 #include "pid_namespace.h"
 #include "private_memory.h"
@@ -900,8 +901,10 @@ void proc_lookup_start(struct thread *t) {
     t->proc.splice_write=!file;
     if (!file && (nr==SYS_sendfile || nr==SYS_tee || nr==SYS_splice || nr==SYS_copy_file_range))
         file=proc_file_capture(t,(int)args[nr==SYS_sendfile || nr==SYS_tee ? 1 : 2]);
+    unsigned policy=nr==SYS_ioctl ? domain_descriptor_policy(t,call) : 0;
     CHECK(!md_fd_order_complete(&t->proc.lookup));
     t->phase=IDLE;
+    if (nr==SYS_ioctl && domain_ioctl(t,call,regs,policy)) { md_proc_file_release(file); return; }
     /* A selector collision changes the filter cookie, not syscall ownership.
      * Ordinary directory cursors and filesystem metadata still need their
      * filesystem adapter, including after the pre-sandbox all-FD selector. */

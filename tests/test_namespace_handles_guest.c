@@ -698,10 +698,15 @@ static void offline_network(void) {
     char byte; assert(read(inherited[1],&byte,1)==1 && byte=='a');
     assert(write(local[0],"b",1)==1 && read(local[1],&byte,1)==1 && byte=='b');
     int copy=dup(local[0]); assert(copy>=0);
+    const unsigned long driver_command=_IOR('z',19,unsigned);
+    unsigned value=0;
+    for (unsigned i=0;i<2;++i)
+        assert(ioctl(local[i],driver_command,&value)<0 && errno==ENOTTY);
     assert(!setns(host,CLONE_NEWNET));
     assert(!stat("/proc/self/ns/net",&after) && before.st_ino==after.st_ino);
     struct sockaddr_un address={.sun_family=AF_UNIX}; memcpy(address.sun_path+1,"md-offline",10);
     assert(bind(copy,(void *)&address,sizeof(address))<0 && errno==EOPNOTSUPP);
+    assert(ioctl(copy,driver_command,&value)<0 && errno==ENOTTY);
     int enabled=1;
     assert(setsockopt(copy,SOL_SOCKET,SO_PASSCRED,&enabled,sizeof(enabled))<0 && errno==EOPNOTSUPP);
     pid_t child=fork(); assert(child>=0);

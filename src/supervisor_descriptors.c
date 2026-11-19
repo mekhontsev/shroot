@@ -308,6 +308,7 @@ void fd_start(struct thread *t) {
             struct md_fd_object *objects[2]={inode,inode};
             result=inode ? md_fd_origins_prepare_batch(t->resources.files,objects,
                 t->execution.request.args[1]&O_CLOEXEC ? FD_CLOEXEC : 0,2,t->descriptors.pair_updates) : -ENOMEM;
+            if (!result) result=md_fd_object_selectors(inode);
             md_fd_object_release(inode);
         }
         if (t->descriptors.job==MD_FD_INPUT) {
@@ -783,12 +784,19 @@ void fd_control(struct thread *t,const struct supervisor_control_request *contro
             /* The exit can already have been collected before this trap. */
             result=0;
         } else result=-ENOTSUP;
-    } else if (operation==MD_FD_SELECTOR_QUERY || operation==MD_FD_SELECTOR_INSTALL) {
+    } else if (operation==MD_FD_SELECTOR_QUERY || operation==MD_FD_SELECTOR_INSTALL
+            || operation==MD_FD_SELECTOR_BEFORE_ALLOCATION) {
+        const struct md_fd_order *turn=md_fd_order_state(&t->descriptors.order)==MD_RESOURCE_ORDER_RUNNING
+            ? &t->descriptors.order : &t->fs.returned.files;
+        int allocating=operation==MD_FD_SELECTOR_BEFORE_ALLOCATION;
         if (t->phase!=DISPATCHING || id>=MD_FD_SELECTOR_KINDS || (long)control->args[1]< -1
-                || (long)control->args[1]>INT_MAX || control->args[2]) result=-EINVAL;
+                || (long)control->args[1]>INT_MAX || control->args[2]
+                || (allocating && (id!=MD_FD_SELECTOR_IOCTL || (long)control->args[1]!=-1
+                    || md_fd_order_state(turn)!=MD_RESOURCE_ORDER_RUNNING))) result=-EINVAL;
+        else if (allocating && md_fd_origins_exclusive(turn)) result=0;
         else {
             result=selector_has(t,(unsigned)id,(int)control->args[1]);
-            if (operation==MD_FD_SELECTOR_INSTALL && result>=0) {
+            if (operation!=MD_FD_SELECTOR_QUERY && result>=0) {
                 if (result) result=0;
                 else if (t->action) result=-EBUSY;
                 else if (!task_action_new(t)) result=-ENOMEM;

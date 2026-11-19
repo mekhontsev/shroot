@@ -1,4 +1,5 @@
 #include "network_internal.h"
+#include "fd_selector.h"
 #include "network_forward.h"
 #include "test_network_fixture.h"
 #include <assert.h>
@@ -75,6 +76,8 @@ void test_network_model(void) {
     assert(routed_pair && offline_pair);
     assert(!md_network_socket_offline(routed_pair));
     assert(md_network_socket_offline(offline_pair));
+    assert(!md_fd_object_selectors(routed_pair));
+    assert(md_fd_object_selectors(offline_pair)==(1U<<MD_FD_SELECTOR_IOCTL));
     md_fd_object_release(routed_pair); md_fd_object_release(offline_pair);
     assert(child->count==1 && !child->route_count && !child->links[0].address_count);
     unsigned first=0,second=0,bridge=0;

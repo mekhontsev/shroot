@@ -8,5 +8,7 @@ void domain_buffer_control(struct thread *t,const struct supervisor_control_requ
 void setns_complete(struct thread *t,int error);
 void setns_prepared(struct thread *t,long error);
 int domain_call(struct thread *t,const struct seccomp_data *call,struct user_pt_regs *r, unsigned long cookie);
+unsigned domain_descriptor_policy(struct thread *,const struct seccomp_data *);
+int domain_ioctl(struct thread *,const struct seccomp_data *,struct user_pt_regs *,unsigned policy);
 
 #endif

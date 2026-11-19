@@ -1721,17 +1721,7 @@ unsigned dispatch_policy(struct thread *t) {
     if (t->execution.request.nr==SYS_socket && t->execution.request.args[0]==AF_NETLINK
             && t->execution.request.args[2]==NETLINK_KOBJECT_UEVENT && md_fs_worker_device_events(filesystem))
         policy|=MD_DISPATCH_DEVICE_EVENTS;
-    if (network_descriptor_call(t->execution.request.nr)) {
-        struct md_fd_object *object=md_fd_origins_object(t->resources.files,(int)t->execution.request.args[0],NULL);
-        if (md_network_socket_offline(object)) policy|=MD_DISPATCH_OFFLINE_SOCKET;
-        int interface_ioctl=t->execution.request.nr==SYS_ioctl && md_network_interface_ioctl(t->execution.request.args[1])
-            && md_network_socket_namespace(object);
-        if (md_network_socket_control(object) || interface_ioctl) policy|=MD_DISPATCH_NETWORK_CONTROL;
-        if (md_network_endpoint_is(object) && !interface_ioctl) policy|=MD_DISPATCH_NETWORK_DATA;
-        if (md_device_events_is(object)) policy|=MD_DISPATCH_DEVICE_EVENTS;
-        md_fd_object_release(object);
-    }
-    return policy;
+    return policy|domain_descriptor_policy(t,&t->execution.request);
 }
 
 static struct md_guest_execution execution_description(struct thread *t) {

@@ -20,7 +20,7 @@ static void routing_contract(void) {
     static struct md_interception_routes routes;
     struct md_interception_abi abi={.raw_gate=0x2010000000,.watch_return=0x2010000010,
         .task_return=0x2010000020,.native_return=0x2010000030,.adapter_native_return=0x2010000040,.ready=0x2010000100,
-        .buffer_admit=0x2010000200,.svc_return=0x2010000300,.host_policy=1};
+        .buffer_admit=0x2010000200,.svc_return=0x2010000300,.host_policy=1,.filesystem_endpoint=1};
     assert(!md_interception_routes_init(&routes,&abi));
     const int checkpoints[]={SYS_gettid,SYS_getpid,SYS_getuid,SYS_geteuid,SYS_getgid,SYS_getegid,SYS_getppid};
     struct sock_fprog base={routes.base.count,routes.base.code};
@@ -39,6 +39,35 @@ static void routing_contract(void) {
         assert(result==(SECCOMP_RET_TRACE|MD_INTERCEPT_CHECKPOINT));
     }
     struct md_fd_filter_gates gates=md_fd_filter_runtime_gates(&abi);
+    struct md_fd_selector_view drivers={.active=1u<<MD_FD_SELECTOR_IOCTL};
+    drivers.bits[MD_FD_SELECTOR_IOCTL][0]=1u<<7;
+    struct seccomp_data ioctl_call={.nr=SYS_ioctl,.arch=AUDIT_ARCH_AARCH64,
+        .instruction_pointer=0x4010000004};
+    const unsigned driver=_IOWR('z',19,uint64_t);
+    struct md_interception_abi directory=abi;
+    directory.filesystem_endpoint=0;
+    struct md_interception_program plain;
+    md_interception_program_build(&directory,&plain);
+    struct sock_fprog directory_filter={plain.count,plain.code};
+    ioctl_call.args[1]=driver;
+    uint32_t restricted_route;
+    assert(!md_seccomp_program_eval(&directory_filter,&ioctl_call,&restricted_route));
+    assert(restricted_route==(SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE));
+    const struct { unsigned cmd,fd,decision; } ioctls[]={
+        {driver,8,SECCOMP_RET_ALLOW},{driver,7,SECCOMP_RET_TRACE|MD_INTERCEPT_PROC},
+        {driver,7+MD_FD_SELECTOR_MASK+1,SECCOMP_RET_TRACE|MD_INTERCEPT_PROC},
+        {FS_IOC_GETFLAGS,8,SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE},
+        {TCSETSW2,8,SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE},
+        {FIOCLEX,7,SECCOMP_RET_TRACE|MD_INTERCEPT_FD},
+        {TIOCGPTPEER,8,SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE},
+        {FIONBIO,7,SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE}};
+    for (unsigned i=0;i<sizeof(ioctls)/sizeof(*ioctls);++i) {
+        ioctl_call.args[0]=ioctls[i].fd;
+        ioctl_call.args[1]=(UINT64_C(1)<<32)|ioctls[i].cmd;
+        uint32_t actual;
+        assert(!md_interception_routes_eval(&routes,&drivers,0,&ioctl_call,&actual));
+        assert(actual==ioctls[i].decision);
+    }
     for (unsigned selected_queue=0;selected_queue<2;++selected_queue) {
         struct md_fd_selector_view view={.active=selected_queue ? 1u<<MD_FD_SELECTOR_EPOLL : 0};
         view.bits[MD_FD_SELECTOR_EPOLL][3/64]=UINT64_C(1)<<(3%64);
@@ -212,6 +241,8 @@ static unsigned expected(unsigned kind,int fd,const struct seccomp_data *d) {
         case SYS_ioctl: selected=(unsigned)d->args[1]==FIONREAD; break;
         case SYS_sendfile: selected=2; break;
         }
+    } else if (kind==MD_FD_SELECTOR_IOCTL) {
+        selected=d->nr==SYS_ioctl && _IOC_DIR((unsigned)d->args[1])!=_IOC_NONE;
     } else if (kind==MD_FD_SELECTOR_PROC) {
         if (d->nr==SYS_ioctl && ((unsigned)d->args[1]==FIOCLEX || (unsigned)d->args[1]==FIONCLEX))
             return SECCOMP_RET_ALLOW;
@@ -239,6 +270,7 @@ static unsigned expected(unsigned kind,int fd,const struct seccomp_data *d) {
     for (unsigned n=0;n<6;++n) if ((selected&(1u<<n))
             && (fd==-1 || (d->args[n]&MD_FD_SELECTOR_MASK)==((unsigned)fd&MD_FD_SELECTOR_MASK)))
         return SECCOMP_RET_TRACE|(kind==MD_FD_SELECTOR_WATCH ? MD_INTERCEPT_WATCH
+            : kind==MD_FD_SELECTOR_IOCTL ? MD_INTERCEPT_PROC
             : kind==MD_FD_SELECTOR_PROC ? (d->nr==SYS_sendto || d->nr==SYS_recvfrom
                 ? MD_INTERCEPT_DISPATCH : MD_INTERCEPT_PROC) : MD_INTERCEPT_READINESS);
     return SECCOMP_RET_ALLOW;
@@ -264,7 +296,8 @@ void test_fd_filter_program(void) {
     const struct md_fd_filter_gates gates={0x1112345678,0x2212345678,0x3312345678,0x5512345678,0x6612345678};
     const uintptr_t exempt[]={gates.raw,gates.watch,gates.task,gates.native,gates.adapter};
     const int fds[]={0,190,511,512,1024*1024,-1};
-    const unsigned commands[]={0,F_GETFL,F_SETFL,F_GETFD,F_GET_SEALS,F_ADD_SEALS,F_DUPFD,F_DUPFD_CLOEXEC,FIONREAD,FIONBIO,FIOCLEX,FIONCLEX};
+    const unsigned commands[]={0,F_GETFL,F_SETFL,F_GETFD,F_GET_SEALS,F_ADD_SEALS,F_DUPFD,F_DUPFD_CLOEXEC,
+        FIONREAD,FIONBIO,FIOCLEX,FIONCLEX,_IOR('z',19,unsigned),_IOW('z',19,unsigned)};
     struct md_fd_filter_program built;
     assert(md_fd_filter_build(MD_FD_SELECTOR_PROC,0,&gates,NULL)==-EINVAL);
     assert(md_fd_filter_build(MD_FD_SELECTOR_PROC,0,NULL,&built)==-EINVAL && !built.count);

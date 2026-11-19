@@ -582,9 +582,17 @@ static int selector_peer_ready(struct thread *peer,unsigned kind,int number) {
     return 1;
 }
 
+static int selector_table_request(unsigned kind,int number) {
+    /* Global sandbox preflight covers one thread group. Driver preflight
+     * protects publication into the shared table before a number exists. */
+    return number>=0 || kind==MD_FD_SELECTOR_IOCTL;
+}
 int selector_has(struct thread *t,unsigned kind,int number) {
+    /* Plain-directory launches already refer every driver command to its
+     * domain owner, including after a restricted proc-root transition. */
+    if (kind==MD_FD_SELECTOR_IOCTL && !t->endpoint[0]) return 1;
     int ready=md_fd_selector_has(t->descriptors.selector,kind,number);
-    if (ready<=0 || number<0) return ready;
+    if (ready<=0 || !selector_table_request(kind,number)) return ready;
     for (struct thread *peer=threads;peer;peer=peer->next)
         if (peer->pid && peer->born && peer->resources.files==t->resources.files
                 && peer->descriptors.selector!=t->descriptors.selector) {
@@ -755,7 +763,8 @@ void task_action_start(struct thread *t) {
     /* The request may already own this turn for dup or received publication.
      * Otherwise acquire it before freezing the set of CLONE_FILES holders.
      * A copied table inherits only filters captured before its kernel clone. */
-    if (!owner->selected_group && owner->number>=0 && md_fd_order_state(&t->descriptors.order)!=MD_RESOURCE_ORDER_RUNNING
+    int table_request=selector_table_request(owner->kind,owner->number);
+    if (!owner->selected_group && table_request && md_fd_order_state(&t->descriptors.order)!=MD_RESOURCE_ORDER_RUNNING
             && md_fd_order_state(&t->fs.returned.files)!=MD_RESOURCE_ORDER_RUNNING
             && !(t->signals.control && md_fd_order_state(&t->signals.control->files)==MD_RESOURCE_ORDER_RUNNING)
             && !(t->seccomp.install && md_fd_order_state(&t->seccomp.install->files)==MD_RESOURCE_ORDER_RUNNING)
@@ -776,7 +785,7 @@ void task_action_start(struct thread *t) {
     if (ready && owner->selected_group) { task_action_finish(owner,0); return; }
     if (!ready && (!owner->selected_group || owner->selected_group==t->descriptors.selector)) candidate=t;
     int pending=0;
-    for (struct thread *peer=threads;!candidate && owner->number>=0 && peer;peer=peer->next)
+    for (struct thread *peer=threads;!candidate && table_request && peer;peer=peer->next)
         if (peer->pid && peer->born && (owner->selected_group
                 ? peer->descriptors.selector==owner->selected_group : peer->resources.files==t->resources.files)) {
             ready=selector_peer_ready(peer,owner->kind,owner->number);

@@ -149,9 +149,19 @@ Explicit `MSG_DONTWAIT` socket calls and `IPC_NOWAIT` message operations do not
 acquire a blocking-context requirement. The socket adapter and ingress share
 the same flag classifier. Descriptor publication and other independent context
 requirements still apply; an FD's mutable `O_NONBLOCK` flag alone is not proof.
-An `ioctl` admitted as native uses the same signal-aware journal, including
-commands that may block. The descriptor owner still decides whether the command
-is native; classification does not itself require a stopped caller. C adapters
+In an environment with a filesystem endpoint, directional driver `ioctl` commands
+on ordinary FDs go to the kernel. No path, vendor or range of FD numbers is
+trusted. Filesystem metadata and extended terminal commands retain their owners;
+virtual providers can intercept driver commands without intercepting data IO.
+An FD selector match triggers a lookup, not a grant. When `dup` or rights
+transfer publishes a controlled FD at a kernel-assigned number in a shared table, its driver commands
+are covered before allocation, including in separate thread groups sharing
+the table. Known destinations retain numbered selectors. Directory-only launches
+retain domain checks for their restricted proc-root mode. Application and host
+filters remain in force in both modes.
+
+A native `ioctl` reached through resident entry uses the same signal-aware
+journal, including commands that may block. C adapters
 that retain an original-stack requirement request it separately. Internal native
 effects of an admitted C adapter use that same journal, including the extended
 terminal setter's legacy ABI fallback. When the service gate is admitted, native

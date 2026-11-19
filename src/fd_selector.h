@@ -11,7 +11,7 @@ struct md_fd_observation { long selectors; uint64_t generation; };
 enum { MD_FD_SELECTOR_MASK = 511 };
 enum md_fd_selector_kind { MD_FD_SELECTOR_WATCH, MD_FD_SELECTOR_PROC,
     MD_FD_SELECTOR_EPOLL_TARGET, MD_FD_SELECTOR_EPOLL, MD_FD_SELECTOR_POLL,
-    MD_FD_SELECTOR_KINDS };
+    MD_FD_SELECTOR_IOCTL, MD_FD_SELECTOR_KINDS };
 enum { MD_FD_SELECTOR_WORDS=(MD_FD_SELECTOR_MASK+1)/64 };
 struct md_fd_selector;
 struct md_fd_selector_view {
@@ -26,7 +26,7 @@ struct md_fd_selector *md_fd_selector_new(void);
 struct md_fd_selector *md_fd_selector_fork(struct md_fd_selector *, int shared);
 void md_fd_selector_release(struct md_fd_selector *);
 /* -1 selects all descriptor numbers, for admission before application filters
- * make later selector installation impossible. PROC also covers WATCH calls. */
+ * make later selector installation impossible. Global PROC covers WATCH and IOCTL. */
 int md_fd_selector_has(struct md_fd_selector *, unsigned kind, int fd);
 int md_fd_selector_has_mask(struct md_fd_selector *, unsigned kinds, int fd);
 int md_fd_selector_mark(struct md_fd_selector *, unsigned kind, int fd);

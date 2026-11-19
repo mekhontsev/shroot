@@ -858,13 +858,14 @@ static void tcp_defaults(void) {
     assert(!md_network_parameter_read(child,MD_NET_TCP_KEEPIDLE,0,values) && values[0]==7200);
     struct md_fd_object *tcp,*udp; int fd,datagram;
     assert(!md_network_endpoint_open(n,0,AF_INET,SOCK_DGRAM,0,&udp,&datagram));
-    assert(!md_fd_object_selectors(udp));
+    assert(md_fd_object_selectors(udp)==(1U<<MD_FD_SELECTOR_IOCTL));
     values[0]=1801;
     assert(!md_network_parameter_write(n,MD_NET_TCP_KEEPIDLE,0,values));
     values[0]=1800;
     assert(!md_network_parameter_write(n,MD_NET_TCP_KEEPIDLE,0,values));
     assert(!md_network_endpoint_open(n,0,AF_INET,SOCK_STREAM,0,&tcp,&fd));
-    assert(md_fd_object_selectors(tcp)==((1U<<MD_FD_SELECTOR_EPOLL_TARGET)|(1U<<MD_FD_SELECTOR_POLL)));
+    assert(md_fd_object_selectors(tcp)==((1U<<MD_FD_SELECTOR_IOCTL)
+        |(1U<<MD_FD_SELECTOR_EPOLL_TARGET)|(1U<<MD_FD_SELECTOR_POLL)));
     for (unsigned i=0;i<3;++i) {
         int value=-1; socklen_t length=sizeof(value);
         assert(!getsockopt(fd,IPPROTO_TCP,options[i],&value,&length) && value==(int)selected[i]);

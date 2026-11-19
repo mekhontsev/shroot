@@ -6,8 +6,11 @@
 static inline int md_terminal_identity_command(unsigned command) {
     return command==TIOCGPGRP || command==TIOCSPGRP || command==TIOCGSID;
 }
+#define MD_TERMINAL_ATTRIBUTE_COMMANDS(X) X(TCGETS2) X(TCSETS2) X(TCSETSW2) X(TCSETSF2)
 static inline int md_terminal_attributes_command(unsigned command) {
-    return command==TCGETS2 || command==TCSETS2 || command==TCSETSW2 || command==TCSETSF2;
+#define MATCH(value) command==(value) ||
+    return MD_TERMINAL_ATTRIBUTE_COMMANDS(MATCH) 0;
+#undef MATCH
 }
 long md_terminal_attributes(const unsigned long *);
 #endif

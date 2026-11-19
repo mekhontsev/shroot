@@ -48,7 +48,7 @@ long md_descriptor_duplicate(const struct md_fs *fs, long nr, const unsigned lon
     if (nr==SYS_dup3 && (int)a[1]>=0 && (int)a[0]!=(int)a[1] && !((unsigned)a[2]&~O_CLOEXEC)) {
         /* Admission failure must not replace the caller's destination. */
         result=md_fd_filter_arm_mask(required,(int)a[1]);
-    }
+    } else if (nr!=SYS_dup3) result=md_fd_filter_before_allocation(required);
     if (!result) result=md_guest_native_call(nr,a);
     if (result>=0 && nr!=SYS_dup3) {
         long activation=md_fd_filter_arm_mask(required,(int)result);
@@ -65,10 +65,11 @@ long md_descriptor_pair(long nr, const unsigned long *a) {
     unsigned long output=a[nr==SYS_pipe2 ? 0 : 3];
     long result=md_fd_control(MD_FD_PAIR_BEGIN,0,0,0);
     if (result<0) return result;
-    /* Kernel creation publishes directly to the application's output. A fatal
-     * signal cannot strand endpoints in a private adapter stack with surviving
-     * CLONE_FILES peers. Read back only after successful native publication. */
-    result=md_raw(nr,a[0],a[1],a[2],a[3],a[4],a[5]);
+    /* Kernel creation publishes both numbers directly into application memory.
+     * Arm the operations before a file-table peer can observe the output;
+     * a fatal signal must not strand endpoints in a private adapter stack. */
+    if (result) result=md_fd_filter_prepare_all((unsigned)result);
+    if (!result) result=md_raw(nr,a[0],a[1],a[2],a[3],a[4],a[5]);
     long observed=result ? result : md_read_memory(ends,(const void *)output,sizeof(ends));
     if (observed<0) ends[0]=ends[1]=-1;
     long published=md_fd_control(MD_FD_PAIR_END,0,ends[0],ends[1]);

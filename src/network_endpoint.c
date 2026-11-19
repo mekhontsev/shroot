@@ -91,7 +91,7 @@ static struct md_control_file readiness(struct md_fd_object *object) {
     return md_network_connection_readiness(e->connection);
 }
 static const struct md_fd_object_type endpoint_type={.destroy=destroy,
-    .selector_mask=selectors,.readiness=readiness};
+    .selectors=1U<<MD_FD_SELECTOR_IOCTL,.selector_mask=selectors,.readiness=readiness};
 int md_network_endpoint_tcp_idle(const struct md_network_namespace *n) {
     for (const struct md_network_endpoint *e=n->fabric->endpoints;e;e=e->next)
         if (e->space==n && e->protocol==IPPROTO_TCP) return 0;

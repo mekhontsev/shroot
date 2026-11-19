@@ -3887,6 +3887,26 @@ static long duplicate_exit_trace(int request,pid_t pid,void *address,void *data)
     }
     return fd_resume_trace(request,pid,address,data);
 }
+static void pair_selector_scope(void) {
+    struct thread opener={.pid=123,.born=1},peer={.pid=124,.born=1};
+    opener.resources.files=md_fd_origins_new(); assert(opener.resources.files);
+    peer.resources.files=opener.resources.files;
+    opener.descriptors.selector=md_fd_selector_new(); peer.descriptors.selector=md_fd_selector_new();
+    assert(opener.descriptors.selector && peer.descriptors.selector);
+    struct thread *previous=threads;
+    threads=&opener; opener.next=&peer;
+    opener.descriptors.job=MD_FD_PAIR_BEGIN;
+    assert(selector_has(&opener,MD_FD_SELECTOR_IOCTL,-1)==1); /* Directory-mode base owns every ioctl. */
+    strcpy(opener.endpoint,"test");
+    assert(!selector_has(&opener,MD_FD_SELECTOR_IOCTL,-1));
+    assert(!md_fd_selector_mark(opener.descriptors.selector,MD_FD_SELECTOR_IOCTL,-1));
+    assert(!selector_has(&opener,MD_FD_SELECTOR_IOCTL,-1)); /* Separate filter group, shared table. */
+    assert(!md_fd_selector_mark(peer.descriptors.selector,MD_FD_SELECTOR_PROC,-1));
+    assert(selector_has(&opener,MD_FD_SELECTOR_IOCTL,-1)==1);
+    threads=previous;
+    md_fd_selector_release(opener.descriptors.selector); md_fd_selector_release(peer.descriptors.selector);
+    md_fd_origins_release(opener.resources.files);
+}
 static void duplicate_prepared_admission(void) {
     struct thread t={.pid=123,.phase=IDLE,.ready=1};
     t.resources.files=md_fd_origins_new(); assert(t.resources.files);
@@ -8784,6 +8804,7 @@ int main(void) {
     duplicate_retirement_order();
     fd_native_admission();
     fd_native_retirement();
+    pair_selector_scope();
     duplicate_prepared_admission();
     fd_shared_mutations(); pidfd_shared_birth(); process_shared_waits(); process_remote_repair(); close_shared_completion();
     process_signal_admission();

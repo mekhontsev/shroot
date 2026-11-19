@@ -140,11 +140,37 @@ void setns_prepared(struct thread *t,long error) {
     setns_complete(t,error);
 }
 
+unsigned domain_descriptor_policy(struct thread *t,const struct seccomp_data *call) {
+    if (!network_descriptor_call(call->nr)) return 0;
+    struct md_fd_object *object=md_fd_origins_object(t->resources.files,(int)call->args[0],NULL);
+    unsigned policy=0;
+    int interface=call->nr==SYS_ioctl && md_network_interface_ioctl(call->args[1])
+        && md_network_socket_namespace(object);
+    if (md_network_socket_offline(object)) policy|=MD_DISPATCH_OFFLINE_SOCKET;
+    if (md_network_socket_control(object) || interface) policy|=MD_DISPATCH_NETWORK_CONTROL;
+    if (md_network_endpoint_is(object) && !interface) policy|=MD_DISPATCH_NETWORK_DATA;
+    if (md_device_events_is(object)) policy|=MD_DISPATCH_DEVICE_EVENTS;
+    md_fd_object_release(object);
+    return policy;
+}
+static int descriptor_network_owner(unsigned policy) {
+    return policy&(MD_DISPATCH_NETWORK_CONTROL|MD_DISPATCH_NETWORK_DATA|MD_DISPATCH_DEVICE_EVENTS);
+}
+int domain_ioctl(struct thread *t,const struct seccomp_data *call,struct user_pt_regs *r,unsigned policy) {
+    if (descriptor_network_owner(policy)) { execution_begin(t,call,r,"network-call-mask"); return 1; }
+    if (policy&MD_DISPATCH_OFFLINE_SOCKET) { return_value(t,r,-ENOTTY); return 1; }
+    unsigned command=(unsigned)call->args[1];
+    if (md_terminal_attributes_command(command) || md_pidfd_namespace_command(command)
+            || md_filesystem_ioctl_command(command)) {
+        execution_begin(t,call,r,"descriptor-ioctl-mask"); return 1;
+    }
+    return 0;
+}
 int domain_call(struct thread *t,const struct seccomp_data *call,struct user_pt_regs *r, unsigned long cookie) {
     long nr = call->nr;
     /* Descriptor-table ioctls retain native validation and FD bookkeeping;
      * a managed/offline socket does not give them network semantics. */
-    if (cookie==MD_INTERCEPT_FD && nr==SYS_ioctl) return 0;
+    if (nr==SYS_ioctl && (cookie==MD_INTERCEPT_FD || cookie==MD_INTERCEPT_PROC)) return 0;
     if (nr==SYS_pidfd_getfd && t->ready && t->phase==IDLE) {
         execution_begin(t,call,r,"descriptor-copy-mask"); return 1;
     }
@@ -199,39 +225,25 @@ int domain_call(struct thread *t,const struct seccomp_data *call,struct user_pt_
         if (error) { return_value(t, r, error); return 1; }
     }
     if (t->ready && t->phase==IDLE) {
-        struct md_fd_object *object=network_descriptor_call(nr)
-            ? md_fd_origins_object(t->resources.files,(int)call->args[0],NULL) : NULL;
-        int control=md_network_socket_control(object) || md_network_endpoint_is(object) || md_device_events_is(object)
-            || (nr==SYS_ioctl && md_network_interface_ioctl(call->args[1]) && md_network_socket_namespace(object));
+        unsigned policy=domain_descriptor_policy(t,call);
         int native_payload=md_socket_payload_native(nr,call->args[4])
-            && !md_network_socket_control(object) && !md_device_events_is(object);
-        md_fd_object_release(object);
+            && !(policy&(MD_DISPATCH_NETWORK_CONTROL|MD_DISPATCH_DEVICE_EVENTS));
         /* No pathname, peer address or ancillary result needs adaptation.
          * Keep blocking IO at its original PC/mask so signals and a debugger
          * interrupt do not wait for an internal adapter to finish reading. */
         if (native_payload) { native_continue(t); return 1; }
         int devices=nr==SYS_socket && call->args[0]==AF_NETLINK && call->args[2]==NETLINK_KOBJECT_UEVENT
             && md_fs_worker_device_events(filesystem);
-        if (control || devices || (nr==SYS_socket && md_network_namespace_managed(t->resources.network))) {
+        if (nr==SYS_ioctl) {
+            if (domain_ioctl(t,call,r,policy)) return 1;
+        } else if (descriptor_network_owner(policy) || devices || (nr==SYS_socket && md_network_namespace_managed(t->resources.network))) {
             execution_begin(t,call,r,"network-call-mask");
             return 1;
         }
-    }
-    if (t->ready && t->phase==IDLE && (nr==SYS_bind || nr==SYS_connect || nr==SYS_listen
-            || nr==SYS_setsockopt || nr==SYS_ioctl)) {
-        struct md_fd_object *object=md_fd_origins_object(t->resources.files,(int)call->args[0],NULL);
-        int offline=md_network_socket_offline(object); md_fd_object_release(object);
-        /* Namespace-mutating ioctls and Unix autobind must not reach Android's
-         * network. Ordinary inherited descriptions keep their own authority. */
-        if (offline && (nr!=SYS_setsockopt || (call->args[1]==SOL_SOCKET && call->args[2]==SO_PASSCRED))) {
-            return_value(t,r,nr==SYS_ioctl ? -ENOTTY : -EOPNOTSUPP); return 1;
+        if ((policy&MD_DISPATCH_OFFLINE_SOCKET) && (nr==SYS_bind || nr==SYS_connect || nr==SYS_listen
+                || (nr==SYS_setsockopt && call->args[1]==SOL_SOCKET && call->args[2]==SO_PASSCRED))) {
+            return_value(t,r,-EOPNOTSUPP); return 1;
         }
-    }
-    if (t->ready && t->phase==IDLE && nr==SYS_ioctl && (md_terminal_attributes_command((unsigned)call->args[1])
-            || md_pidfd_namespace_command((unsigned)call->args[1])
-            || md_filesystem_ioctl_command((unsigned)call->args[1]))) {
-        execution_begin(t,call,r,"descriptor-ioctl-mask");
-        return 1;
     }
     if (nr == SYS_unshare) {
         CHECK(t->phase == IDLE);

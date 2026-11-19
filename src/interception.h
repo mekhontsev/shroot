@@ -84,7 +84,7 @@ struct md_interception_abi {
     uintptr_t task_abort_return;
     uintptr_t compare_exchange, exchanged;
     uintptr_t signal_entry, signal_entry_committed, signal_entry_end;
-    unsigned host_policy;
+    unsigned host_policy,filesystem_endpoint;
 };
 long md_guest_buffer_admit(unsigned purpose);
 struct md_task_call_arguments;

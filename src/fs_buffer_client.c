@@ -45,6 +45,7 @@ long md_adapter_receive_fd(struct md_fs_buffer_frame *frame, unsigned flags, uns
         result=md_guest_buffer_admit(MD_FS_BUFFER_IMPORT);
         if (result>=0) result=md_guest_buffer_control(MD_FS_BUFFER_RIGHTS_READY,0,0);
     }
+    if (!result) result=md_fd_filter_before_allocation(frame->reply.result.selectors);
     if (!result) result=RAW3(recvmsg,frame->receive.number,&receipt->message,
         MSG_DONTWAIT|((flags&O_CLOEXEC) ? MSG_CMSG_CLOEXEC : 0));
     return md_guest_buffer_control(MD_FS_BUFFER_RIGHTS_DONE,(unsigned long)result,0);
@@ -286,6 +287,7 @@ long md_fs_buffer_publish(enum md_received_source source, const int *indices, co
     if (!count || count>253) return -EINVAL;
     int has_selectors=0;
     for (unsigned i=0;i<count;++i) has_selectors|=selectors[i];
+    unsigned requirements=(unsigned)has_selectors;
     if (has_selectors) {
         long ready=md_fd_filter_prepared((unsigned)has_selectors);
         if (ready<0) return ready;
@@ -309,6 +311,7 @@ long md_fs_buffer_publish(enum md_received_source source, const int *indices, co
     /* Prepared sandbox filters need neither a limit query nor a free-slot
      * scan. Otherwise the table turn spans selector preparation and kernel
      * copy; only descriptors that can fit are armed, never speculative FDs. */
+    if (!result) result=md_fd_filter_before_allocation(requirements);
     if (!result && has_selectors) {
         struct rlimit limit;
         result=RAW4(prlimit64,0,RLIMIT_NOFILE,NULL,&limit);

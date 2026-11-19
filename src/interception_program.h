@@ -2,6 +2,8 @@
 #define MD_INTERCEPTION_PROGRAM_H
 #include "interception.h"
 #include "fd_filter_program.h"
+#include "filesystem_ioctl.h"
+#include "terminal_calls.h"
 #include "descriptor_calls.h"
 #include "file_calls.h"
 #include "socket_calls.h"
@@ -326,7 +328,22 @@ static inline void md_interception_program_build(const struct md_interception_ab
             TRACE(recvmmsg)
             MD_SOCKET_CALLS(TRACE)
             TRACE(execve) TRACE(execveat)
-            BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRACE | MD_INTERCEPT_NATIVE)
+            BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_ioctl,1,0),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE),
+            BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,args[1])),
+            BPF_JUMP(BPF_JMP|BPF_JSET|BPF_K,MD_IOCTL_DIRECTION_MASK,1,0),
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE),
+            /* Global command owners are independent of the FD. For other
+             * driver requests, object selectors retain virtual controls. */
+#define OWNED_IOCTL(command) BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,command,0,1), \
+            BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE),
+            MD_FILESYSTEM_METADATA_COMMANDS(OWNED_IOCTL)
+            MD_TERMINAL_ATTRIBUTE_COMMANDS(OWNED_IOCTL)
+#undef OWNED_IOCTL
+            /* A plain-directory launch can enter a restricted proc root.
+             * Its domain decides which inherited descriptor calls remain legal. */
+            BPF_STMT(BPF_RET|BPF_K,abi->filesystem_endpoint ? SECCOMP_RET_ALLOW
+                : SECCOMP_RET_TRACE|MD_INTERCEPT_NATIVE)
         };
 #undef TRACE
 #undef OBSERVE

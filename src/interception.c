@@ -156,6 +156,7 @@ static int host_signal_install(int inherited) {
 }
 int md_interception_install(int inherited) {
     abi.host_policy=md_app_uid_active;
+    abi.filesystem_endpoint=!!md_files.endpoint[0];
     long result=md_cooperative_routes_init(&abi);
     if (result) return (int)result;
     int listener = -1, capabilities=0;

@@ -2,11 +2,15 @@
 #define MD_FD_FILTER_PROGRAM_H
 #include "fd_selector.h"
 #include "interception.h"
+#include <asm/ioctl.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/syscall.h>
+
+/* Legacy scalar controls retain their domain owners. */
+#define MD_IOCTL_DIRECTION_MASK ((uint32_t)_IOC_DIRMASK << _IOC_DIRSHIFT)
 
 /* Enter with the syscall number in A; leave it unchanged for other calls.
  * Linux close consumes the low unsigned-int argument, not its upper 32 bits. */
