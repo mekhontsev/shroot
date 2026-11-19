@@ -606,6 +606,9 @@ static pid_t wait_event(int *status, struct rusage *usage) {
             if (held) { retained_barrier_blocked(pid); continue; }
             return pid;
         }
+        /* An interrupted child wait did not prove the queue empty. Its
+         * SIGCHLD hint may already be consumed, so do not park on the FD. */
+        if (pid<0 && errno==EINTR) continue;
         if (pid<0 && errno==ECHILD && md_broker_pending_events(broker)) pid=0;
         if (pid<0 && errno==ECHILD) {
             fprintf(stderr,"Shroot: empty task queue live=%u buffers=%u helpers=%u\n",
@@ -619,7 +622,7 @@ static pid_t wait_event(int *status, struct rusage *usage) {
             md_broker_describe(broker,STDERR_FILENO);
             errno=ECHILD;
         }
-        CHECK(pid == 0 || errno == EINTR);
+        CHECK(pid==0);
         if (memory_runnable() || retained_runnable() || entry_progress) continue;
         /* EVENT_WAIT: task/resource progress, signal or cancellation timer.
          * The timer is serviced even while ptrace continuously has work. */

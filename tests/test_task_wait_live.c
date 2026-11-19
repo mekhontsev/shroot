@@ -14,14 +14,22 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-static unsigned calls, general, directed, misses;
+enum wait_result { READY, EMPTY, ERROR };
+static unsigned calls, counts[2][3];
 pid_t __real_wait4(pid_t, int *, int, struct rusage *);
 pid_t __wrap_wait4(pid_t pid, int *status, int options, struct rusage *usage) {
     calls++;
-    if (pid==-1) general++; else directed++;
     pid_t result=__real_wait4(pid,status,options,usage);
-    if (!result) misses++;
+    ++counts[pid!=-1][result>0 ? READY : result ? ERROR : EMPTY];
     return result;
+}
+static void print_queries(void) {
+    const unsigned *general=counts[0], *directed=counts[1];
+    printf(" calls=%u general=%u directed=%u misses=%u"
+        " generalReady=%u generalEmpty=%u generalError=%u directedReady=%u directedEmpty=%u directedError=%u",
+        calls,general[READY]+general[EMPTY]+general[ERROR],directed[READY]+directed[EMPTY]+directed[ERROR],
+        general[EMPTY]+directed[EMPTY],general[READY],general[EMPTY],general[ERROR],
+        directed[READY],directed[EMPTY],directed[ERROR]);
 }
 static void cancel_collected(void) {
     enum { CHILDREN=48 };
@@ -143,8 +151,10 @@ int main(int argc,char **argv) {
             if (++initialized==total) printf("READY initial child stops: children=%u stops=%u\n",total,stops);
         }
         seen[i]++; stops++;
-        if (!(stops%2048)) printf("READY wait progress: stops=%u calls=%u general=%u directed=%u misses=%u\n",
-            stops,calls,general,directed,misses);
+        if (!(stops%2048)) {
+            printf("READY wait progress: stops=%u",stops);
+            print_queries(); putchar('\n');
+        }
         assert(!ptrace(i<hot ? PTRACE_SYSCALL : PTRACE_CONT,pid,0,0));
     }
     assert(stops>=hot*requests*2);
@@ -162,7 +172,7 @@ int main(int argc,char **argv) {
     alarm(0); close(fd);
     assert(!clock_gettime(CLOCK_MONOTONIC,&ended));
     double elapsed=ended.tv_sec-started.tv_sec+(ended.tv_nsec-started.tv_nsec)/1e9;
-    printf("PASS live wait collection: children=%u stops=%u empty=%u calls=%u general=%u directed=%u misses=%u seconds=%.6f\n",
-        exited,stops,empty,calls,general,directed,misses,elapsed);
+    printf("PASS live wait collection: children=%u stops=%u empty=%u",exited,stops,empty);
+    print_queries(); printf(" seconds=%.6f\n",elapsed);
     return 0;
 }
