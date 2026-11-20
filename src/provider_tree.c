@@ -20,10 +20,14 @@ struct directory_identity {
     struct timespec modified,changed;
 };
 struct directory_checkpoint {
-    char *path;
-    struct directory_identity roots[2];
     off_t position,native;
     unsigned layer;
+};
+struct directory_hints {
+    char *path;
+    struct directory_identity roots[2];
+    struct directory_checkpoint positions[4];
+    unsigned next;
 };
 struct md_provider_tree {
     atomic_uint references;
@@ -37,7 +41,7 @@ struct md_provider_tree {
     struct md_mount_policy super_policy;
     /* Optional scan hints, not cursor ownership. Cold imports, arbitrary seeks
      * and eviction replay the ordinal from the shared OFD. No FD is retained. */
-    struct directory_checkpoint directories[16];
+    struct directory_hints directories[16];
     unsigned next_directory;
     pthread_mutex_t directory_lock;
 };
@@ -245,6 +249,32 @@ static int same_directory(const struct directory_identity *a,const struct direct
         && a->modified.tv_sec==b->modified.tv_sec && a->modified.tv_nsec==b->modified.tv_nsec
         && a->changed.tv_sec==b->changed.tv_sec && a->changed.tv_nsec==b->changed.tv_nsec;
 }
+/* Readers need not advance in lockstep. Keep a short position history per
+ * projection so a busy directory cannot evict unrelated readers. Both
+ * lookups run under directory_lock; failure to cache never fails a read. */
+static struct directory_hints *directory_hints(struct md_provider_tree *tree,
+        const char *path,const struct directory_identity roots[2],int create) {
+    unsigned count=sizeof(tree->directories)/sizeof(*tree->directories);
+    for (unsigned i=0;i<count;++i) {
+        struct directory_hints *d=&tree->directories[i];
+        if (d->path && same_directory(&d->roots[0],&roots[0])
+                && same_directory(&d->roots[1],&roots[1]) && !strcmp(d->path,path)) return d;
+    }
+    char *key=create ? strdup(path) : NULL;
+    if (!key) return NULL;
+    struct directory_hints *d=&tree->directories[tree->next_directory++%count];
+    free(d->path);
+    *d=(struct directory_hints){.path=key,.roots={roots[0],roots[1]}};
+    return d;
+}
+static struct directory_checkpoint *directory_position(struct md_provider_tree *tree,const char *path,
+        const struct directory_identity roots[2],off_t position,int create) {
+    struct directory_hints *d=directory_hints(tree,path,roots,create);
+    if (!d) return NULL;
+    unsigned count=sizeof(d->positions)/sizeof(*d->positions);
+    for (unsigned i=0;i<count;++i) if (d->positions[i].position==position) return &d->positions[i];
+    return create ? &d->positions[d->next++%count] : NULL;
+}
 static int directory_open(int root,const char *path,int retained) {
     int fd=openat(root,relative(path),O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
     if (fd>=0) return fd;
@@ -273,19 +303,17 @@ static ssize_t read_entries(struct md_provider_tree *tree,int fd,void *out,size_
         if (lower<0) lower_error=-lower;
     }
     if (upper<0 && lower<0) return -lower_error;
-    struct directory_checkpoint checkpoint={.position=position};
-    int cache=directory_identity(upper,&checkpoint.roots[0]) && directory_identity(lower,&checkpoint.roots[1]);
+    struct directory_checkpoint checkpoint={0};
+    struct directory_identity identities[2];
+    int cache=directory_identity(upper,&identities[0]) && directory_identity(lower,&identities[1]);
     unsigned first=0;
     size_t used=0; off_t index=0,next=position,native=0;
-    pthread_mutex_lock(&tree->directory_lock);
-    for (unsigned i=0;cache && i<sizeof(tree->directories)/sizeof(*tree->directories);++i) {
-        const struct directory_checkpoint *p=&tree->directories[i];
-        if (!p->position || strcmp(p->path,path) || !same_directory(&p->roots[0],&checkpoint.roots[0])
-                || !same_directory(&p->roots[1],&checkpoint.roots[1])) continue;
-        if (position && position==p->position) { index=position; first=p->layer; native=p->native; }
-        break;
+    if (cache && position) {
+        pthread_mutex_lock(&tree->directory_lock);
+        const struct directory_checkpoint *p=directory_position(tree,path,identities,position,0);
+        if (p) { index=position; first=p->layer; native=p->native; }
+        pthread_mutex_unlock(&tree->directory_lock);
     }
-    pthread_mutex_unlock(&tree->directory_lock);
     int roots[]={upper,lower},stop=0;
     /* A hint must never turn a previously readable directory into an error. */
     if (native && lseek(roots[first],native,SEEK_SET)<0) { first=0; index=0; native=0; }
@@ -297,7 +325,15 @@ static ssize_t read_entries(struct md_provider_tree *tree,int fd,void *out,size_
         off_t cursor=i==first ? native : 0;
         for (;;) {
             errno=0; struct dirent *e=readdir(dir);
-            if (!e) { if (errno) error=-errno; break; }
+            if (!e) {
+                if (errno) error=-errno;
+                else if (used) {
+                    /* Resume after the final page just like a full page. The
+                     * next read still consults the backing directory. */
+                    checkpoint.position=next; checkpoint.layer=i; checkpoint.native=cursor;
+                }
+                break;
+            }
             off_t before=cursor; cursor=e->d_off;
             if (internal(path,e->d_name)) continue;
             if (i && tree->ops && tree->ops->lower_visible
@@ -338,20 +374,10 @@ static ssize_t read_entries(struct md_provider_tree *tree,int fd,void *out,size_
     if (upper>=0) close(upper);
     if (lower>=0) close(lower);
     if (lseek(fd,error ? position : next,SEEK_SET)<0 && !error) error=-errno;
-    if (!error && cache && stop) {
+    if (!error && cache && checkpoint.position) {
         pthread_mutex_lock(&tree->directory_lock);
-        unsigned slot=sizeof(tree->directories)/sizeof(*tree->directories);
-        for (unsigned i=0;i<slot;++i)
-            if (tree->directories[i].path && !strcmp(tree->directories[i].path,path)
-                    && same_directory(&tree->directories[i].roots[0],&checkpoint.roots[0])
-                    && same_directory(&tree->directories[i].roots[1],&checkpoint.roots[1])) { slot=i; break; }
-        if (slot<sizeof(tree->directories)/sizeof(*tree->directories)) {
-            checkpoint.path=tree->directories[slot].path;
-        } else if ((checkpoint.path=strdup(path))) {
-            slot=tree->next_directory++%(sizeof(tree->directories)/sizeof(*tree->directories));
-            free(tree->directories[slot].path);
-        }
-        if (checkpoint.path) tree->directories[slot]=checkpoint;
+        struct directory_checkpoint *slot=directory_position(tree,path,identities,checkpoint.position,1);
+        if (slot) *slot=checkpoint;
         pthread_mutex_unlock(&tree->directory_lock);
     }
     return error ? error : (ssize_t)used;

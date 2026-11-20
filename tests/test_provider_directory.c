@@ -50,6 +50,41 @@ static unsigned scan_projection(struct md_provider_tree *tree,int fd,size_t capa
 static unsigned scan(struct md_provider_tree *tree,int fd,size_t capacity) {
     return scan_projection(tree,fd,capacity,0);
 }
+static void check_eof(struct md_provider_tree *tree,int fd,int host) {
+    unsigned long before=reads;
+    char data[96];
+    for (int i=0;i<3;++i) {
+        ssize_t n=host ? md_provider_tree_host_getdents(tree,fd,data,sizeof(data))
+            : md_provider_tree_getdents(tree,fd,data,sizeof(data));
+        assert(!n);
+    }
+    assert(reads-before==3);
+}
+static void interleaved_reads(struct md_provider_tree *tree,int fd) {
+    int peer=openat(fd,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC);
+    assert(peer>=0 && !lseek(fd,0,SEEK_SET));
+    char data[192];
+    unsigned long before=reads;
+    ssize_t a,b;
+    do {
+        a=md_provider_tree_getdents(tree,fd,data,96);
+        b=md_provider_tree_getdents(tree,peer,data,sizeof(data));
+        assert(a>=0 && b>=0);
+        if (!b) break;
+    } while (a);
+    while ((a=md_provider_tree_getdents(tree,fd,data,96))>0) {}
+    assert(!a && !b && lseek(fd,0,SEEK_CUR)==lseek(peer,0,SEEK_CUR));
+    printf("PROVIDER_DIRECTORY interleaved=2 reads=%lu\n",reads-before);
+    fflush(stdout);
+    assert(reads-before<4096);
+    /* A busy projection must not evict a different directory's position. */
+    assert(!lseek(peer,0,SEEK_SET) && !lseek(fd,0,SEEK_SET));
+    for (int i=0;i<24;++i) assert(md_provider_tree_host_getdents(tree,peer,data,96)>0);
+    for (int i=0;i<48;++i) assert(md_provider_tree_getdents(tree,fd,data,96)>0);
+    before=reads;
+    assert(md_provider_tree_host_getdents(tree,peer,data,96)>0 && reads-before<=6);
+    assert(!close(peer));
+}
 static void *independent_scan(void *data) {
     struct md_provider_tree *tree=data;
     int fd=openat(md_provider_tree_root(tree),".",O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(fd>=0);
@@ -83,7 +118,9 @@ void md_test_provider_directory(const char *path) {
     struct stat native,actual_node;
     assert(!fstatat(lower,"item-0000",&native,0) && !fstat(selected,&actual_node));
     assert(native.st_dev==actual_node.st_dev && native.st_ino==actual_node.st_ino && !close(selected));
-    assert(scan_projection(tree,fd,96,1)==1024 && !lseek(fd,0,SEEK_SET));
+    assert(scan_projection(tree,fd,96,1)==1024);
+    check_eof(tree,fd,1);
+    assert(!lseek(fd,0,SEEK_SET));
     assert(!unlinkat(upper,"private-only",0));
     for (unsigned capacity=96;capacity<=4096;capacity=4096) {
         assert(!lseek(fd,0,SEEK_SET)); reads=0;
@@ -93,8 +130,19 @@ void md_test_provider_directory(const char *path) {
         printf("PROVIDER_DIRECTORY capacity=%u entries=1024 reads=%lu elapsedNs=%lld\n",capacity,reads,
             (long long)(end.tv_sec-start.tv_sec)*1000000000+end.tv_nsec-start.tv_nsec);
         assert(reads<4096);
+        check_eof(tree,fd,0);
         if (capacity==4096) break;
     }
+    off_t end=lseek(fd,0,SEEK_CUR);
+    assert(end>0);
+    char tail[96];
+    touch(lower,"after-scan");
+    assert(md_provider_tree_getdents(tree,fd,tail,sizeof(tail))>0);
+    assert(lseek(fd,0,SEEK_CUR)==end+1);
+    assert(lseek(fd,end+100,SEEK_SET)==end+100);
+    assert(!md_provider_tree_getdents(tree,fd,tail,sizeof(tail)) && lseek(fd,0,SEEK_CUR)==end+100);
+    assert(!unlinkat(lower,"after-scan",0));
+    interleaved_reads(tree,fd);
     /* Every published cookie is sufficient without a warm enumerator, including
      * shared dup positions and rollback after a rejected output publication. */
     assert(!lseek(fd,0,SEEK_SET));

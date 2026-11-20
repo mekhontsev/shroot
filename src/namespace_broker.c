@@ -1648,14 +1648,16 @@ static size_t control_snapshot(struct md_namespace_broker *b) {
 }
 static int control_snapshot_ready(const struct md_namespace_broker *b,size_t count) {
     if (atomic_load_explicit(&b->control_pending,memory_order_acquire)) return 1;
+    /* The worker may retire a request while polling. Only its atomic state
+     * is a hint here; the locked scan classifies the live request and drops
+     * a channel that has handed work to the other owner. */
     for (size_t n=0;n<count;++n)
-        if (atomic_load_explicit(&b->control_snapshot.channels[n]->state,memory_order_acquire)==MD_ENTRY_REQUEST
-                && md_entry_control_request(b->control_snapshot.channels[n]->call.reserved))
+        if (atomic_load_explicit(&b->control_snapshot.channels[n]->state,memory_order_acquire)==MD_ENTRY_REQUEST)
             return 1;
     return 0;
 }
-int md_broker_entry_progress(struct md_namespace_broker *b) {
-    if (!b || !b->entry || !atomic_exchange_explicit(&b->control_pending,0,memory_order_acq_rel)) return 0;
+/* Kernel-only events should not construct the control burst's stack frame. */
+__attribute__((noinline)) static int control_burst(struct md_namespace_broker *b) {
     pthread_mutex_lock(&b->lock);
     struct channel_watch *watch=&b->watching[MD_ENTRY_SUPERVISOR_OWNER];
     for (struct task *t=watch->first;t;t=t->watch_next[MD_ENTRY_SUPERVISOR_OWNER]) {
@@ -1736,6 +1738,11 @@ int md_broker_entry_progress(struct md_namespace_broker *b) {
      * channel now waits for their response and has no further runnable call. */
     return completed || atomic_load_explicit(&b->control_pending,memory_order_acquire)!=0;
 }
+int md_broker_entry_progress(struct md_namespace_broker *b) {
+    /* The scan consumes enrollment; an empty check is read-only. */
+    return b && b->entry && atomic_load_explicit(&b->control_pending,memory_order_acquire)
+        ? control_burst(b) : 0;
+}
 /* The existing worker owns execution. A bounded burst cannot starve ordinary
  * notifications, resource turns, RPC peers, watches or shutdown. */
 static int cooperative_progress(struct md_namespace_broker *b,struct md_filesystem *fs,
@@ -1763,16 +1770,16 @@ static int cooperative_progress(struct md_namespace_broker *b,struct md_filesyst
         if (!t) t=watch->first;
         unsigned left=watch->count;
         int native_pending=0, effect_pending=0, runnable=0;
-        while (t && left && (!channel_available(t)
-                || atomic_load_explicit(&t->channel->state,memory_order_acquire)!=MD_ENTRY_REQUEST
-                || control_request_pending(t))) {
-            native_pending|=md_entry_fd_pending(atomic_load_explicit(&t->channel->state,memory_order_acquire));
-            effect_pending|=t->operation && t->operation->native_plan==2;
+        while (t && left) {
             unsigned state=atomic_load_explicit(&t->channel->state,memory_order_acquire);
+            int available=channel_available(t);
+            if (available && state==MD_ENTRY_REQUEST && !md_entry_control_request(t->channel->call.reserved)) break;
+            native_pending|=md_entry_fd_pending(state);
+            effect_pending|=t->operation && t->operation->native_plan==2;
             /* A supervisor-owned wait cannot continue filesystem work until
              * its receipt/event. Worker-owned native plans retain their own
              * effect_pending batching, including open/close fast paths. */
-            runnable|=channel_available(t) && md_entry_peer_runnable(state) && state!=MD_ENTRY_NATIVE;
+            runnable|=available && md_entry_peer_runnable(state) && state!=MD_ENTRY_NATIVE;
             t=t->watch_next[MD_ENTRY_WORKER_OWNER] ? t->watch_next[MD_ENTRY_WORKER_OWNER] : watch->first; --left;
         }
         if (!left) t=NULL;

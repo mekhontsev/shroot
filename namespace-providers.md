@@ -526,8 +526,10 @@ Read-only checks use provider metadata, not the carrier's regular-file type.
 ## Logical Filesystems
 
 Merged `provider_tree` directories keep ordinal cookies in the shared open
-description. Bounded native-position hints avoid rescanning the prefix during
-sequential reads; layer identity and metadata changes invalidate these hints.
+description. Bounded hints keyed by directory and ordinal let interleaved
+readers resume at their own native positions, including after the last page.
+An EOF read still consults the backing directory; it is not a cached empty
+result. Layer identity and metadata changes invalidate these hints.
 Hints retain no descriptors and are not transferred. Cold imports, eviction and
 arbitrary seeks replay the ordinal without changing cursor or visibility rules.
 
