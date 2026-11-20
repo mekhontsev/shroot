@@ -219,6 +219,14 @@ link text and unowned host links retain kernel behavior. Detached directory
 paths are not fabricated. A bind mount's root has an exact mountpoint path even
 when its backing file has hardlink aliases; no backing name is guessed.
 
+Foreign `fdinfo/N` reads use the real proc entry opened with the caller's
+access. For a tracked regular file, its retained descriptor supplies the target
+identity without a second task-local open. Unknown slots, busy peer tables and
+virtual carriers keep the independent capture. When a read refreshes the text,
+the native fields and the tracked origin must still match: two guest bind mounts
+can share a native inode and mount ID. Reopen after `ESTALE` to inspect a
+replacement slot.
+
 Explicit current-process/thread and foreign-process cmdline and auxv opens
 return a guest-image snapshot after the selected proc entry's access check.
 Reads and seek use an ordinary native descriptor, without a data proxy.

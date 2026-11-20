@@ -139,6 +139,9 @@ struct md_fd_native { unsigned kind, flags; struct md_fs_anchor *origin; };
 /* Confirmed slot flags. Only a non-null origin also proves native OFD access. */
 int md_fd_origins_describe(const struct md_fd_order *,int number,struct md_fd_native *);
 int md_fd_origins_native(const struct md_fd_order *,int number,struct md_fd_native *);
+/* Compare a completed kernel observation's provenance, without borrowing a
+ * slot or exposing a descriptor. An uncertain or wrapped slot cannot match. */
+int md_fd_origins_matches_native(struct md_fd_origins *,int number,const struct md_fs_anchor *);
 int md_fd_origins_native_regular(const struct md_fd_order *,int number);
 /* Regular data files, metadata-only anonymous pipes and proven kernel IO,
  * never virtual FIFOs or an unclassified slot. */

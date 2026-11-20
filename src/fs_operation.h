@@ -101,6 +101,9 @@ struct md_fs_request {
     /* Optional trusted provenance for the already captured base descriptors.
      * RPC peers cannot supply pointers or claim another task's mount view. */
     const struct md_fs_anchor *origin[2];
+    /* Internal fdinfo provenance for an authorized, ordinary target carrier.
+     * Not a wire operand. The proc entry can outlive replacement of this slot. */
+    struct { int task, number; } fdinfo_slot;
     /* Captured typed authority, never decoded from wire pointers or carrier
      * inodes. Its owning descriptor object lives through worker completion. */
     struct md_control_file control;

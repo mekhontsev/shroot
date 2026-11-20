@@ -206,10 +206,7 @@ int md_fd_origins_validate(const struct md_fd_order *turn,uint64_t generation) {
     int error=t->generation==UINT64_MAX ? -EOVERFLOW : t->generation!=generation ? -EAGAIN : 0;
     pthread_mutex_unlock(&t->lock); return error;
 }
-int md_fd_origins_describe(const struct md_fd_order *turn,int fd,struct md_fd_native *out) {
-    if (!turn || !turn->table || !out || fd<0 || md_fd_order_state(turn)!=MD_RESOURCE_ORDER_RUNNING) return 0;
-    struct md_fd_origins *t=turn->table;
-    pthread_mutex_lock(&t->lock);
+static int describe_locked(struct md_fd_origins *t,int fd,struct md_fd_native *out) {
     struct md_fd_origin_entry *e=t->buckets ? *slot(t,fd) : NULL;
     int known=e && e->object && !e->uncertain && !e->loan && !e->channel && !e->native_io;
     if (known) {
@@ -217,7 +214,21 @@ int md_fd_origins_describe(const struct md_fd_order *turn,int fd,struct md_fd_na
         if (origin && (md_fs_anchor_object(origin)!=e->object || md_fd_object_selectors(e->object))) origin=NULL;
         *out=(struct md_fd_native){.kind=origin ? md_fs_anchor_kind(origin) : 0,.flags=e->flags,.origin=origin};
     }
+    return known;
+}
+int md_fd_origins_describe(const struct md_fd_order *turn,int fd,struct md_fd_native *out) {
+    if (!turn || !turn->table || !out || fd<0 || md_fd_order_state(turn)!=MD_RESOURCE_ORDER_RUNNING) return 0;
+    struct md_fd_origins *t=turn->table;
+    pthread_mutex_lock(&t->lock);
+    int known=describe_locked(t,fd,out);
     pthread_mutex_unlock(&t->lock); return known;
+}
+int md_fd_origins_matches_native(struct md_fd_origins *t,int fd,const struct md_fs_anchor *origin) {
+    if (!t || fd<0 || !origin) return 0;
+    struct md_fd_native slot;
+    pthread_mutex_lock(&t->lock);
+    int match=describe_locked(t,fd,&slot) && (slot.origin==origin || md_fs_anchor_same(slot.origin,origin));
+    pthread_mutex_unlock(&t->lock); return match;
 }
 int md_fd_origins_native(const struct md_fd_order *turn,int fd,struct md_fd_native *out) {
     struct md_fd_native slot;

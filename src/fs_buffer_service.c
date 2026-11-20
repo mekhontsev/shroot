@@ -469,6 +469,46 @@ static void capture_begin(struct md_fs_buffer_request *r) {
     r->capturing=1;
     r->service->complete(r,r->actor,0);
 }
+static int fdinfo_capture_target(struct md_fs_buffer_request *r) {
+    if (r->request.operation!=MD_FS_FDINFO || r->capture_active!=1 || r->capture_mask!=3
+            || md_fs_anchor_carrier_kind(r->control_input)!=S_IFREG) return 0;
+    struct md_proc_path file=md_proc_path_for(r->request.capture[0].path,0,0);
+    struct md_proc_path target=md_proc_path_for(r->request.capture[1].path,0,0);
+    if (file.foreign_kind!=MD_PROC_FDINFO || target.foreign_kind!=MD_PROC_FD
+            || *file.tail || *target.tail || file.process!=target.process
+            || file.descriptor!=target.descriptor) return 0;
+    /* The caller has opened the actual fdinfo and control_capture authorized
+     * this subject. Reuse only the very same ordinary carrier in a confirmed
+     * slot. Never wait on a peer table while holding the caller's turn. */
+    struct md_fd_origins *table=NULL;
+    if (md_task_registry_files(r->service->tasks,target.process,0,&table)) return 0;
+    struct md_fd_order peer={0},*turn=&r->files;
+    int error=0;
+    if (table!=turn->table) {
+        turn=&peer;
+        int ready=md_fd_order_begin(table,turn,NULL);
+        if (ready<0) { error=ready; goto done; }
+        if (!ready || (error=md_fd_order_start(turn))) {
+            int cancelled=md_fd_order_cancel(turn);
+            if (!error) error=cancelled;
+            goto done;
+        }
+    }
+    struct md_fd_native native;
+    if (md_fd_origins_native(turn,target.descriptor,&native)
+            && md_fs_anchor_object(native.origin)==r->control_input) {
+        r->request.directory[1]=md_fs_anchor_fd(native.origin);
+        r->request.origin[1]=native.origin;
+        r->request.fdinfo_slot.task=target.process;
+        r->request.fdinfo_slot.number=target.descriptor;
+        r->request.capture[1]=(struct md_fs_task_capture){0};
+        r->capture_mask&=~2U;
+    }
+    if (peer.table) error=md_fd_order_complete(&peer);
+done:
+    md_fd_origins_unpin(table);
+    return error;
+}
 int md_fs_buffer_capture_finish(struct md_fs_buffer_request *r, int descriptor, int error,const struct stat *metadata,
         void *directory,size_t directory_size) {
     if (!r || !r->capturing || error>0 || error < -4095 || (!error && descriptor<0)) {
@@ -502,6 +542,7 @@ int md_fs_buffer_capture_finish(struct md_fs_buffer_request *r, int descriptor, 
         input->descriptor=descriptor; input->error=error; input->completed=1;
         submit(r,0); return 0;
     }
+    if (!error) error=fdinfo_capture_target(r);
     if (!error) {
         int owned=0;
         for (unsigned i=0;i<2;++i) if (r->capture_active&(1U<<i)) {
@@ -1185,8 +1226,8 @@ static int capture_proc_object(struct md_fs_buffer_request *r,unsigned index) {
     struct md_proc_path path=md_proc_path_for(capture->path,r->context.task.tid,r->context.task.tgid);
     enum md_proc_kind kind=path.kind==MD_PROC_FOREIGN ? path.foreign_kind : path.kind;
     if (r->request.operation==MD_FS_FDINFO && index==1) {
-        /* Native fdinfo identity needs the actual target pin, not a provider's
-         * path anchor. Keep typed metadata alongside that independent capture. */
+        /* Retain the authorized object through the source capture. Typed
+         * objects still need an independent pin of their kernel carrier. */
         if (r->service->control_capture && r->service->control_query) {
             int found=r->service->control_capture(r->actor,capture->path,&r->control_input);
             if (found<0) return found;

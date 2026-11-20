@@ -5,6 +5,8 @@
 #include "fs_control.h"
 #include "fs_mounts.h"
 #include "pid_namespace.h"
+#include "task_registry.h"
+#include "fd_origins.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -26,6 +28,9 @@ struct fdinfo {
     size_t size;
     uint64_t mount_id, inode;
     uint64_t native_mount, native_inode;
+    struct md_task_registry *tasks;
+    struct md_fs_anchor *origin;
+    int task, number;
 };
 static void *retain(void *context) {
     struct fdinfo *f=context;
@@ -34,7 +39,8 @@ static void *retain(void *context) {
 static void release(void *context) {
     struct fdinfo *f=context;
     if (atomic_fetch_sub_explicit(&f->references,1,memory_order_acq_rel)!=1) return;
-    close(f->fd); md_pid_namespace_release(f->view); free(f->text); free(f);
+    close(f->fd); md_pid_namespace_release(f->view); md_fs_anchor_release(f->origin);
+    free(f->text); free(f);
 }
 static int stat_info(void *context,struct stat *st) {
     *st=((struct fdinfo *)context)->stat; return 0;
@@ -92,6 +98,14 @@ static int refresh(struct fdinfo *f) {
     if (ferror(in) || ferror(out)) error=errno ? -errno : -EIO;
     free(line); fclose(in);
     if (fclose(out) && !error) error=-errno;
+    if (!error && f->origin) {
+        /* Two guest bind mounts can share BOTH native IDs. Do not publish a
+         * cached guest mount after a peer replaced or unshared its FD slot. */
+        struct md_fd_origins *files=NULL;
+        if (md_task_registry_files(f->tasks,f->task,0,&files)
+                || !md_fd_origins_matches_native(files,f->number,f->origin)) error=-ESTALE;
+        md_fd_origins_unpin(files);
+    }
     if (error) free(text);
     else { free(f->text); f->text=text; f->size=size; }
     return error;
@@ -101,7 +115,13 @@ static long read_info(void *context,const struct md_control_actor *actor,void *o
     struct fdinfo *f=context;
     if (offset<0) return -EINVAL;
     if (!size) return 0;
-    if (!offset || !f->text) { int error=refresh(f); if (error) return error; }
+    if (!offset || !f->text) {
+        int error=refresh(f);
+        if (error) {
+            free(f->text); f->text=NULL; f->size=0;
+            return error;
+        }
+    }
     if ((uint64_t)offset>=f->size) return 0;
     if (size>f->size-(size_t)offset) size=f->size-(size_t)offset;
     memcpy(out,f->text+offset,size); return (long)size;
@@ -115,6 +135,10 @@ void md_fs_fdinfo(struct md_filesystem *fs,const struct md_fs_request *q,
     struct fdinfo *f=calloc(1,sizeof(*f));
     if (!f) { result->error=-ENOMEM; return; }
     atomic_init(&f->references,1); f->fd=-1;
+    if (q->fdinfo_slot.task) {
+        f->tasks=fs->tasks; f->task=q->fdinfo_slot.task; f->number=q->fdinfo_slot.number;
+        f->origin=md_fs_anchor_retain((struct md_fs_anchor *)q->origin[1]);
+    }
     f->view=q->offset ? md_pid_namespace_by_inode((uint64_t)q->offset) : NULL;
     if (q->offset && !f->view && (uint64_t)q->offset!=md_pid_namespace_inode(NULL)) result->error=-ENOENT;
     if (!result->error && q->directory[1]>=0) {

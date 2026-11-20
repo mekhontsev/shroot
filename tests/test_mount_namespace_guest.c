@@ -24,11 +24,10 @@ static uint64_t id(int fd, const char *path) {
     assert(st.stx_mask&STATX_MNT_ID); assert(st.stx_mnt_id);
     return st.stx_mnt_id;
 }
-static void fdinfo_matches(int fd) {
+static void fdinfo_path_matches(int fd,const char *name) {
     struct md_statx st={0};
     assert(!syscall(SYS_statx,fd,"",AT_EMPTY_PATH,STATX_MNT_ID|STATX_INO,&st));
-    char name[64],line[256];
-    snprintf(name,sizeof(name),"/proc/self/fdinfo/%d",fd);
+    char line[256];
     FILE *info=fopen(name,"re"); assert(info);
     uint64_t mount=0,inode=0;
     while (fgets(line,sizeof(line),info)) {
@@ -37,6 +36,43 @@ static void fdinfo_matches(int fd) {
     }
     assert(!ferror(info)); fclose(info);
     assert(mount==st.stx_mnt_id && inode==st.stx_ino);
+}
+static void fdinfo_matches(int fd) {
+    char path[64]; snprintf(path,sizeof(path),"/proc/self/fdinfo/%d",fd);
+    fdinfo_path_matches(fd,path);
+}
+static void foreign_fdinfo(int bound) {
+    int original=open("/tmp/source/value",O_RDONLY|O_CLOEXEC),command[2],done[2];
+    assert(original>=0 && !pipe(command) && !pipe(done));
+    pid_t child=fork(); assert(child>=0);
+    char byte='x';
+    if (!child) {
+        close(command[1]); close(done[0]);
+        /* EVENT_WAIT: parent orders slot replacement and close; the mount
+         * fixture deadline bounds the handshake. */
+        if (read(command[0],&byte,1)!=1) _exit(1);
+        assert(dup2(original,bound)==bound && write(done[1],&byte,1)==1);
+        if (read(command[0],&byte,1)!=1) _exit(1);
+        assert(!close(bound) && write(done[1],&byte,1)==1);
+        (void)read(command[0],&byte,1); _exit(0);
+    }
+    close(command[0]); close(done[1]);
+    char path[96]; snprintf(path,sizeof(path),"/proc/%d/fdinfo/%d",child,bound);
+    fdinfo_path_matches(bound,path);
+    int held=open(path,O_RDONLY|O_CLOEXEC); assert(held>=0);
+    char buf[256];
+    assert(pread(held,buf,1,0)==1);
+    assert(write(command[1],&byte,1)==1 && read(done[0],&byte,1)==1);
+    /* Same native inode and mount, different guest bind. A held view must
+     * not report the old mount; a fresh open selects the replacement. */
+    assert(read(held,buf,sizeof(buf))<0 && errno==ESTALE);
+    assert(pread(held,buf,1,1)<0 && errno==ESTALE);
+    fdinfo_path_matches(original,path);
+    assert(write(command[1],&byte,1)==1 && read(done[0],&byte,1)==1);
+    assert(read(held,buf,sizeof(buf))<0 && errno==ENOENT);
+    close(command[1]); close(done[0]); close(held); close(original);
+    int status; assert(waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status));
+    puts("PASS foreign fdinfo: exact regular carrier, bind alias replacement and closed slot");
 }
 struct context { uint64_t original; int dir; int split; };
 static void not_a_link(const char *path) {
@@ -106,6 +142,7 @@ static void binding(void) {
     uint64_t first=id(AT_FDCWD,"/tmp/source"), second=id(AT_FDCWD,"/tmp/target");
     assert(first!=second);
     value=open("/tmp/target/value",O_RDONLY); assert(value>=0);
+    foreign_fdinfo(value);
     char text[8]={0}; assert(read(value,text,sizeof(text))==4 && !strcmp(text,"data")); close(value);
     int dir=open("/tmp/target",O_PATH|O_DIRECTORY); assert(dir>=0);
     assert(id(dir,"")==second);
