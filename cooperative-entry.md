@@ -1055,8 +1055,9 @@ separate events. Losing the actor between them does not erase the result. If
 the requester exits first, the in-flight close retains its place in the table
 queue. If execution may have started but no result is known, Shroot does not
 close the slot again: it stops the guest rather than risking another FD when
-a holder remains. A queued exit or reap is evidence that the actor will not
-reuse the slot; an exec is not. With no live holder, kernel teardown suffices.
+a holder remains. An exit or reap held by a stop barrier or by robust-futex
+cleanup counts as exit before replay; an exec does not. With no live holder,
+kernel teardown suffices.
 Native task observation is shared by capture, mapping, robust cleanup and guest
 debugging. Repeated owners reuse installed exit observation; birth inherits both
 the installed policy and any pending update. A borrowed user boundary must still

@@ -97,6 +97,11 @@ tables, including private-bridge VM networking and strict shutdown.
 The [NixOS User and Shell regression pass](distribution-evidence.md#nixos-user-and-shell-regression-coverage)
 covers the same installed generation under both identities, including k3s,
 Plasma applications and Base systemd boot/shutdown.
+The [Debian User and Shell regression pass](distribution-evidence.md#debian-user-and-shell-regression-coverage)
+covers the installed trixie recipe with both Android identities; receipts
+distinguish Base boot coverage from the default-entry application checks.
+The [Alpine User and Shell regression pass](distribution-evidence.md#alpine-user-and-shell-regression-coverage)
+covers OpenRC, k3s, containers, VM networking and native and Flatpak GUI applications.
 
 ### Runtime Coverage
 

@@ -40,6 +40,7 @@
 #include "task_birth.h"
 #include "task_call.h"
 #include "task_checkpoint.h"
+#include "task_descriptor.h"
 #include "task_filter.h"
 #include "task_helper.h"
 #include "task_quiesce.h"
@@ -62,7 +63,7 @@ static int task_action_releasing;
 
 static void task_action_release(struct task_action *owner);
 static void task_action_finish(struct task_action *owner,long result);
-static void loan_failed(struct task_action *owner,long result);
+static void loan_failed(struct task_action *owner,long result,const char *stage);
 static long loan_close_finish(struct task_action *owner,long result);
 static void loan_close_lost(struct task_action *owner,enum md_task_call_effect effect,long result);
 static void task_action_call_complete(long result,int retry);
@@ -96,16 +97,20 @@ int quiescence_busy(const struct mapping_owner *parent) {
     return quiescence_barrier(parent)!=NULL;
 }
 
-struct md_task_quiesce *quiescence_pending(pid_t pid) {
+static struct md_task_quiesce *quiescence_event_owner(pid_t pid,int replayable,int *status) {
     struct md_task_quiesce *barriers[]={
-        retained_creation || retained_retirement ? NULL : retained_barrier,
-        policy_installer ? NULL : policy_barrier,
-        memory_execution ? NULL : memory_barrier,
-        mapping_execution ? NULL : mapping_barrier,
-        task_action_execution || task_action_releasing ? NULL : task_action_barrier};
+        replayable && (retained_creation || retained_retirement) ? NULL : retained_barrier,
+        replayable && policy_installer ? NULL : policy_barrier,
+        replayable && memory_execution ? NULL : memory_barrier,
+        replayable && mapping_execution ? NULL : mapping_barrier,
+        replayable && (task_action_execution || task_action_releasing) ? NULL : task_action_barrier};
     for (unsigned i=0;i<sizeof(barriers)/sizeof(*barriers);++i)
-        if (md_task_quiesce_pending(barriers[i],pid,NULL)) return barriers[i];
+        if (md_task_quiesce_pending(barriers[i],pid,status)) return barriers[i];
     return NULL;
+}
+
+struct md_task_quiesce *quiescence_pending(pid_t pid) {
+    return quiescence_event_owner(pid,1,NULL);
 }
 
 pid_t quiesce_take_event(struct md_task_quiesce *barrier,int *status,struct rusage *usage) {
@@ -346,10 +351,23 @@ void task_action_unpark(void) {
     CHECK(!md_event_signal(fd_ready));
 }
 
-static void loan_failed(struct task_action *owner,long result) {
+static void loan_failed(struct task_action *owner,long result,const char *stage) {
     /* Retain custody until kernel teardown when retirement cannot be verified. */
     if (cancelling) return;
-    fprintf(stderr,"Shroot: cannot retire temporary FD %d: %s\n",owner->number,strerror((int)-result));
+    fprintf(stderr,"Shroot: cannot retire temporary FD %d at %s: %s (requester=%d waiter=%d broker=%d mapping=%d)\n",
+        owner->number,stage,strerror((int)-result),owner->requester ? owner->requester->pid : 0,
+        owner->loan_waiter,owner->retirement.task,owner->retired_context!=NULL);
+    unsigned count=0;
+    for (struct thread *p=threads;p;p=p->next) if (p->pid && p->resources.files==owner->loan_table) {
+        if (++count>8) continue;
+        struct stat st;
+        int status=0,probe=md_task_descriptor_stat(p->pid,owner->number,&st);
+        quiescence_event_owner(p->pid,0,&status);
+        fprintf(stderr,"Shroot: FD holder tid=%d tgid=%d phase=%d terminal=%d lost=%d robust=%d pending=%#x fd=%d type=%o\n",
+            p->pid,p->tgid,p->phase,p->terminal_stop,p->resume_lost,(p->robust.terminal || p->robust.replay) ? p->robust.status : 0,
+            (unsigned)status,probe,probe ? 0u : (unsigned)(st.st_mode&S_IFMT));
+    }
+    fprintf(stderr,"Shroot: FD table holders=%u\n",count);
     cancel_tree(125);
 }
 
@@ -392,7 +410,7 @@ static void loan_entry_complete(struct thread *t,long result) {
         entry_effect(t,SYS_close_range,args,loan_entry_complete); return;
     }
     result=loan_close_finish(owner,result);
-    if (result<0) { loan_failed(owner,result); return; }
+    if (result<0) { loan_failed(owner,result,"resident close"); return; }
     task_action_finish(owner,result);
 }
 
@@ -443,7 +461,7 @@ static void task_action_call_complete(long result,int retry) {
     if (owner->loan) {
         if (retry || result==-ESRCH) return;
         if (result<0) {
-            loan_failed(owner,result);
+            loan_failed(owner,result,"borrowed close");
             return;
         }
         task_action_finish(owner,result); return;
@@ -902,14 +920,13 @@ static int loan_holder(const struct task_action *owner,const struct thread *p) {
 }
 static int loan_surviving_holder(const struct task_action *owner,const struct thread *p) {
     if (!loan_holder(owner,p)) return 0;
-    /* A borrowed actor's death can already be queued in its barrier before
-     * lifecycle dispatch updates the task record. Exec is not death. */
+    /* Inspect, but do not consume, the lifecycle owner's exact event.
+     * Robust cleanup can hold either exit or exec; only exit drops custody. */
     int status;
-    if (md_task_quiesce_pending(task_action_barrier,p->pid,&status)
-            || md_task_quiesce_pending(mapping_barrier,p->pid,&status))
-        return !(WIFEXITED(status) || WIFSIGNALED(status)
-            || (WIFSTOPPED(status) && ((unsigned)status>>16)==PTRACE_EVENT_EXIT));
-    return 1;
+    if (p->robust.terminal || p->robust.replay) status=p->robust.status;
+    else if (!quiescence_event_owner(p->pid,0,&status)) return 1;
+    return !(WIFEXITED(status) || WIFSIGNALED(status)
+        || (WIFSTOPPED(status) && ((unsigned)status>>16)==PTRACE_EVENT_EXIT));
 }
 static int loan_close_needed(const struct task_action *owner,const struct md_fd_order *turn) {
     int match=md_fd_origins_loan_matches(turn,owner->number,owner->loan);
@@ -935,12 +952,12 @@ static void loan_start(struct task_action *owner) {
     struct md_fd_order *turn=owner->loan_turn ? owner->loan_turn : &owner->files;
     if (!turn->table) {
         int error=md_fd_order_begin(owner->loan_table,turn,fd_wakeup);
-        if (error<0) { loan_failed(owner,error); return; }
+        if (error<0) { loan_failed(owner,error,"table admission"); return; }
     }
     if (md_fd_order_state(turn)==MD_RESOURCE_ORDER_QUEUED) return;
     if (md_fd_order_state(turn)==MD_RESOURCE_ORDER_READY) CHECK(!md_fd_order_start(turn));
     int exists=loan_close_needed(owner,turn);
-    if (exists<0) { loan_failed(owner,exists); return; }
+    if (exists<0) { loan_failed(owner,exists,"ownership check"); return; }
     if (!exists) { task_action_finish(owner,0); return; }
     struct thread *t=owner->requester;
     if (t && t->pid && !t->kernel_stopped && !t->listening && !t->terminal_stop && !t->resume_lost

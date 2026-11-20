@@ -3539,6 +3539,40 @@ static void provisional_retirement_identity(void) {
     close(fd_ready); fd_ready=previous_fd_ready;
     puts("PASS provisional FD retirement: six admission/exit schedules, exact table and slot, one receipt before successor admission");
 }
+static void loan_pending_lifecycle(void) {
+    struct md_fd_origins *files=md_fd_origins_new(); assert(files);
+    struct md_fd_loan *loan=md_fd_loan_new(files); assert(loan);
+    struct md_fd_origin_update update;
+    struct md_fd_order turn={0};
+    assert(md_fd_order_begin(files,&turn,NULL)==1 && !md_fd_order_start(&turn));
+    assert(!md_fd_origins_prepare(files,NULL,FD_CLOEXEC,&update));
+    assert(!md_fd_origins_prepare_loan(&update,loan)); md_fd_origins_finish(&update,3);
+    assert(!md_fd_origins_abandon_range(files,3,3));
+    struct thread holder={.pid=123,.resources.files=files},peer={.pid=124,.resources.files=md_fd_origins_fork(files,1)};
+    assert(peer.resources.files==files);
+    struct task_action owner={.loan_table=files,.loan=loan,.number=3,.requester=&holder};
+    struct md_task_quiesce **barriers[]={&task_action_barrier,&mapping_barrier,&memory_barrier,&policy_barrier,&retained_barrier};
+    assert(!threads); threads=&holder;
+    const int statuses[]={(PTRACE_EVENT_EXIT<<16)|(SIGTRAP<<8)|0x7f,
+        (PTRACE_EVENT_EXEC<<16)|(SIGTRAP<<8)|0x7f};
+    for (unsigned i=0;i<=sizeof(barriers)/sizeof(*barriers);++i) for (unsigned j=0;j<2;++j) {
+        struct md_task_quiesce **q=i<sizeof(barriers)/sizeof(*barriers) ? barriers[i] : NULL;
+        if (q) {
+            assert(!*q); *q=md_task_quiesce_new(no_trace); assert(*q);
+            assert(!md_task_quiesce_event(*q,0,holder.pid,statuses[j],NULL));
+        } else { holder.robust.terminal=1; holder.robust.status=statuses[j]; }
+        holder.next=&peer;
+        assert(loan_close_needed(&owner,&turn)==-ESTALE);
+        holder.next=NULL;
+        assert(loan_close_needed(&owner,&turn)==(j ? -ESTALE : 0));
+        if (q) { md_task_quiesce_destroy(*q); *q=NULL; }
+        else holder.robust.terminal=0;
+        assert(loan_close_needed(&owner,&turn)==-ESTALE);
+    }
+    threads=NULL; assert(!md_fd_order_complete(&turn));
+    md_fd_loan_release(loan); md_fd_origins_release(peer.resources.files); md_fd_origins_release(files);
+    puts("PASS temporary FD custody: deferred exit across barrier and robust owners, exec and surviving peers");
+}
 static void queued_loan_retirement(void) {
     int previous_fd_ready=fd_ready;
     fd_ready=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK); assert(fd_ready>=0);
@@ -4007,7 +4041,8 @@ static long duplicate_exit_trace(int request,pid_t pid,void *address,void *data)
 static void pair_selector_scope(void) {
     struct thread opener={.pid=123,.born=1},peer={.pid=124,.born=1};
     opener.resources.files=md_fd_origins_new(); assert(opener.resources.files);
-    peer.resources.files=opener.resources.files;
+    peer.resources.files=md_fd_origins_fork(opener.resources.files,1);
+    assert(peer.resources.files==opener.resources.files);
     opener.descriptors.selector=md_fd_selector_new(); peer.descriptors.selector=md_fd_selector_new();
     assert(opener.descriptors.selector && peer.descriptors.selector);
     struct thread *previous=threads;
@@ -4022,7 +4057,7 @@ static void pair_selector_scope(void) {
     assert(selector_has(&opener,MD_FD_SELECTOR_IOCTL,-1)==1);
     threads=previous;
     md_fd_selector_release(opener.descriptors.selector); md_fd_selector_release(peer.descriptors.selector);
-    md_fd_origins_release(opener.resources.files);
+    md_fd_origins_release(peer.resources.files); md_fd_origins_release(opener.resources.files);
 }
 static void duplicate_prepared_admission(void) {
     struct thread t={.pid=123,.phase=IDLE,.ready=1};
@@ -8964,7 +8999,7 @@ int main(void) {
     event_completion();
     lost_stop_delivery();
     orphan_loan_retirement();
-    queued_loan_retirement(); provisional_retirement_identity();
+    queued_loan_retirement(); provisional_retirement_identity(); loan_pending_lifecycle();
     resident_loan_retirement();
     resident_loan_abandonment();
     readiness_local_duplicate();

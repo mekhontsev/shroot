@@ -199,6 +199,31 @@ it does not establish a universal speedup or older-kernel performance.
 
 ## Debian
 
+### Debian User and Shell regression coverage
+
+User and Shell ran the same Debian 13.7 (trixie) installation and SQLite
+namespace in sequence on the NX809J, Android 16, kernel 6.12.23, 4 KiB pages.
+Receipts are under `build/debian-regression-523f33b/{app,shell}/` in the
+MagicDesk checkout. Both use staged supervisor `fb7b2a75b83b` with a
+fixture-enabled APK; this is not a fresh install or release APK check.
+
+| Workload | Receipt in each executor directory |
+| --- | --- |
+| Stock systemd startup, service IO, binfmt lifecycle, networkd IPv6 and clean shutdown, with both lazy entry and Base | `boot-{lazy,base}/oci-services-*.json` |
+| Rootful and rootless Docker and Podman; BuildKit build/cache/export/cancel; LXC; nspawn command and machinectl boot; seven LTP tests | `checks.json`, per-workload logs and `desktop/oci-services-*.json` |
+| Direct QEMU and managed libvirt; the separate bridge session exercises VM traffic, NAT, DHCP and DNS | `qemu.log`, `libvirt.log`, `bridge/libvirt-*.json` |
+| Routed automatic IPv4/IPv6 TCP/UDP binding skips a host-reserved port; explicit binding remains denied | `supplement/autobind.log` |
+| Single-node k3s: CoreDNS, Service, NetworkPolicy, rollout, PVC, ingress, restart and deletion | `k3s/oci-services-*.json` |
+| Flatpak Chromium and Firefox on offscreen Weston: keyboard, pointer, download, chooser, WebGL and normal exit with fresh and reused profiles; Chromium also verifies sandboxed GPU composition | `desktop/flatpak-*/gui-report.json` |
+| VS Code editor, watch, terminal, GDB, reload and sandboxed GPU; document portal exit, FUSE teardown and service restart | `desktop/code/gui-report.json`, `desktop/portal.json` |
+| APT download, dpkg install/reinstall/verify/purge and clean audit; missing files must match the installed dpkg exclusions | `app/supplement/package.log` and `shell/package.log` relative to the run root |
+
+Only the boot and service checks above ran in Base; the application workloads
+use default lazy entry. Graphical applications ran as ordinary guest user
+`mdtester`, independently of the Android executor.
+
+### Debian Shell application receipts
+
 The 2026-11-01 regression run uses the installed recipe, shell UID 2000 and
 native helpers extracted from `2.2.4-dev.218.befc5b1`. Supervisor SHA-256:
 `7aa21b72a6b7f8b79a24ed4e4491a2146d761091f1e34e52922d5ed0ae819d5f`.
@@ -693,6 +718,29 @@ write/sync/readback with the requested parent PID. These focused control-target 
 not certify the default OS target
 
 ## Alpine
+
+### Alpine User and Shell regression coverage
+
+Both Android identities ran the same Alpine 3.23.6 Turnip installation
+in sequence on the NX809J (Android 16, kernel 6.12.23, 4 KiB pages).
+Receipts are under `build/alpine-regression-523f33b/{app,shell}/` in the
+MagicDesk checkout. Boot and service shutdown used both Base and lazy entry;
+application checks used lazy entry, with a fixture APK and offscreen Weston.
+
+| Coverage under both identities | Evidence |
+| --- | --- |
+| OpenRC boot and shutdown; one-node k3s with VXLAN, ingress, PVC and restart | `boot-{lazy,base}/`, `k3s/` |
+| Rootful and rootless Docker and Podman, BuildKit, LXC and seven LTP checks | Per-workload logs and receipts under `desktop/`; User supplements under `supplement/` and `fd-diag02/` |
+| Direct QEMU, managed libvirt, bridge NAT, DHCP/DNS and IPv4/IPv6 TCP/UDP port reservations | QEMU/libvirt receipts, `bridge/libvirt-*.json`, `autobind.log` |
+| Native and Flatpak Chromium and Firefox, fresh and reused profiles; Flatpak VS Code with debugger, reload and GPU; both document-portal exit modes | `desktop/*/gui-report.json` and portal JSON; Shell native Chromium under `supplement/desktop/`, User editor and portal under `fd-diag02/desktop/` |
+| APK package download, install, repair of a deleted binary, ownership and digest verification, removal and BusyBox restoration | `shell/supplement/package.log` and `app/fd-diag02/package.log` relative to the run root |
+
+The main run used staged supervisor `fb7b2a75b83b`; the User
+`fd-diag02` supplement used `721051f4efe3`. Both executors also passed
+the rootful Docker workflow with supervisor `b01e8067cca1` (`fd-fixed/`).
+This is installed-store coverage, not a fresh Turnip build or a release APK qualification.
+
+### Alpine application receipts
 
 The 2026-11-01 OpenRC and graphical regression run uses the native helpers
 extracted from `2.2.4-dev.218.befc5b1`, supervisor SHA-256
