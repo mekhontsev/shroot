@@ -333,6 +333,18 @@ static int bind_locked(struct md_network_endpoint *e,int fd,struct md_inet_addre
             }
             if (published) {
                 error=md_network_forward_bind(n,e,e->type,&logical,e->v6only,&reservation);
+                if (automatic && (error==-EPERM || error==-EACCES)) {
+                    /* The host may reserve individual ports. Ask its allocator:
+                     * a socket-wide denial still fails immediately. */
+                    logical.port=0;
+                    error=md_network_forward_bind(n,e,e->type,&logical,e->v6only,&reservation);
+                    if (error) break;
+                    unsigned port=ntohs(logical.port);
+                    if (port<n->local_ports[0] || port>n->local_ports[1] || conflicts(e,&logical,0)) {
+                        md_network_forward_bound(reservation,0); reservation=NULL;
+                        error=-EADDRINUSE; continue;
+                    }
+                }
                 if (error) { if (automatic && error==-EADDRINUSE) continue; break; }
             }
             native.port=0;

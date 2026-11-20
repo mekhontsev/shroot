@@ -216,7 +216,9 @@ port translation, never a data OFD. The weak fabric endpoint list unlinks before
 final release. Namespace peers can use identical internal ports. Root-fabric
 explicit binds (including port zero) and listeners reserve real Android ports
 through separate forwarding frontends; automatic outgoing binds do not publish
-a listener. Guest backing sockets use ephemeral native ports. Conflicts and
+a listener. A published zero-port bind selects a host-permitted port within
+the guest's ephemeral range; an explicit port keeps the host's denial.
+Guest backing sockets use ephemeral native ports. Conflicts and
 final release belong to the same endpoint/forwarding owners.
 Reusable UDP wildcard and address-specific endpoints share the existing physical
 listener. Closing the wildcard retains that listener while a matching endpoint

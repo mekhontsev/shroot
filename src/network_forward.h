@@ -43,7 +43,7 @@ int md_network_forward_destination(struct md_network_namespace *,const void *,in
 void md_network_forward_endpoint_closed(struct md_network_namespace *,const void *);
 void md_network_forward_endpoint_disconnected(struct md_network_namespace *,const void *,int);
 int md_network_forward_endpoint_active(struct md_network_namespace *,const void *);
-int md_network_forward_bind(struct md_network_namespace *,const void *,int,const struct md_inet_address *,int,
+int md_network_forward_bind(struct md_network_namespace *,const void *,int,struct md_inet_address *,int,
     struct md_network_port_reservation **);
 void md_network_forward_bound(struct md_network_port_reservation *,int);
 int md_network_forward_listen(struct md_network_namespace *,const void *,int);

@@ -2197,6 +2197,36 @@ retroactively relayed or counted.
 
 ## NixOS
 
+### NixOS User and Shell regression coverage
+
+Both Android identities booted the same installed NixOS 26.05 generation
+(`ppas5d9hgnzmr7v36363a6128p7k8m28`) on NX809J / Android 16,
+kernel 6.12.23 with 4 KiB pages.
+Receipts under `build/nixos-regression-7c05caf/` in the MagicDesk checkout
+use a fixture APK and staged Shroot, not a release APK. The desktops ran Plasma
+Wayland offscreen with Turnip; application checks ran as ordinary guest user
+`mdtester`. Base coverage is limited to init and shutdown.
+
+| Passing workload | User (app UID) | Shell (UID 2000) |
+| --- | --- | --- |
+| Default systemd target, service checks and clean shutdown | `app/boot-{lazy,base}/` | `shell/init-{lazy,base}-final/` |
+| Rootful and rootless Docker and Podman; BuildKit OCI; LXC; systemd-nspawn command and machinectl boot; seven LTP tests | `app/checks.json` | `shell/checks.json` |
+| Direct QEMU and managed libvirt lifecycle; private bridge, NAT, DHCP/DNS and bidirectional VM traffic | `app/checks.json`, `app/bridge/libvirt-*.json` | `shell/checks.json`, `shell/bridge/libvirt-*.json` |
+| Single-node k3s: DNS, NetworkPolicy, Service, volume, rollout, ingress, restart and deletion | `app/k3s/oci-services-4989ead0cdd745168cbd2c3278bf63f6.json` | `shell/k3s/oci-services-1f8435fec91b41b2a869ac3e99f1670c.json` |
+| Native Firefox and Flatpak Firefox/Chromium, fresh and reused profiles; input, file exchange and WebGL | `app/desktop/*/gui-report.json` | `shell/desktop/*/gui-report.json` |
+| Document portal lifecycle, Nix user profile install/verify/remove, binfmt service restart and removal | `app/desktop/{portal,nixos-package-lifecycle,nixos-binfmt}.json` | `shell/desktop/{portal,nixos-package-lifecycle,nixos-binfmt}.json` |
+| Nixpkgs VS Code: save, watcher, terminal, reload, sandboxed GPU, GDB breakpoint and exit | `app/network-peer/code/gui-report.json` | `shell/network-fixed/code-repeat/gui-report.json` |
+| networkd IPv6 with an independent router and stock reverse-path filtering: SLAAC, wait-online, TCP/UDP and router withdrawal | `app/network-peer/networkd.log` | `shell/networkd-first.log` |
+| Published automatic and explicitly reserved ports, IPv4/IPv6 TCP/UDP | `app/network-peer/auto.log` | `shell/network-fixed/auto.log` |
+
+The main regression pass uses supervisor `d14569498e17`; both editor and
+published-port receipts use `468ec5c2c4fe`, and the final Shell boot receipts
+use `fb7b2a75b83b`. One Shell run timed out waiting for Electron's process
+information; the complete editor run passed on retry with unchanged timeouts.
+These checks use an installed generation, not a clean recipe rebuild.
+
+### NixOS system workload fixtures
+
 The installed recipe environment uses stock activation of lab generation
 `/nix/store/ncygaw319nz0yvd4dgw1ch6wala4z9hk-nixos-system-nixos-lxc-26.05.12530.c1ff116587e6`.
 Its added test packages and BuildKit archive are lab prerequisites, not recipe

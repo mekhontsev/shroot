@@ -44,7 +44,7 @@ static void check_device(struct md_filesystem *fs) {
     r=request(fs,MD_FS_OPEN,"/dev/fuse",O_PATH,&file);
     assert(!r.error && r.fd>=0 && md_fuse_device_is_node(file));
     assert(!md_fuse_device_connection(file)); close(r.fd); md_control_file_release(file); file=(struct md_control_file){0};
-    r=request(fs,MD_FS_OPEN,"/dev/fuse",O_RDWR,&file);
+    r=request(fs,MD_FS_OPEN,"/dev/fuse",O_RDWR|O_CREAT|O_TRUNC,&file);
     assert(!r.error && r.fd>=0 && file.ops); close(r.fd);
     struct md_fuse_connection *connection=md_fuse_connection_retain(md_fuse_device_connection(file));
     assert(connection && !md_fuse_device_is_node(file));

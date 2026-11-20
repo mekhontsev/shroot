@@ -112,7 +112,8 @@ static void device_remount(void) {
             if (opened>=0 || error!=EACCES) fprintf(stderr,"device nodev %s: fd=%d error=%d\n",devices[i],opened,error);
             assert(opened<0 && error==EACCES);
             remount(path,MS_RDONLY);
-            opened=open(target,O_RDWR); assert(opened>=0); close(opened);
+            assert(open(target,O_RDWR|O_CREAT|O_EXCL,0600)<0 && errno==EEXIST);
+            opened=open(target,O_RDWR|O_CREAT|O_TRUNC,0600); assert(opened>=0); close(opened);
             remount(path,0);
         }
         close(fd); assert(!umount2(target,0)); assert(!unlink(target));

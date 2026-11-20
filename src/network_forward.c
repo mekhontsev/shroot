@@ -987,7 +987,7 @@ int md_network_forward_reuse(struct md_network_namespace *n,const void *endpoint
     return 0;
 }
 int md_network_forward_bind(struct md_network_namespace *n,const void *endpoint,int type,
-        const struct md_inet_address *address,int v6only,struct md_network_port_reservation **out) {
+        struct md_inet_address *address,int v6only,struct md_network_port_reservation **out) {
     *out=NULL;
     int error=ensure(n->fabric); if (error) return error;
     struct md_network_port_reservation *r=calloc(1,sizeof(*r));
@@ -1011,7 +1011,7 @@ int md_network_forward_bind(struct md_network_namespace *n,const void *endpoint,
     error=listener_reuse(l,reuse);
     if (error) { free(r); return error; }
     r->previous=l->endpoint;
-    r->listener=l; l->endpoint=endpoint; *out=r; return 0;
+    r->listener=l; l->endpoint=endpoint; *out=r; address->port=l->address.port; return 0;
 }
 void md_network_forward_bound(struct md_network_port_reservation *r,int success) {
     if (!r) return;

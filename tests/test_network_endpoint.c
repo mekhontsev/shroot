@@ -493,6 +493,53 @@ static void host_datagram_reuse(unsigned family,const struct sockaddr_storage *a
     assert(permitted ? !result : result==-1 && errno==EADDRINUSE);
     close(fd);
 }
+/* Model a host with a reserved port independently of the device's actual list. */
+static _Thread_local struct { uint16_t reserved, selected; int denial, deny_all; unsigned attempts; } port_policy;
+int __real_md_inet_bind(int,const struct md_inet_address *,unsigned);
+int __wrap_md_inet_bind(int fd,const struct md_inet_address *address,unsigned family) {
+    if (!family && port_policy.denial) {
+        ++port_policy.attempts;
+        if (address->port==port_policy.reserved || port_policy.deny_all) { errno=port_policy.denial; return -1; }
+        if (!address->port) {
+            struct md_inet_address automatic=*address;
+            automatic.port=port_policy.selected;
+            return __real_md_inet_bind(fd,&automatic,family);
+        }
+    }
+    return __real_md_inet_bind(fd,address,family);
+}
+static void published_automatic_port(unsigned family,int type) {
+    struct md_network_namespace *n=md_network_namespace_new(NULL,MD_NETWORK_ROUTED);
+    struct md_identity identity=md_identity_new(0,0);
+    struct md_inet_address address={.ip=md_ip_loopback(family)};
+    int sample=socket(family,type|SOCK_CLOEXEC,0);
+    assert(n && sample>=0 && !md_inet_bind(sample,&address,0) && !md_inet_name(sample,0,&address));
+    close(sample);
+    unsigned allowed=ntohs(address.port),blocked=allowed-1;
+    port_policy.selected=address.port; port_policy.reserved=htons(blocked);
+    for (unsigned i=0;i<4;++i) {
+        struct md_fd_object *o; int fd;
+        assert(!md_network_endpoint_open(n,0,family,type,0,&o,&fd));
+        n->local_ports[0]=n->next_port=blocked; n->local_ports[1]=i==1 ? blocked : allowed;
+        port_policy.deny_all=i==0; port_policy.denial=i%2 ? EACCES : EPERM;
+        struct sockaddr_storage wire; socklen_t size;
+        address.port=htons(blocked);
+        assert(!md_inet_encode(&address,0,&wire,&size));
+        assert(md_network_endpoint_bind(o,fd,&identity,(void *)&wire,size)==-port_policy.denial);
+        address.port=0; port_policy.attempts=0;
+        assert(!md_inet_encode(&address,0,&wire,&size));
+        int error=md_network_endpoint_bind(o,fd,&identity,(void *)&wire,size);
+        assert(port_policy.attempts==2);
+        if (i<2) assert(error==(i ? -EADDRINUSE : -port_policy.denial));
+        else {
+            assert(!error && !md_network_endpoint_name(o,fd,0,&wire,&size));
+            assert(!md_inet_decode((void *)&wire,size,&address) && ntohs(address.port)==allowed);
+        }
+        port_policy.denial=0;
+        close(fd); md_fd_object_release(o);
+    }
+    md_identity_release(&identity); md_network_namespace_release(n);
+}
 static void published_datagram_options(unsigned family) {
     struct md_network_namespace *n=md_network_namespace_new(NULL,MD_NETWORK_ROUTED);
     struct md_identity identity=md_identity_new(0,0);
@@ -932,6 +979,8 @@ static void unspecified_destination(unsigned family,int type) {
 }
 
 void test_network_endpoint(void) {
+    published_automatic_port(AF_INET,SOCK_STREAM); published_automatic_port(AF_INET6,SOCK_STREAM);
+    published_automatic_port(AF_INET,SOCK_DGRAM); published_automatic_port(AF_INET6,SOCK_DGRAM);
     unspecified_destination(AF_INET,SOCK_STREAM); unspecified_destination(AF_INET6,SOCK_STREAM);
     unspecified_destination(AF_INET,SOCK_DGRAM); unspecified_destination(AF_INET6,SOCK_DGRAM);
     forwarded_connect(AF_INET);

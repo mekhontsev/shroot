@@ -2,6 +2,7 @@
 """Exercise the booted distribution's networkd with an actual virtual IPv6 router."""
 import json
 import os
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 import select
 import signal
@@ -17,6 +18,43 @@ def run(*argv):
     except subprocess.CalledProcessError as error:
         print(error.output, flush=True)
         raise
+
+
+def enter_net(fd):
+    if hasattr(os, 'setns'):
+        os.setns(fd, 0)
+    else:  # Distribution Python before 3.12.
+        import ctypes
+        if ctypes.CDLL(None, use_errno=True).setns(fd, 0) < 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+
+
+@contextmanager
+def router_peer():
+    # The router must not own a client address. A real reverse-path filter
+    # can legitimately reject incoming traffic sourced from the host itself.
+    namespace = 'md-ra-peer-' + str(os.getpid())
+    with ExitStack() as stack:
+        run('ip', 'netns', 'add', namespace)
+        stack.callback(run, 'ip', 'netns', 'del', namespace)
+        run('ip', 'link', 'add', 'mdra0', 'type', 'veth', 'peer', 'name', 'mdra1')
+        stack.callback(run, 'ip', 'link', 'del', 'mdra0')
+        run('ip', 'link', 'set', 'mdra1', 'netns', namespace)
+        with open('/proc/self/ns/net', 'rb') as origin, open('/run/netns/' + namespace, 'rb') as peer:
+            enter_net(peer.fileno())
+            try:
+                run('ip', 'link', 'set', 'lo', 'up')
+                run('ip', 'link', 'set', 'mdra1', 'up')
+                Path('/proc/sys/net/ipv6/conf/mdra1/forwarding').write_text('1')
+                run('ip', '-6', 'address', 'add', 'fd92:10::1/64', 'dev', 'mdra1')
+                link = json.loads(run('ip', '-j', '-6', 'address', 'show', 'dev', 'mdra1'))[0]
+                stream = stack.enter_context(socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6))
+                servers = [stack.enter_context(socket.socket(socket.AF_INET6, kind))
+                           for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM)]
+            finally:
+                enter_net(origin.fileno())
+        yield link, stream, servers
 
 
 def main():
@@ -39,7 +77,6 @@ KeepConfiguration=yes
 DHCPv6Client=no
 UseDNS=no
 ''')
-    created = False
     tracer = None
     try:
         if os.environ.get('MD_NETWORKD_TRACE') == '1':
@@ -49,15 +86,9 @@ UseDNS=no
             assert select.select([tracer.stderr], [], [], 10)[0]
             assert b'attached' in tracer.stderr.readline()
         run('networkctl', 'reload')
-        run('ip', 'link', 'add', 'mdra0', 'type', 'veth', 'peer', 'name', 'mdra1')
-        created = True
-        run('ip', 'link', 'set', 'mdra1', 'up')
-        Path('/proc/sys/net/ipv6/conf/mdra1/forwarding').write_text('1')
-        run('ip', '-6', 'address', 'add', 'fd92:10::1/64', 'dev', 'mdra1')
-        router = json.loads(run('ip', '-j', '-6', 'address', 'show', 'dev', 'mdra1'))[0]
-        router_address = next(a['local'] for a in router['addr_info'] if a['scope'] == 'link')
-        with socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6) as stream, \
+        with router_peer() as (router, stream, servers), \
                 socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, socket.NETLINK_ROUTE) as changes:
+            router_address = next(a['local'] for a in router['addr_info'] if a['scope'] == 'link')
             stream.settimeout(15)
             changes.settimeout(15)
             changes.bind((0, 0x100 | 0x400))  # RTMGRP_IPV6_IFADDR | RTMGRP_IPV6_ROUTE
@@ -107,8 +138,9 @@ UseDNS=no
             hops = metrics.get('hoplimit', int(Path('/proc/sys/net/ipv6/conf/mdra0/hop_limit').read_text()))
             assert mtu == 1440 and hops == 64, (lookup, mtu, hops)
             print('NETWORKD_EFFECTIVE_ROUTE', json.dumps(lookup), flush=True)
-            for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
-                with socket.socket(socket.AF_INET6, kind) as server, socket.socket(socket.AF_INET6, kind) as client:
+            for server in servers:
+                kind = server.type
+                with socket.socket(socket.AF_INET6, kind) as client:
                     server.settimeout(5)
                     client.settimeout(5)
                     server.bind(('fd92:10::1', 0))
@@ -151,8 +183,6 @@ UseDNS=no
                 if 'NLMSG_ERROR' in line and 'error=0' not in line:
                     print('NETWORKD_TRACE', line, flush=True)
         print(run('journalctl', '-b', '--since=@' + started, '-u', 'systemd-networkd', '-n', '160', '--no-pager'), flush=True)
-        if created:
-            run('ip', 'link', 'del', 'mdra0')
         config.unlink()
         run('networkctl', 'reload')
 

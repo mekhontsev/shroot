@@ -28,7 +28,8 @@ def guest():
 
         first = opened(os.O_RDONLY | os.O_NONBLOCK)
         second = opened(os.O_RDONLY | os.O_NONBLOCK)
-        writer = opened(os.O_WRONLY)
+        writer = opened(os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        denied(lambda: opened(os.O_WRONLY | os.O_CREAT | os.O_EXCL), errno.EEXIST)
         info = os.fstat(first)
         assert stat.S_ISCHR(info.st_mode) and info.st_rdev == os.makedev(1, 11)
         denied(lambda: os.read(first, 8192), errno.EAGAIN)
@@ -45,7 +46,8 @@ def guest():
         assert epoll.poll(0) == []
         alias = os.dup(first)
         cleanup.callback(os.close, alias)
-        assert os.write(writer, b'next\n') == 5
+        redirected = opened(os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        assert os.write(redirected, b'next\n') == 5
         assert os.read(alias, 8192).endswith(b';next\n')
         denied(lambda: os.read(first, 8192), errno.EAGAIN)
         assert os.lseek(first, 0, os.SEEK_SET) == 0

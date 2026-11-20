@@ -94,6 +94,9 @@ A passing receipt is not silently promoted to another runtime build.
 The [Ubuntu Shell regression pass](distribution-evidence.md#ubuntu-shell-regression-coverage)
 records staged-runtime application and service checks separately from the APK
 tables, including private-bridge VM networking and strict shutdown.
+The [NixOS User and Shell regression pass](distribution-evidence.md#nixos-user-and-shell-regression-coverage)
+covers the same installed generation under both identities, including k3s,
+Plasma applications and Base systemd boot/shutdown.
 
 ### Runtime Coverage
 
