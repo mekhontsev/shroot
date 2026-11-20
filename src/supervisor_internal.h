@@ -40,7 +40,7 @@ struct interception_statistics {
     uint64_t ptrace_requests, unknown, native_seeks, stops;
     uint64_t ptrace_operations[2][64];
     uint64_t checkpoints[CHECKPOINT_COUNT];
-    uint64_t buffer_commands[128];
+    struct { uint64_t calls, stopped; } buffer_commands[128];
     uint64_t event_polls, event_waits;
     uint64_t quiesce_interrupts, memory_repairs, entry_fence_transitions, entry_fence_drains, entry_fence_quiescences;
     uint64_t notification_rebounds, notification_readmissions_retired;

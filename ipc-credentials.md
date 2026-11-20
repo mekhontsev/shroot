@@ -490,7 +490,9 @@ retain the batch's kernel-owned SO_ERROR and poll behavior after a successful pr
 
 Receive publication has one owner for ancillary data, translated source address
 and output header fields. Application rights use the existing table-owned return
-channel. Annotated rights are installed by kernel recvmsg into a mapped receipt;
+channel. After recvmsg returns, a resident adapter acknowledges the receipt on
+its existing channel; the table owner still validates the token and publishes
+the installed descriptors. Annotated rights are installed by kernel recvmsg into a mapped receipt;
 unannotated rights retain direct application-control output. A later copy fault
 cannot authorize closing a kernel-published descriptor. Cancellation drains only
 queued rights and releases retained sources; there is no cleanup by guessed FD

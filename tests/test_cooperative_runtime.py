@@ -109,11 +109,15 @@ def main():
                 output = suite.command(['timeout', '30', *runner, *(['--diagnostics'] if args.diagnostics else []), '--statistics', '--store', suite.base + '/store',
                                         '--user', '0:0', '--', '/bin/probe', '--socket-discovery', str(filtered)])
                 assert 'PASS resident socket IO:' in output
+                receipt = re.search(r'MD_BUFFER command=26 calls=(\d+) stopped=(\d+)', output)
+                assert receipt and int(receipt[1]) >= 64, 'missing SCM_RIGHTS receipt accounting'
                 if args.machine_entry is not False:
                     stops = sum(int(trace) + int(notifications) for trace, notifications in re.findall(
                         r'MD_SYSCALL nr=(?:211|212) trace=(\d+) notification=(\d+)', output))
                     assert stops <= 12, ('socket IO still requires stopped registers', filtered, stops)
                     assert 'MD_EXECUTION_STOP reason=wait ' not in output, 'socket readiness still stops the task'
+                    assert int(receipt[2]) <= 1, ('repeated SCM_RIGHTS receipts require a kernel stop',
+                                                  filtered, receipt.groups())
             if args.case == 'socket-discovery':
                 suite.report['passed'] = True
                 suite.command(['rm', '-rf', suite.base])

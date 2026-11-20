@@ -467,9 +467,12 @@ void md_fd_origins_release_custody(struct md_fd_origin_update *update) {
 int md_fd_origins_has_loans(struct md_fd_origins *t) {
     return t && atomic_load_explicit(&t->loans,memory_order_acquire)!=0;
 }
+int md_fd_origins_sole_owner(const struct md_fd_origins *t) {
+    return t && t->owners==1;
+}
 int md_fd_origins_exclusive(const struct md_fd_order *turn) {
-    return turn && turn->table && md_fd_order_state(turn)==MD_RESOURCE_ORDER_RUNNING
-        && turn->table->owners==1;
+    return turn && md_fd_order_state(turn)==MD_RESOURCE_ORDER_RUNNING
+        && md_fd_origins_sole_owner(turn->table);
 }
 static int loan_find(const struct md_fd_order *turn,unsigned first,unsigned last,
         int expired,int *number,struct md_fd_loan **owner) {

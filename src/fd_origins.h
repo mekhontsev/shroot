@@ -116,6 +116,8 @@ int md_fd_origins_loan_range(const struct md_fd_order *,unsigned first,unsigned 
         int *number,struct md_fd_loan **);
 int md_fd_origins_loan_matches(const struct md_fd_order *,int number,const struct md_fd_loan *);
 int md_fd_origins_has_loans(struct md_fd_origins *);
+/* Supervisor-only snapshot for omitting a peer walk, not a mutation turn. */
+int md_fd_origins_sole_owner(const struct md_fd_origins *);
 /* Supervisor task ownership, queried under a running table turn. A sole
  * sleeping owner cannot create another CLONE_FILES holder or replace a slot. */
 int md_fd_origins_exclusive(const struct md_fd_order *);

@@ -7,12 +7,17 @@
 #include <errno.h>
 #include <limits.h>
 
+void md_epoll_frame_begin(struct md_epoll_frame *f) {
+    /* The header is input. Task events and park arguments are filled by the
+     * producer; only the public output slice can expose event padding. */
+    memset(f,0,offsetof(struct md_epoll_frame,events));
+}
 long md_epoll_call(long nr,const unsigned long *a) {
     long memory=md_adapter_buffer_take();
     if (memory<0) return memory;
     struct md_epoll_frame *f=(void *)memory;
     struct md_epoll_park parked;
-    memset(f,0,sizeof(*f));
+    md_epoll_frame_begin(f);
     long result=0;
     if (nr==SYS_epoll_ctl) {
         if ((int)a[1]!=EPOLL_CTL_DEL) result=md_read_memory(&f->event,(void *)a[3],sizeof(f->event));
@@ -28,6 +33,7 @@ long md_epoll_call(long nr,const unsigned long *a) {
         }
         if (!result && (count<=0 || (unsigned)count>INT_MAX/sizeof(struct epoll_event))) result=-EINVAL;
         f->capacity=count>MD_EPOLL_EVENTS ? MD_EPOLL_EVENTS : count;
+        if (!result) memset(f->events,0,(size_t)f->capacity*sizeof(*f->events));
         if (!result && a[4]) {
             if (a[5]!=sizeof(f->mask)) result=-EINVAL;
             else result=md_read_memory(&f->mask,(void *)a[4],sizeof(f->mask));

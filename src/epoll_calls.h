@@ -25,6 +25,7 @@ struct md_epoll_frame {
     struct md_epoll_park park;
 };
 #ifndef MD_USE_LIBC
+void md_epoll_frame_begin(struct md_epoll_frame *);
 long md_epoll_call(long,const unsigned long *);
 #endif
 #endif

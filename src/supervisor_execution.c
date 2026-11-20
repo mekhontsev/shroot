@@ -1206,7 +1206,10 @@ static void buffer_control(struct thread *t,const struct supervisor_control_requ
         continuation(t); return;
     }
     long result=-EINVAL;
-    if (statistics && control->command<128) ++statistics->buffer_commands[control->command];
+    if (statistics && control->command<128) {
+        ++statistics->buffer_commands[control->command].calls;
+        if (r) ++statistics->buffer_commands[control->command].stopped;
+    }
     if (t->fs.waiting || t->fs.return_waiting || (t->fs.call && !md_fs_buffer_ack_pending(t->fs.call)
             && !md_fs_buffer_export_pending(t->fs.call)
             && !md_fs_buffer_snapshot_pending(t->fs.call)

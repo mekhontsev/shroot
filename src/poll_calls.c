@@ -63,7 +63,8 @@ long md_poll_call(long nr,const unsigned long *a,unsigned long prepared) {
     long memory=prepared ? (long)prepared : md_guest_buffer_control(MD_BUFFER_TAKE,md_poll_bytes(count),0);
     if (memory<0) return memory;
     struct md_poll_frame *f=(void *)memory;
-    memset(f,0,sizeof(*f)); f->select=select; f->total=count;
+    md_epoll_frame_begin(&f->wait);
+    f->offset=0; f->elapsed=0; f->select=select; f->total=count;
     unsigned long timeout=suspend ? 0 : select ? a[4] : a[2];
     unsigned long mask=suspend ? a[0] : select ? 0 : a[3],size=suspend ? a[1] : select ? 0 : a[4];
     if (suspend && size!=8) result=-EINVAL;

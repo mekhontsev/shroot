@@ -273,14 +273,17 @@ static void close_lifecycle(void) {
     assert(drain_closed(&closed)==2 && file.closes==4);
     put_closing(files,12,&file);
     struct md_fd_origins *copy=md_fd_origins_fork(files,0); assert(copy);
+    assert(md_fd_origins_sole_owner(files) && md_fd_origins_sole_owner(copy));
     md_fd_origins_release(copy); /* Failed clone: no guest descriptors were closed. */
     struct md_fd_origin_update unpublished;
     assert(!md_fd_origins_prepare_object(files,&file.object,0,&unpublished));
     md_fd_origins_finish_closed(&unpublished,-ENOMEM,&closed);
     assert(!closed.first && file.closes==4);
     copy=md_fd_origins_fork(files,1); assert(copy==files);
+    assert(!md_fd_origins_sole_owner(files));
     struct md_task_resources sibling={.files=copy},last={.files=files};
     md_resources_exit_files(&sibling,&closed); assert(!sibling.files && !closed.first);
+    assert(md_fd_origins_sole_owner(files));
     md_resources_exit_files(&sibling,&closed); assert(!closed.first);
     md_fd_object_release(&file.object); assert(!file.destroyed);
     allocation_budget=0; md_resources_exit_files(&last,&closed); allocation_budget=-1;

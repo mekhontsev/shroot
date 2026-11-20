@@ -749,6 +749,13 @@ int fd_native_io(struct thread *t,const struct ptrace_syscall_info *info) {
     resume(t->pid,0); return 1;
 }
 
+static void fd_control_needs_stop(struct thread *t) {
+    struct md_entry_channel *channel=t->entry.control;
+    CHECK(channel && !t->entry.admission && !t->entry.effect);
+    t->entry.control=NULL;
+    md_broker_entry_reply(broker,channel,MD_ENTRY_DECLINED,0);
+}
+
 void fd_control(struct thread *t,const struct supervisor_control_request *control,struct user_pt_regs *r) {
     unsigned operation=(unsigned)control->command;
     uint64_t id=control->args[0];
@@ -805,10 +812,7 @@ void fd_control(struct thread *t,const struct supervisor_control_request *contro
              * actual stop to restore the application mask, not registers from
              * a running channel caller. Decline before releasing its turn;
              * the exact control then arrives through the kernel continuation. */
-            struct md_entry_channel *channel=t->entry.control;
-            CHECK(channel && !t->entry.admission && !t->entry.effect);
-            t->entry.control=NULL;
-            md_broker_entry_reply(broker,channel,MD_ENTRY_DECLINED,0);
+            fd_control_needs_stop(t);
             return;
         }
         else {
@@ -844,6 +848,9 @@ void fd_control(struct thread *t,const struct supervisor_control_request *contro
             if (operation!=MD_FD_SELECTOR_QUERY && result>=0) {
                 if (result) result=0;
                 else if (t->action) result=-EBUSY;
+                /* Coverage includes peers sharing the table. Only installing a
+                 * missing selector needs registers; replay before creating the action. */
+                else if (!r) { fd_control_needs_stop(t); return; }
                 else if (!task_action_new(t)) result=-ENOMEM;
                 else {
                     t->action->continuation=*r;

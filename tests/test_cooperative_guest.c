@@ -266,6 +266,27 @@ static void socket_discovery(int filtered) {
         assert(call(pair[1],(uintptr_t)&received,0,0,0,0,SYS_recvmsg)==5);
         assert(!memcmp(bytes,"ready",5));
     }
+    int stream[2]; assert(!pipe(stream));
+    union { struct cmsghdr align; char bytes[CMSG_SPACE(sizeof(int))]; } src={0},dst;
+    struct msghdr offer=sent;
+    offer.msg_control=src.bytes; offer.msg_controllen=sizeof(src.bytes);
+    struct cmsghdr *right=CMSG_FIRSTHDR(&offer);
+    right->cmsg_len=CMSG_LEN(sizeof(int)); right->cmsg_level=SOL_SOCKET; right->cmsg_type=SCM_RIGHTS;
+    memcpy(CMSG_DATA(right),&stream[0],sizeof(int));
+    for (unsigned i=0;i<64;++i) {
+        struct msghdr receipt=received;
+        receipt.msg_control=dst.bytes; receipt.msg_controllen=sizeof(dst.bytes);
+        assert(call(pair[0],(uintptr_t)&offer,0,0,0,0,SYS_sendmsg)==5);
+        assert(call(pair[1],(uintptr_t)&receipt,MSG_CMSG_CLOEXEC,0,0,0,SYS_recvmsg)==5);
+        struct cmsghdr *h=CMSG_FIRSTHDR(&receipt);
+        assert(!(receipt.msg_flags&MSG_CTRUNC) && h && h->cmsg_len==CMSG_LEN(sizeof(int))
+            && h->cmsg_type==SCM_RIGHTS && h->cmsg_level==SOL_SOCKET && !CMSG_NXTHDR(&receipt,h));
+        int fd; memcpy(&fd,CMSG_DATA(h),sizeof(fd));
+        char value=(char)i,copy;
+        assert(fcntl(fd,F_GETFD)==FD_CLOEXEC && write(stream[1],&value,1)==1);
+        assert(read(fd,&copy,1)==1 && copy==value && !close(fd));
+    }
+    assert(!close(stream[0]) && !close(stream[1]));
     struct timeval timeout={0,20000};
     assert(!setsockopt(pair[1],SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout)));
     assert(call(pair[1],(uintptr_t)&received,0,0,0,0,SYS_recvmsg)==-EAGAIN);

@@ -30,6 +30,8 @@ static inline int md_fs_buffer_resident(unsigned long command) {
     return command==MD_FS_BUFFER_SEND_PREPARE || command==MD_FS_BUFFER_SEND_COMMIT
         || command==MD_FS_BUFFER_TASK_RECEIVE || command==MD_FS_BUFFER_RECEIVED_INSPECT
         || command==MD_FS_BUFFER_RECEIVED_RIGHTS || command==MD_FS_BUFFER_RECEIVED_DROP
+        /* recvmsg has returned; the FD owner validates and retires its receipt. */
+        || command==MD_FS_BUFFER_RIGHTS_DONE
         || command==MD_FS_BUFFER_IPC_CAPTURE_READY || command==MD_FS_BUFFER_IPC_CAPTURE_SENT
         || command==MD_FS_BUFFER_IPC_CAPTURE_OBSERVED || command==MD_FS_BUFFER_IPC_RECEIVE;
 }

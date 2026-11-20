@@ -1161,9 +1161,10 @@ static void report_statistics(void) {
             (unsigned long long)statistics->checkpoints[CHECKPOINT_COUNT_##field]);
         MD_CHECKPOINT_SITES(REPORT_CHECKPOINT)
 #undef REPORT_CHECKPOINT
-        for (unsigned i=0;i<128;++i) if (statistics->buffer_commands[i])
-            fprintf(stderr,"MD_BUFFER command=%u calls=%llu\n",i,
-                (unsigned long long)statistics->buffer_commands[i]);
+        for (unsigned i=0;i<128;++i) if (statistics->buffer_commands[i].calls)
+            fprintf(stderr,"MD_BUFFER command=%u calls=%llu stopped=%llu\n",i,
+                (unsigned long long)statistics->buffer_commands[i].calls,
+                (unsigned long long)statistics->buffer_commands[i].stopped);
         fprintf(stderr, "MD_EVENT_LOOP polls=%llu waits=%llu\n",
             (unsigned long long)statistics->event_polls, (unsigned long long)statistics->event_waits);
         fprintf(stderr,"MD_EVENT_TIME collectCalls=%llu collectNs=%llu sleepCalls=%llu sleepNs=%llu\n",
