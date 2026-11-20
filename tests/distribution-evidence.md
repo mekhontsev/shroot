@@ -460,7 +460,48 @@ Full desktop acceptance is separate.
 
 ## Ubuntu
 
-Current system-workload reruns use staged Release supervisor
+### Ubuntu Shell regression coverage
+
+Ubuntu 24.04.5, Shell executor, staged Shroot `f6efc57`. Receipts are under
+`build/ubuntu-regression-f6efc57/` in the MagicDesk checkout. These checks do
+not qualify the installed APK, User execution or unrun Base workloads.
+
+| Workload | Result | Receipt |
+| --- | --- | --- |
+| Snap Firefox and Chromium, fresh and reused profiles; VS Code with GPU and debugger | P, lazy | `{ff,ff-reuse,cr,cr-reuse,code}/gui-report.json` |
+| FUSE document portal grants, revocation, exit/restart and reactivation | P, lazy | `portal-{firefox,chromium}.json` |
+| Docker (guest root), rootless Podman, nspawn command and machinectl boot, LXC, BuildKit, LTP core, direct QEMU and managed libvirt | P, lazy | `services-current.json` and per-workload receipts |
+| Managed libvirt DHCP/DNS and TCP/UDP in the VM | P, lazy, private bridge | `bridge/oci-services-b916250137fe46fda4cf4b4ca385da56.json` |
+| One-node k3s, VXLAN | P, lazy | `k3s/oci-services-3f95cb14115e4705bfc6ad130bba33af.json` |
+| Rootless Docker, published ports, local traffic and public DNS/HTTP | P, standard lazy run; intermittent local refusal in stress | `network-rerun/oci-services-{488b7f37801f4f9597e17c4daaaf46aa,3589703de79a460fb783c1adff2bd678}.json` |
+| Rootful Podman 4.9.3 / Netavark 1.4.0, conflicting host TCP port | U, lazy: original TCP publication fails; UDP and the second container remain reachable | `network-rerun/oci-services-1508964f9c304edc90cea4e02d513857.json`; native control: `podman-linux-control/console.log` |
+| Default systemd target and service IO | Running in lazy and Base; strict shutdown fails | `boot-{lazy,base}.matrix.log` |
+
+The independent Linux 6.18.52 QEMU control uses the same Ubuntu packages
+(`podman 4.9.3+ds1-1ubuntu0.2`, `netavark 1.4.0-4`, iptables-nft), OCI image
+and loopback publications, with no Shroot. Both containers pass 20 TCP and
+20 UDP exchanges before the third container requests the first TCP port.
+Rollback removes the first publication's two TCP `NETAVARK-HOSTPORT-SETMARK`
+rules but leaves its DNAT. The first fresh TCP exchange fails; UDP and the
+unaffected publication still pass 20/20. Restoring only the two deleted rules
+in the Shroot control restores TCP. This matches
+[Netavark's rule handling](https://github.com/containers/netavark/blob/v1.4.0/src/firewall/varktables/types.rs#L95-L154).
+
+The network follow-up uses staged supervisor
+`d14569498e1714cb8a44c0e88d0614c4deb05aba1ae67fa19ac1486f9354d989`.
+Stock rootless Docker passes 100 exchanges per check, including both live
+publications after a conflict, 200 local outbound HTTP connections and public
+DNS/HTTP in both containers
+(`port-allocation/oci-services-c94ff081034a40efb31ae736e7a75771.json`).
+With automatic source ports, each of two containers also completed 1,500 local
+HTTP connections (`port-allocation/5732512bfa184aa69d012a32526d97b7.log`).
+Forcing a single TCP source port to be reused immediately is a different
+scenario: an independent Linux VM using QEMU user networking also observed
+refusals without Shroot (`network-rerun/native-linux-slirp.log`).
+
+### Ubuntu system workloads
+
+The following system-workload runs use staged Release supervisor
 `729b3c3b988519fa72d1a6cbc4f038ef72c918b70358c5f2491095fef88ac578`.
 All receipt IDs in this table are `build/installed-ubuntu-fuse/oci-services-ID.json`:
 
@@ -533,7 +574,7 @@ with supervisor `729b3c3b988519fa72d1a6cbc4f038ef72c918b70358c5f2491095fef88ac57
 official libvirt 10.0.0/QEMU 8.2.2, managed TCG boot, paused start/resume, serial,
 poweroff, undefine and cleanup. Direct TCG:
 `oci-services-ec7f4b8ce0194c1f8c5d69bcf0c32388.json`. VM networking and KVM remain
-untested
+untested in that receipt; the Shell private-bridge run above covers VM networking.
 
 ### Ubuntu machinectl/LXC
 
@@ -635,13 +676,13 @@ The receipt predates the full shutdown assertion and is not complete acceptance:
 its console log contains failed `lxc.service` and `podman-restart.service` stops.
 Stock Podman 4.9.3's unit invokes `podman stop` without arguments when no containers
 match; stock LXC 5.0.3's `lxc-autostart -a -A -s` returns 1 for an empty list
-(`failed == count == 0`). The native runtime does not mask either exit status.
+([`failed == count == 0`](https://github.com/lxc/lxc/blob/lxc-5.0.3/src/lxc/tools/lxc_autostart.c#L506-L509)).
+The native runtime does not mask either exit status.
 Reproduction and file-call trace are under `build/installed-ubuntu-fuse/` in
 `09cb1da9c2de4f6eb55e8384bf775220.log` and
 `cf475a4a406e488a80a92dddb2e4033f.log`. These package shutdown limitations are
 separate from passing real container workflows.
-Libvirt's default bridge control remains unsupported; VM-network acceptance is
-separate from this boot and the managed TCG test.
+Libvirt VM-network acceptance belongs to the separate private-bridge test above.
 
 ### Ubuntu services
 

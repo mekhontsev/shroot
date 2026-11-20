@@ -266,8 +266,10 @@ def main():
         parser.error('--networkd-ipv6 requires systemd')
     suite = Suite(args.output, args.build, executor=args.executor)
     suite.report['store'] = args.store
+    suite.report['entryMode'] = args.entry
     suite.report['bootPolicy'] = {'init': args.init, 'dropCapabilities': args.drop_capability,
                                 'rtkit': args.rtkit, 'network': args.network, 'dns': args.dns,
+                                'binfmt': args.binfmt, 'networkdIpv6': args.networkd_ipv6,
                                 'entryMode': args.entry, 'restartServices': args.restart_service, 'serviceIO': args.service_io}
     target = '/md-boot-' + suite.report['id']
     prefix = [suite.runner, '--store', args.store, '--user', '0:0', '--network', args.network,
@@ -400,6 +402,9 @@ printf ':md-boot:E::mdboot::/bin/true:P\\n' > /run/binfmt.d/md-boot.conf
         result = suite.command(['cat', suite.base + '/result'])
         assert result.strip() == '0', result
         suite.report['passed'] = True
+    except Exception as error:
+        suite.report['failure'] = repr(error)
+        raise
     finally:
         try:
             for name in ('boot.log', 'services.log', 'stock-services.log', 'journal.log', 'journald.log', 'state', 'result'):

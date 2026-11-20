@@ -1064,6 +1064,9 @@ void test_network_endpoint(void) {
     assert(fcntl(f,F_GETFD)==-1 && errno==EBADF);
     md_fd_object_release(first); md_fd_object_release(second); md_fd_object_release(conflict);
     assert(!root->fabric->endpoints);
+    md_network_namespace_release(a);
+    a=md_network_namespace_copy(root,NULL);
+    assert(a);
     uint32_t ports[2]={49100,49101};
     assert(!md_network_parameter_write(a,MD_NET_LOCAL_PORTS,0,ports));
     assert(!md_network_endpoint_open(a,0,AF_INET,SOCK_STREAM,0,&first,&f));
@@ -1074,11 +1077,14 @@ void test_network_endpoint(void) {
     assert(!md_network_endpoint_bind(second,s,&identity,(void *)&local,sizeof(local)));
     assert(md_network_endpoint_bind(conflict,c,&identity,(void *)&local,sizeof(local))==-EADDRINUSE);
     assert(!md_network_endpoint_name(first,f,0,&logical,&length));
-    assert(ntohs(((struct sockaddr_in *)&logical)->sin_port)==49100);
+    unsigned first_port=ntohs(((struct sockaddr_in *)&logical)->sin_port);
+    assert(first_port==ports[0]+a->inode%2);
     assert(!md_network_endpoint_name(second,s,0,&logical,&length));
-    assert(ntohs(((struct sockaddr_in *)&logical)->sin_port)==49101);
+    assert(ntohs(((struct sockaddr_in *)&logical)->sin_port)==ports[0]+ports[1]-first_port);
     close(f); md_fd_object_release(first);
     assert(!md_network_endpoint_bind(conflict,c,&identity,(void *)&local,sizeof(local)));
+    assert(!md_network_endpoint_name(conflict,c,0,&logical,&length));
+    assert(ntohs(((struct sockaddr_in *)&logical)->sin_port)==first_port);
     close(s); close(c); md_fd_object_release(second); md_fd_object_release(conflict);
     md_network_namespace_release(a); md_network_namespace_release(b);
     md_network_namespace_release(root); md_network_namespace_release(offline);

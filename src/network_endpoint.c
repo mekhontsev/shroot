@@ -320,11 +320,15 @@ static int bind_locked(struct md_network_endpoint *e,int fd,struct md_inet_addre
          * share one fabric turn; no guest memory or stream IO is under it. */
         unsigned attempts=logical.port ? 1 : n->local_ports[1]-n->local_ports[0]+1;
         int automatic=!logical.port;
+        /* Sibling namespaces can share a NAT address. Start their auto-bind
+         * walks independently, including after changing the guest port range. */
+        if (automatic && (n->next_port<n->local_ports[0] || n->next_port>n->local_ports[1]))
+            n->next_port=n->local_ports[0]+(uint32_t)(n->inode%attempts);
         error=-EADDRINUSE;
         for (unsigned i=0;i<attempts;++i) {
             if (automatic) {
-                if (n->next_port<n->local_ports[0] || n->next_port>n->local_ports[1]) n->next_port=n->local_ports[0];
                 logical.port=htons((uint16_t)n->next_port++);
+                if (n->next_port>n->local_ports[1]) n->next_port=n->local_ports[0];
                 if (conflicts(e,&logical,0)) continue;
             }
             if (published) {

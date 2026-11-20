@@ -91,6 +91,10 @@ acceptance. The saved comparison baseline is source
 `21e764c0e3eded3a96791985c9435411b28adae85d292e8f32d374307a26aef7`.
 A passing receipt is not silently promoted to another runtime build.
 
+The [Ubuntu Shell regression pass](distribution-evidence.md#ubuntu-shell-regression-coverage)
+records staged-runtime application and service checks separately from the APK
+tables, including private-bridge VM networking and strict shutdown.
+
 ### Runtime Coverage
 
 - **Resources:** 461 User and 472 Shell checks cover descriptor custody,
