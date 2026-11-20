@@ -984,6 +984,32 @@ claim upstream maintainer acknowledgement; CLI lifetime alone is not GUI readine
 
 ## Fedora
 
+### Fedora and Arch User and Shell regression coverage
+
+The Fedora 44 and Arch Linux ARM Turnip recipe stores were each exercised
+under User and Shell on Android 16 (NX809J, kernel 6.12.23, 4 KiB pages).
+Boot receipts cover the default systemd target, binfmt, networkd IPv6
+and shutdown in **both Base and lazy**. Application receipts use **lazy**
+entry and a test APK, not a release APK or the Linux 5.15 capability profile.
+Both stores passed one-node k3s, rootful and rootless Docker and Podman,
+BuildKit, LXC, nspawn/machinectl, LTP, direct QEMU and libvirt. Flatpak
+Chromium and Firefox passed with fresh and reused profiles; the document
+portal and editor workflows also passed.
+
+| Installed store | Editor | Package lifecycle |
+| --- | --- | --- |
+| Fedora | Native VS Code | DNF install, reinstall and RPM verification |
+| Arch | Flatpak VS Code | Stock sandboxed pacman sync, install, reinstall and verification |
+
+Receipts in the MagicDesk checkout: `build/{fedora,arch}-matrix-0ac4be67/{app,shell}/`.
+`boot-{base,lazy}/` and `k3s/` identify the runtime for each run.
+Rootless checks use an ordinary guest account and check published ports and
+container-to-container traffic. Fedora User rootless receipts are under
+`rootless-fixed/`; User service and editor repeats are under `retry/`.
+Bridge-network libvirt uses a dedicated boot, separate from direct QEMU.
+
+### Fedora packaged Shell baseline
+
 The 2026-11-02 verification uses installed APK 2.2.5 (232), build
 `a097230c5c72bc5a62eced073c92696b8307279c11143157e4b3be4a29687de3`,
 Android shell UID 2000 and native kernel capabilities. Both entry modes pass
@@ -1170,6 +1196,9 @@ reviewed 20250930 sources built with Fedora compiler/libc in the persistent lab-
 including the ARM64 `epoll_create1` ABI; no failed, broken or skipped checks.
 
 ## Arch
+
+For the two-executor installed-store run, see
+[Fedora and Arch regression coverage](#fedora-and-arch-user-and-shell-regression-coverage).
 
 The current boot and system-workload receipts use the installed 2.2.5 APK,
 build `a097230c5c72bc5a62eced073c92696b8307279c11143157e4b3be4a29687de3`,

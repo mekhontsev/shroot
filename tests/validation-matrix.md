@@ -102,6 +102,9 @@ covers the installed trixie recipe with both Android identities; receipts
 distinguish Base boot coverage from the default-entry application checks.
 The [Alpine User and Shell regression pass](distribution-evidence.md#alpine-user-and-shell-regression-coverage)
 covers OpenRC, k3s, containers, VM networking and native and Flatpak GUI applications.
+The [Fedora and Arch regression pass](distribution-evidence.md#fedora-and-arch-user-and-shell-regression-coverage)
+separates Base/lazy boot from lazy application and rootless-container checks
+on both Android identities.
 
 ### Runtime Coverage
 

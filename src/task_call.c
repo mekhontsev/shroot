@@ -62,9 +62,11 @@ static int calling(struct md_task_call *f) {
     } else if (f->arguments.flags&MD_TASK_CALL_INTERRUPTIBLE)
         error=trace(f,PTRACE_SETSIGMASK,(void *)sizeof(f->mask),&f->mask);
     if (!error) {
-        f->stage=CALLING;
-        if (!f->interrupted_entry) f->effect=MD_EFFECT_UNCERTAIN;
         error=trace(f,PTRACE_SYSCALL,NULL,NULL);
+        if (!error) {
+            f->stage=CALLING;
+            if (!f->interrupted_entry) f->effect=MD_EFFECT_UNCERTAIN;
+        }
     }
     return error;
 }

@@ -1053,7 +1053,8 @@ terminal cleanup reconciles the receipt before releasing a borrowed table turn.
 For a borrowed close, observing its kernel result and restoring the actor are
 separate events. Losing the actor between them does not erase the result. If
 the requester exits first, the in-flight close retains its place in the table
-queue. If execution may have started but no result is known, Shroot does not
+queue. A rejected resume at the syscall entry does not start the close.
+If execution may have started but no result is known, Shroot does not
 close the slot again: it stops the guest rather than risking another FD when
 a holder remains. An exit or reap held by a stop barrier or by robust-futex
 cleanup counts as exit before replay; an exec does not. With no live holder,

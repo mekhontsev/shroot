@@ -777,6 +777,28 @@ static long continuation_trace(int request,pid_t pid,void *address,void *data) {
     }
     return 0;
 }
+static long rejected_resume_trace(int request,pid_t pid,void *address,void *data) {
+    if (request==PTRACE_SYSCALL) { errno=ESRCH; return -1; }
+    return continuation_trace(request,pid,address,data);
+}
+static void borrowed_close_release_receipt(void) {
+    struct user_pt_regs saved={.pc=0x2004};
+    struct md_task_call_arguments args={.number=SYS_close,.value={3}};
+    for (int reject=0;reject<=1;++reject) {
+        struct md_task_call call={0};
+        continuation_info=(struct ptrace_syscall_info){.op=PTRACE_SYSCALL_INFO_EXIT};
+        continuation_mask=0;
+        assert(!md_task_call_begin(&call,continuation_trace,123,MD_TASK_CALL_EXIT,&saved,0x1000,0x1004,&args));
+        assert(call.effect==MD_EFFECT_UNSTARTED);
+        continuation_info=(struct ptrace_syscall_info){.op=PTRACE_SYSCALL_INFO_ENTRY,
+            .instruction_pointer=0x1004,.entry={.nr=SYS_close,.args={3}}};
+        if (reject) call.trace=rejected_resume_trace;
+        assert(md_task_call_event(&call,((SIGTRAP|0x80)<<8)|0x7f)==(reject ? -ESRCH : 0));
+        assert(md_task_call_event(&call,SIGKILL)==-ESRCH);
+        assert(call.effect==(reject ? MD_EFFECT_UNSTARTED : MD_EFFECT_UNCERTAIN));
+    }
+    puts("PASS borrowed close: actor loss before and after accepted release has distinct custody");
+}
 static long native_receipt_value;
 static unsigned native_receipts;
 static void collect_native_receipt(struct thread *t,long value) {
@@ -8949,6 +8971,7 @@ int main(void) {
     signal_frame_records();
     filesystem_control_metadata();
     borrowed_interrupt();
+    borrowed_close_release_receipt();
     borrowed_continuations();
     native_child_membership();
     retained_retirement_shared_parent();
