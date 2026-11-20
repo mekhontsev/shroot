@@ -102,6 +102,9 @@ endforeach()
 add_test(NAME registry COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_registry.py" "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(registry PROPERTIES LABELS integration TIMEOUT 180)
+add_test(NAME external_folders COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_external_folders.py" "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties(external_folders PROPERTIES LABELS integration TIMEOUT 180)
 foreach(name host_integration local_executor)
     add_test(NAME ${name} COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${name}.py")

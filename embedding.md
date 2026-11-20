@@ -213,6 +213,11 @@ It does not expose host paths or authorize commands by itself. Integrators own
 their authorization and can supply ordinary attachments, environment values
 and lifetime descriptors through this common launch contract.
 
+A `shroot_bind` with kind `SHROOT_BIND_FUSE` or `SHROOT_BIND_FUSE_READONLY`
+attaches a host-provided filesystem at its guest target. Its source names a
+Unix socket owned by the executor UID, not a directory. The provider owns
+authorization and data; see [external FUSE peers](fuse.md) for the wire contract.
+
 The library does not alter its caller's cwd, umask, environment, credentials or
 signal handlers/masks. The application must retain normal child reaping and must
 not reap library-owned children through another `waitpid` owner. Submission

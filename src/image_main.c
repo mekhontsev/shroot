@@ -106,6 +106,7 @@ static int execute(int argc, char **argv) {
         "             [--dns IP] [--subnet CIDR] [--ip IPv4] [--ip6 IPv6] [--gateway IP]\n"
         "             [--bind HOST GUEST] [--bind-ro HOST GUEST] [--bind-ro-create HOST GUEST]\n"
         "             [--bind-store-ro STORE GUEST]\n"
+        "             [--bind-fuse SOCKET GUEST] [--bind-fuse-ro SOCKET GUEST]\n"
         "             [--owner-fd FD] [-- COMMAND...]\n");
     return r;
 }

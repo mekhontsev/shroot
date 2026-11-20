@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "cli_library.h"
+#include "attachment_option.h"
 #include <errno.h>
 #include <limits.h>
 #include <poll.h>
@@ -31,16 +32,19 @@ int cli_launch(shroot_store *store, shroot_library *library, const char *name,
         if (!strcmp(name, "--statistics")) { options.flags |= SHROOT_STATISTICS; continue; }
         if (!strcmp(name, "--diagnostics")) { options.flags |= SHROOT_DIAGNOSTICS; continue; }
         if (!strcmp(name, "--diagnostics=signals")) { options.flags |= SHROOT_SIGNAL_DIAGNOSTICS; continue; }
-        const char *bind_names[] = {"--bind", "--bind-ro", "--bind-create", "--bind-store-ro", "--bind-ro-create"};
+        int bind_kind = md_attachment_kind(name);
+        if (bind_kind >= 0) {
+            if (at + 1 >= argc) { r = -EINVAL; break; }
+            binds[options.bind_count++] = (struct shroot_bind){bind_kind, argv[at], argv[at+1]};
+            at += 2; continue;
+        }
         const char *route_names[] = {"--socket-path", "--socket-abstract", "--socket-resource-path", "--socket-resource-abstract"};
         int multiple = 0;
-        for (int i = 0; i < 5; ++i) {
-            int bind = !strcmp(name, bind_names[i]), route = i < 4 && !strcmp(name, route_names[i]);
-            if (!bind && !route) continue;
+        for (int i = 0; i < 4; ++i) {
+            if (strcmp(name, route_names[i])) continue;
             multiple = 1;
             if (at + 1 >= argc) { r = -EINVAL; break; }
-            if (bind) binds[options.bind_count++] = (struct shroot_bind){i, argv[at], argv[at+1]};
-            else routes[options.route_count++] = (struct shroot_socket_route){i, argv[at], argv[at+1]};
+            routes[options.route_count++] = (struct shroot_socket_route){i, argv[at], argv[at+1]};
             at += 2; break;
         }
         if (multiple) continue;
@@ -156,6 +160,7 @@ static void usage(void) {
         "  login STORE [OPTIONS] [-- SHELL...]\n"
         "  Options: --user USER --cwd PATH --env KEY=VALUE --network MODE --dns IP\n"
         "           --bind HOST GUEST --bind-ro HOST GUEST --bind-ro-create HOST GUEST --statistics\n"
+        "           --bind-fuse SOCKET GUEST --bind-fuse-ro SOCKET GUEST\n"
         "  --version | format | import-version");
 }
 int main(int argc, char **argv) {

@@ -13,6 +13,21 @@ remain authoritative. This adds no persistent store format or APK dependency.
 - [Descriptor Closure](#descriptor-closure)
 - [Verification](#verification)
 
+## External Trees
+
+Launch with `--bind-fuse SOCKET /guest/path` or `--bind-fuse-ro SOCKET /guest/path`.
+The peer is an executor-owned Unix stream listener (a filesystem path or
+`@abstract-name`). The stream carries ordinary FUSE request and reply frames;
+the existing header length delimits each packet. A launch can open more than one
+connection, including one during image preparation. Peers must accept each new
+connection as a fresh FUSE session. Only the endpoint owner with the same host
+UID is accepted. Detached clients and provider failures use normal FUSE errors.
+
+Missing mountpoint directories are created inside the instance's inode store.
+The guest may unmount a tree but cannot clear the imposed read-only, noexec,
+nodev or nosuid flags. The host owns the choice to attach it again at next launch;
+neither socket addresses nor provider contents are part of a backup.
+
 ## Ownership
 
 - `fuse_device` owns the typed character device and daemon IO. Final device

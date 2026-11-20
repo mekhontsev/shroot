@@ -1,4 +1,5 @@
 #include "client_internal.h"
+#include "attachment_option.h"
 #include <errno.h>
 
 static int command(shroot_context *context, const char *name, const char *first,
@@ -127,11 +128,10 @@ static int launch_command(shroot_context *context, const char *library, const ch
     options(&args, "--env", launch->environment);
     options(&args, "--dns", launch->dns);
     options(&args, "-p", launch->ports);
-    const char *binds[] = {"--bind", "--bind-ro", "--bind-create", "--bind-store-ro", "--bind-ro-create"};
     for (size_t i = 0; i < launch->bind_count; ++i) {
         const struct shroot_bind *bind = &launch->binds[i];
-        if (bind->kind < SHROOT_BIND || bind->kind > SHROOT_BIND_READONLY_CREATE) { args.error = -EINVAL; break; }
-        shroot_argument(&args, binds[bind->kind]);
+        if ((unsigned)bind->kind >= MD_ATTACHMENT_KINDS) { args.error = -EINVAL; break; }
+        shroot_argument(&args, md_attachment_options[bind->kind].option);
         shroot_argument(&args, bind->source); shroot_argument(&args, bind->target);
     }
     for (size_t i = 0; i < launch->route_count; ++i) {

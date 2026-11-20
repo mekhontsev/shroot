@@ -36,6 +36,7 @@ struct fuse_name {
     char name[NAME_MAX+1];
 };
 struct fuse_view {
+    struct md_fuse_peer *peer;
     atomic_int no_flush;
     atomic_uint references;
     pthread_mutex_t lock;

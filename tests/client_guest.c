@@ -1,11 +1,13 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <linux/netlink.h>
 #include <linux/capability.h>
@@ -16,6 +18,26 @@
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+    if (argc==2 && !strcmp(argv[1],"external-folders")) {
+        const char *rw="/mnt/android/Work",*ro="/mnt/android/Read only";
+        int wd=open(rw,O_RDONLY|O_DIRECTORY),rd=open(ro,O_RDONLY|O_DIRECTORY);
+        if (wd<0 || rd<0) { perror("open mount roots"); return 1; }
+        DIR *names=fdopendir(dup(rd));
+        if (!names) { perror("read directory"); return 1; }
+        int found=0;
+        struct dirent *entry;
+        while ((entry=readdir(names))) found+=!strcmp(entry->d_name,"token");
+        if (closedir(names) || found!=1) { fprintf(stderr,"expected token once, found %d\n",found); return 1; }
+        int a=openat(wd,"token",O_RDWR),b=openat(rd,"token",O_RDONLY);
+        char data[9];
+        if (a<0 || b<0 || pread(b,data,9,0)!=9 || memcmp(data,"read-only",9)
+                || pwrite(a,"updated",7,0)!=7) { perror("folder IO"); return 1; }
+        if (openat(rd,"token",O_RDWR)>=0 || errno!=EROFS) { perror("read-only open"); return 1; }
+        if (!mount(NULL,ro,NULL,MS_REMOUNT|MS_BIND|MS_NOSUID|MS_NODEV|MS_NOEXEC,NULL)) return 1;
+        if (close(a) || close(b) || close(rd) || close(wd) || umount(ro)) { perror("unmount"); return 1; }
+        if (!access("/mnt/android/Read only/token",F_OK) || errno!=ENOENT || access("/mnt/android/Work/token",F_OK)) return 1;
+        puts("PASS external FUSE: independent mounts, data, locked ro and ordinary umount"); return 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "reserve-large-range")) {
         size_t length = ((size_t)256 << 30) + sysconf(_SC_PAGESIZE);
         void *area = mmap(NULL, length, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

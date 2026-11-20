@@ -6,6 +6,7 @@
 #include "mount_topology.h"
 #include "fs_storage.h"
 #include "mount_source.h"
+#include "fuse_view.h"
 #include "procfs_view.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -436,6 +437,37 @@ int md_fs_mount_contents(struct md_filesystem *fs,const char *path,const void *b
     md_view_location_close(&target);
     return error;
 }
+/* External providers may need a whole mountpoint (e.g. /mnt/android/Work).
+ * Create only below verified inode-store directories, never through a bind,
+ * a symlink, a provider or a reserved kernel filesystem. */
+static int external_target(struct md_filesystem *fs,const char *target,struct md_view_location *out) {
+    if (beneath(target,"/dev") || beneath(target,"/proc") || beneath(target,"/sys")) return -EINVAL;
+    size_t size=strlen(target);
+    if (size<2 || size>=PATH_MAX) return size>=PATH_MAX ? -ENAMETOOLONG : -EINVAL;
+    char path[PATH_MAX]; memcpy(path,target,size+1);
+    struct md_view_location parent;
+    int error=md_view_walk(fs,MD_INODE_ROOT,NULL,"/",1,0,0,&parent);
+    if (error) return error;
+    for (char *name=path+1;;) {
+        char *end=strchr(name,'/'); if (end) *end=0;
+        if (!*name || !strcmp(name,".") || !strcmp(name,"..")) { error=-EINVAL; break; }
+        struct md_view_location child;
+        error=md_view_walk(fs,parent.fd,NULL,name,0,0,0,&child);
+        if (error==-ENOENT) {
+            error=md_inode_mkdir(fs->store,parent.fd,name,0755);
+            if (!error || error==-EEXIST) error=md_view_walk(fs,parent.fd,NULL,name,0,0,0,&child);
+        }
+        if (error) break;
+        md_view_location_close(&parent); parent=child;
+        struct stat st;
+        if (!md_view_base(fs->mounts,parent.mount)) { error=-EXDEV; break; }
+        if (fstat(parent.fd,&st)) { error=-errno; break; }
+        if (!S_ISDIR(st.st_mode)) { error=-ENOTDIR; break; }
+        if (!end) { *out=parent; return 0; }
+        *end='/'; name=end+1;
+    }
+    md_view_location_close(&parent); return error;
+}
 int md_fs_mounts_open(struct md_filesystem *fs, const struct md_fs_attachment *entries, unsigned count) {
     if (fs->mounts || count > MD_FS_MOUNTS_MAX) return -EINVAL;
     fs->mounts = md_mount_namespace_new();
@@ -457,13 +489,22 @@ int md_fs_mounts_open(struct md_filesystem *fs, const struct md_fs_attachment *e
         struct md_view_mount *m = &tree->mounts[tree->count];
         m->generation=1;
         m->source = m->target = -1;
-        if (entry->flags & ~(MD_FS_ATTACHMENT_READONLY|MD_FS_ATTACHMENT_CREATE|MD_FS_ATTACHMENT_STORE)) { r=-EINVAL; break; }
-        if ((entry->flags&MD_FS_ATTACHMENT_STORE) && !(entry->flags&MD_FS_ATTACHMENT_READONLY)) { r=-EINVAL; break; }
+        if (!md_attachment_option(entry->flags)) { r=-EINVAL; break; }
         r = md_mount_policy_set(&m->policy,entry->flags & MD_FS_ATTACHMENT_READONLY ? MD_MOUNT_READONLY : 0);
         if (!r) r = md_mount_id_allocate(&m->id);
         if (r) break;
-        if (!entry->source || !entry->target || entry->source[0] != '/' || entry->target[0] != '/') { r = -EINVAL; break; }
-        if(entry->flags&MD_FS_ATTACHMENT_STORE) {
+        int external=!!(entry->flags&MD_FS_ATTACHMENT_FUSE);
+        if (!entry->source || !entry->target || (entry->source[0]!='/' && !(external && entry->source[0]=='@'))
+                || entry->target[0]!='/') { r=-EINVAL; break; }
+        if (external) {
+            struct md_mount_source source={.fd=-1};
+            r=md_fuse_external_source(fs,entry->source,&source);
+            if (r) break;
+            m->source=source.fd; m->provider=source.provider; m->backing=source.backing;
+            r=md_mount_policy_set(&m->policy,md_mount_policy_flags(&m->policy)|source.policy);
+            if (!r) r=md_mount_policy_lock(&m->policy);
+            if (r) break;
+        } else if(entry->flags&MD_FS_ATTACHMENT_STORE) {
             struct md_inode_store *store=NULL;
             r=md_inode_store_open(entry->source,0,&store);
             if(!r) {
@@ -481,8 +522,9 @@ int md_fs_mounts_open(struct md_filesystem *fs, const struct md_fs_attachment *e
             if (m->source < 0) { r = -errno; break; }
         }
         struct md_view_location target_location;
-        r = md_view_walk(fs, MD_INODE_ROOT, NULL, entry->target, 1, 0, 0, &target_location);
-        if (r == -ENOENT && (entry->flags & MD_FS_ATTACHMENT_CREATE)) {
+        r = external ? external_target(fs,entry->target,&target_location)
+            : md_view_walk(fs, MD_INODE_ROOT, NULL, entry->target, 1, 0, 0, &target_location);
+        if (!external && r == -ENOENT && (entry->flags & MD_FS_ATTACHMENT_CREATE)) {
             struct md_fs_request request = {.operation=MD_FS_MKDIR,.directory={MD_INODE_ROOT,-1},
                 .path={entry->target,NULL},.mode=0755};
             struct md_fs_result result;
@@ -519,6 +561,7 @@ int md_fs_mounts_open(struct md_filesystem *fs, const struct md_fs_attachment *e
         if (pending->source >= 0) close(pending->source);
         if (pending->target >= 0) close(pending->target);
         md_inode_lifetime_release(pending->storage); pending->storage=NULL;
+        md_provider_tree_release(pending->provider); pending->provider=NULL;
     }
     for (unsigned i=0;i<count;++i) { free(paths[i].source); free(paths[i].target); }
     free(paths);

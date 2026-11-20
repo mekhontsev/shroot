@@ -11,6 +11,7 @@ struct md_fs_output;
 struct md_inode_store;
 int md_fuse_view_watch(struct md_provider_tree *,struct md_inode_store *,int instance,int object,unsigned flags);
 int md_fuse_view_source(struct md_filesystem *,const struct md_fs_request *,struct md_mount_source *);
+int md_fuse_external_source(struct md_filesystem *,const char *,struct md_mount_source *);
 int md_fuse_view_matches(struct md_provider_tree *);
 dev_t md_fuse_view_device(struct md_provider_tree *);
 int md_fuse_view_options(struct md_provider_tree *,const struct md_identity *,char *,size_t);

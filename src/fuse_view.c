@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "fuse_view_internal.h"
+#include "fuse_peer.h"
 #include "fuse_device.h"
 #include "fuse_xattr.h"
 #include "fuse_image.h"
@@ -60,6 +61,7 @@ void *md_fuse_view_retain(void *context) {
 void md_fuse_view_release(void *context) {
     struct fuse_view *v=context;
     if (atomic_fetch_sub_explicit(&v->references,1,memory_order_acq_rel)!=1) return;
+    md_fuse_peer_close(v->peer);
     if (v->notifications) {
         md_fuse_connection_notifications(v->notifications,NULL,NULL);
         md_fuse_connection_release(v->notifications);
@@ -546,13 +548,9 @@ static int view_lookup(void *context,int directory,const char *name,const struct
 static const struct md_provider_tree_ops view_ops={.retain=md_fuse_view_retain,.release=md_fuse_view_release,
     .lookup=view_lookup,.path=view_path,.readonly_node=view_readonly,.filesystem=FUSE_SUPER_MAGIC};
 
-int md_fuse_view_source(struct md_filesystem *fs,const struct md_fs_request *q,struct md_mount_source *out) {
-    if (q->flags&~MD_FS_MOUNT_FLAGS) return -EOPNOTSUPP;
-    struct md_fuse_connection *connection=md_fuse_device_connection(q->control);
-    if (!connection) return -EINVAL;
-    struct md_fuse_mount mount;
-    int error=md_fuse_mount_parse(q->value,q->value_size,&mount);
-    if (error) return error;
+static int view_source(struct md_filesystem *fs,struct md_fuse_mount mount,struct md_fuse_connection *connection,
+        const char *peer,pid_t actor,unsigned policy,struct md_mount_source *out) {
+    int error;
     struct md_fuse_options options=mount.options;
     struct fuse_view *v=calloc(1,sizeof(*v)); if (!v) return -ENOMEM;
     error=pthread_mutex_init(&v->lock,NULL); if (error) { free(v); return -error; }
@@ -565,7 +563,9 @@ int md_fuse_view_source(struct md_filesystem *fs,const struct md_fs_request *q,s
     error=md_mount_id_allocate(&device);
     if (error) { md_fuse_view_release(v); return error; }
     v->device=makedev(0xfffbU,device);
-    v->user_namespace=md_user_namespace_retain(fs->store->identity->user_namespace);
+    const struct md_identity root_identity={0};
+    const struct md_identity *identity=fs->store->identity ? fs->store->identity : &root_identity;
+    v->user_namespace=md_user_namespace_retain(identity->user_namespace);
     v->pid_namespace=md_pid_namespace_retain(fs->actor ? md_pid_identity_namespace(fs->actor->pid) : NULL);
     int parent=md_fs_private_mounts_parent(fs->store);
     struct md_provider_tree *tree=NULL;
@@ -590,15 +590,34 @@ int md_fuse_view_source(struct md_filesystem *fs,const struct md_fs_request *q,s
     }
     int fd=!error ? openat(v->root,".",O_PATH|O_DIRECTORY|O_CLOEXEC) : -1;
     if (!error && fd<0) error=-errno;
-    if (!error) error=md_fuse_session_new(connection,&options,fs->store->identity,
-        md_fuse_view_pid(v,q->actor),fs->wakeup,&v->session);
+    if (!error && peer) error=md_fuse_peer_start(peer,connection,&v->peer);
+    if (!error) error=md_fuse_session_new(connection,&options,identity,
+        md_fuse_view_pid(v,actor),fs->wakeup,&v->session);
     if (!error) {
         v->notifications=md_fuse_connection_retain(connection);
         md_fuse_connection_notifications(connection,view_notification,v);
         *out=(struct md_mount_source){.fd=fd,.backing=MD_MOUNT_PROVIDER,.provider=tree,
-            .policy=md_fs_mount_flags(q->flags)|MD_MOUNT_NOSUID|MD_MOUNT_NODEV};
+            .policy=policy|MD_MOUNT_NOSUID|MD_MOUNT_NODEV};
     } else { if (fd>=0) close(fd); md_provider_tree_release(tree); }
     md_fuse_view_release(v); return error;
+}
+
+int md_fuse_view_source(struct md_filesystem *fs,const struct md_fs_request *q,struct md_mount_source *out) {
+    if (q->flags&~MD_FS_MOUNT_FLAGS) return -EOPNOTSUPP;
+    struct md_fuse_connection *connection=md_fuse_device_connection(q->control);
+    if (!connection) return -EINVAL;
+    struct md_fuse_mount mount;
+    int error=md_fuse_mount_parse(q->value,q->value_size,&mount);
+    return error ? error : view_source(fs,mount,connection,NULL,q->actor,md_fs_mount_flags(q->flags),out);
+}
+
+int md_fuse_external_source(struct md_filesystem *fs,const char *endpoint,struct md_mount_source *out) {
+    struct md_fuse_connection *connection=NULL;
+    int error=md_fuse_connection_new(&connection);
+    struct md_fuse_mount mount={.type="fuse.external",.source="external",
+        .options={.descriptor=-1,.rootmode=S_IFDIR|0755,.allow_other=1,.max_read=MD_FUSE_IO_SIZE}};
+    if (!error) error=view_source(fs,mount,connection,endpoint,0,MD_MOUNT_NOEXEC,out);
+    md_fuse_connection_release(connection); return error;
 }
 
 struct view_operation {

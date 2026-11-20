@@ -6,7 +6,7 @@
 /* Namespace resource bound, shared by placement, copies and graph transport.
  * Slots have stable addresses; detached slots recycle only after their leases end. */
 #define MD_FS_MOUNTS_MAX 4096
-enum { MD_FS_ATTACHMENT_READONLY=1, MD_FS_ATTACHMENT_CREATE=2, MD_FS_ATTACHMENT_STORE=4 };
+#include "attachment_option.h"
 struct md_fs_attachment { const char *source, *target; unsigned flags; };
 /* Explicit native directories or read-only inode stores, scoped to one launch. No mount syscall, identity
  * change, source creation or persisted configuration is performed here.
