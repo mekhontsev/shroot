@@ -48,11 +48,11 @@ long md_epoll_call(long nr,const unsigned long *a) {
     if (result>=MD_FD_CAPTURE_SEND && result<=MD_FD_CAPTURE_CHECK) {
         int fd=(int)a[nr==SYS_epoll_ctl ? 2 : 0];
         const struct md_descriptor_capture_protocol p={MD_FS_BUFFER_EPOLL_ADMIT,MD_BUFFER_EPOLL_CAPTURE_READY,
-            MD_BUFFER_EPOLL_CAPTURE_SENT,MD_BUFFER_EPOLL_CAPTURE_OBSERVED,MD_EPOLL_CAPTURED,
+            MD_BUFFER_EPOLL_CAPTURE_SENT,MD_BUFFER_EPOLL_CAPTURE_OBSERVED,nr==SYS_epoll_ctl ? MD_EPOLL_DONE : MD_EPOLL_LOAN,
             f->admission.number ? &f->admission : NULL};
         result=md_descriptor_capture_inputs(result,&f->capture,&fd,1,&p);
     }
-    while (result==MD_EPOLL_CAPTURED || result==MD_EPOLL_LOAN || result==MD_EPOLL_PARK || result==MD_EPOLL_COPY) {
+    while (result==MD_EPOLL_LOAN || result==MD_EPOLL_PARK || result==MD_EPOLL_COPY) {
         if (result==MD_EPOLL_LOAN) {
             result=f->admission.number ? md_guest_buffer_replay(&f->admission)
                 : md_guest_buffer_admit(MD_FS_BUFFER_EPOLL_LOAN);

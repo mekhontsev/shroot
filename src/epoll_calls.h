@@ -6,7 +6,7 @@
 #include <time.h>
 #include <poll.h>
 
-enum { MD_EPOLL_EVENTS=256, MD_EPOLL_NATIVE=0x50000001, MD_EPOLL_CAPTURED=0x50000002,
+enum { MD_EPOLL_EVENTS=256, MD_EPOLL_NATIVE=0x50000001,
     MD_EPOLL_LOAN=0x50000003, MD_EPOLL_PARK=0x50000004,
     MD_EPOLL_COPY=0x50000005, MD_EPOLL_DONE=0x50000006 };
 struct md_epoll_park { struct pollfd queues[2]; struct timespec timeout; uint64_t mask; };

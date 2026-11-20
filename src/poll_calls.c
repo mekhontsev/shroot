@@ -93,7 +93,6 @@ long md_poll_call(long nr,const unsigned long *a,unsigned long prepared) {
         result=input(f,a);
         if (!result) result=md_guest_buffer_control(MD_BUFFER_POLL_LOAD,0,0);
     }
-    if (result==MD_EPOLL_CAPTURED) result=md_guest_buffer_control(MD_BUFFER_EPOLL_WAIT,0,0);
     if (result>=0 && result!=MD_EPOLL_NATIVE) {
         long selected=0;
         for (unsigned offset=0;offset<count;offset+=MD_POLL_CHUNK) {

@@ -192,6 +192,28 @@ static int readiness_frame(struct thread *t,struct md_buffer_span *span) {
     return 0;
 }
 
+static void readiness_copy_frame(const struct thread *t,struct md_epoll_frame *to,const struct md_epoll_frame *from) {
+    /* Only epoll waits detach. The original maxevents bounds both result
+     * vectors throughout the wait, independent of the shared frame header. */
+    int count=(int)t->execution.request.args[2];
+    if (count<=0 || count>=MD_EPOLL_EVENTS) { memcpy(to,from,sizeof(*to)); return; }
+    size_t bytes=(size_t)count*sizeof(*to->events);
+    memcpy(to,from,offsetof(struct md_epoll_frame,events)+bytes);
+    to->capacity=count;
+    memcpy(to->task_events,from->task_events,bytes);
+    to->park=from->park;
+}
+
+static int readiness_detach(struct thread *t,const struct md_epoll_frame *frame) {
+    struct readiness_owner *o=t->readiness;
+    CHECK(!o->detached && !o->poll && !o->operation);
+    o->detached=malloc(sizeof(*frame));
+    if (!o->detached) return -ENOMEM;
+    readiness_copy_frame(t,o->detached,frame);
+    CHECK(!buffer_release(t));
+    return 0;
+}
+
 static int readiness_restore(struct thread *t,int continuation,long result) {
     struct readiness_owner *o=t->readiness;
     if (!o->detached) return 1;
@@ -203,7 +225,7 @@ static int readiness_restore(struct thread *t,int continuation,long result) {
     if (error) { readiness_reply(t,error); return 0; }
     struct md_buffer_span span;
     CHECK(!md_buffer_span(&t->fs.buffer,&span));
-    memcpy(span.data,o->detached,sizeof(*o->detached));
+    readiness_copy_frame(t,span.data,o->detached);
     free(o->detached); o->detached=NULL; o->restoring=READINESS_ATTACHED;
     return 1;
 }
@@ -614,7 +636,9 @@ static void readiness_capture(struct thread *t,unsigned command,long value) {
     CHECK(!md_fd_order_complete(&o->files));
     if (o->operation) { readiness_start(t); return; }
     o->native_caller=1;
-    buffer_reply(t,MD_EPOLL_CAPTURED);
+    /* The capture receipt already pins the queue. Reply with the loan the
+     * caller must accept, not an acknowledgement it has to send back. */
+    readiness_progress(t);
 }
 
 static void readiness_mask_saved(struct thread *t,long result) {
@@ -768,14 +792,9 @@ static void readiness_park(struct thread *t,uintptr_t address) {
     struct readiness_owner *o=t->readiness;
     struct md_buffer_span span;
     int error=md_buffer_span(&t->fs.buffer,&span);
-    if (!error) {
-        o->detached=malloc(sizeof(*o->detached));
-        if (!o->detached) error=-ENOMEM;
-    }
+    if (!error) error=readiness_detach(t,span.data);
     o->park_pending=0;
     if (error) { readiness_reply(t,error); return; }
-    memcpy(o->detached,span.data,sizeof(*o->detached));
-    CHECK(!buffer_release(t));
     if (o->native_call.number==SYS_ppoll) {
         o->native_call.value[0]=address+offsetof(struct md_epoll_park,queues);
         if (o->native_call.value[2]) o->native_call.value[2]=address+offsetof(struct md_epoll_park,timeout);
@@ -866,10 +885,8 @@ static void readiness_task_progress(struct thread *t,int completed,long value) {
             /* A native wait writes directly to the application's output and
              * uses no transport pointers. Sleeping with a shared pool slot
              * would exhaust it across forked clients and block their wakeups. */
-            o->detached=malloc(sizeof(*frame));
-            if (!o->detached) { readiness_reply(t,-ENOMEM); return; }
-            memcpy(o->detached,frame,sizeof(*frame));
-            CHECK(!buffer_release(t));
+            int error=readiness_detach(t,frame);
+            if (error) { readiness_reply(t,error); return; }
         }
     }
     if (!o->poll && task_descriptor>=0 && md_epoll_wait_collecting(&o->wait)) readiness_delivery_start(t);

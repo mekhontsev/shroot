@@ -560,8 +560,10 @@ work remains: exclusive-table admission, local duplication and poll/select
 classification do not exchange a separate ready acknowledgement. Epoll replies
 encode final counts separately from capture/control states. The initial and
 resumed replies both return the current buffer address, including after a
-blocking wait released its transport slot. Descriptor exports still retain
-their explicit capture handshake.
+blocking wait released its transport slot. The final descriptor export receipt
+continues directly to the next operation: a queue wait requests its loan and
+an exclusive target registration returns its control result. Neither needs a
+guest acknowledgement of the capture itself.
 
 Blocking native effects and event-parked controls publish their park intent
 before releasing the caller. They do not consume the supervisor's idle-spin

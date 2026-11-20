@@ -537,13 +537,17 @@ static void cold_admission(int protected,int infinite) {
         sigemptyset(&blocked); sigaddset(&blocked,SIGUSR2);
         assert(!sigprocmask(SIG_BLOCK,&blocked,&saved));
         byte_write(ready[1]);
-        struct epoll_event event={0};
-        int count=infinite==2 ? syscall(SYS_epoll_pwait2,alias,&event,1,NULL,NULL,8)
-            : epoll_pwait(alias,&event,1,infinite ? -1 : 2000,infinite ? NULL : &saved);
+        static const int sizes[]={16,256,257};
+        int capacity=protected ? sizes[infinite] : 1;
+        struct epoll_event events[258],guard={.events=EPOLLOUT,.data.u64=UINT64_MAX};
+        for (unsigned i=0;i<258;++i) events[i]=guard;
+        int count=infinite==2 ? syscall(SYS_epoll_pwait2,alias,events,capacity,NULL,NULL,8)
+            : epoll_pwait(alias,events,capacity,infinite ? -1 : 2000,infinite ? NULL : &saved);
         if (count!=1) fprintf(stderr,"cold admission: count=%d errno=%d protected=%d\n",count,errno,protected);
-        assert(count==1 && event.data.u64==85 && (event.events&EPOLLERR));
+        assert(count==1 && events[0].data.u64==85 && (events[0].events&EPOLLERR));
+        for (unsigned i=1;i<258;++i) assert(events[i].events==guard.events && events[i].data.u64==guard.data.u64);
         assert(!sigprocmask(SIG_SETMASK,NULL,&after) && sigismember(&after,SIGUSR2));
-        assert(!epoll_wait(alias,&event,1,0));
+        assert(!epoll_wait(alias,events,capacity,0));
         _exit(0);
     }
     byte_read(ready[0]);
