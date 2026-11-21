@@ -45,8 +45,24 @@ capabilities; it does not change SELinux or silently elevate privileges.
 See [host requirements](architecture.md#execution-policy) and
 [kernel compatibility](kernel-compatibility.md).
 
-With a [built and installed bundle](#build), install an ARM64 environment from
-an OCI registry and open its shell:
+**Termux (aarch64):** starting with v1.0.0, stable [GitHub Releases](https://github.com/mekhontsev/shroot/releases)
+provide a native package for the standard Termux prefix. To install or upgrade,
+choose a published tag and run in Termux:
+
+```sh
+tag=v1.0.0
+url="https://github.com/mekhontsev/shroot/releases/download/$tag"
+pkg=shroot-termux-aarch64.deb
+curl -fLO "$url/$pkg" && curl -fLO "$url/$pkg.sha256" &&
+  sha256sum -c "$pkg.sha256" && apt install "./$pkg"
+```
+
+No root, extra APK or APT repository is needed. APT installs the runtime;
+your environments stay in `$PREFIX/var/lib/shroot` across package upgrades.
+Use a newer release tag to update. For a source checkout, see [Build](#build).
+
+Once Shroot is installed, create an ARM64 environment from an OCI registry
+and open its shell:
 
 ```sh
 shroot install debian:stable --name debian

@@ -101,7 +101,7 @@ The [native workflow](.github/workflows/ci.yml) covers:
 | Client, GCC and Clang | No runtime downloads; C API tests and an independent installed CMake consumer |
 | ARM64 Linux, Clang | Bundled static dependencies, native component/integration tests, separate production build and execution |
 | ARM64 Linux, GCC | The same tests with system SQLite and dynamically linked execution helpers |
-| Android cross build, Linux | Pinned NDK, source path with spaces, stripped production bundle and archive/ELF audit |
+| Android cross builds, Linux | Pinned NDK, production Android archive and Termux package; checksum, layout and ELF audits |
 
 Native Linux tests run as the runner's unprivileged identity and record its
 kernel, UID, capabilities and page size. Android cross builds do not execute
@@ -109,8 +109,9 @@ Android tests on the CI host. A successful build is not evidence for an untested
 device, kernel or page size.
 
 The workflow retains test logs and versioned production archives with SHA-256
-checksums and source commit/run identifiers. It does not publish a release or
-change versions automatically. ARM64 Linux execution in CI and physical device
+checksums and source commit/run identifiers. Branch builds do not publish releases.
+A stable `vX.Y.Z` tag matching `VERSION` on the history of `main` publishes the
+three checked bundles and their checksums from that same run. ARM64 Linux execution in CI and physical device
 qualification are separate evidence from local Android runs.
 
 ### SQLite Provider

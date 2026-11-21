@@ -41,6 +41,12 @@ it; `tests/test_bundle.py BUILD --prefix INSTALLATION` tests a relocated install
 on the target. A production acceptance run uses a separate
 `SHROOT_BUILD_TESTS=OFF` installation.
 
+In Termux, `python tests/test_termux_upgrade.py OLD.deb NEW.deb ALPINE_ROOTFS.tar.gz`
+installs both packages with APT in a temporary installation root. It runs Alpine
+before and after the upgrade and checks its catalog identity and a guest file.
+The two package versions must sort in ascending Debian version order. The
+host package database and the user's environment library are not used.
+
 ### Qualified Hosts
 
 The host coverage below spans component, management, runtime, transport and

@@ -3,6 +3,7 @@ name: Native CI
 on:
   push:
     branches: [main, develop]
+    tags: ['v*']
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
@@ -101,7 +102,9 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: shroot-linux-arm64-${{ github.sha }}
-          path: artifacts/
+          path: |
+            artifacts/*.tar.gz*
+            artifacts/BUILD.txt
           if-no-files-found: error
           retention-days: 14
       - name: Upload native test evidence
@@ -118,8 +121,14 @@ jobs:
   android-build:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [android, termux]
     env:
       NDK_VERSION: 27.3.13750724
+      TARGET: ${{ matrix.target }}
+      TERMUX_PREFIX: /data/data/com.termux/files/usr
     defaults:
       run:
         shell: bash
@@ -135,30 +144,71 @@ jobs:
           test -x "$readelf"
           printf 'SHROOT_NDK=%s\nSHROOT_READELF=%s\n' "$ndk" "$readelf" >> "$GITHUB_ENV"
       - name: Configure production Android bundle
-        run: >-
-          cmake -S . -B build/android -G Ninja -DCMAKE_BUILD_TYPE=Release
-          "-DCMAKE_TOOLCHAIN_FILE=$SHROOT_NDK/build/cmake/android.toolchain.cmake"
-          -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-34 -DSHROOT_BUILD_TESTS=OFF
+        run: |
+          profile=()
+          if [[ $TARGET == termux ]]; then profile=(-C packaging/termux.cmake); fi
+          cmake -S . -B build/android -G Ninja "${profile[@]}" -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_TOOLCHAIN_FILE=$SHROOT_NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-34 -DSHROOT_BUILD_TESTS=OFF
       - run: cmake --build build/android --parallel 4
       - run: cpack --config build/android/CPackConfig.cmake -B artifacts
       - name: Audit archive without executing Android code
         run: |
-          archives=(artifacts/*.tar.gz)
+          shopt -s nullglob
+          options=()
+          if [[ $TARGET == termux ]]; then
+            archives=(artifacts/shroot-termux-aarch64.deb)
+            options=(--termux-prefix "$TERMUX_PREFIX")
+          else
+            archives=(artifacts/*.tar.gz)
+          fi
           test "${#archives[@]}" -eq 1
-          python3 tests/audit_bundle.py "${archives[0]}" --readelf "$SHROOT_READELF" \
+          python3 tests/audit_bundle.py "${archives[0]}" "${options[@]}" --readelf "$SHROOT_READELF" \
             --system Android --version "$(cat VERSION)" --production
           printf 'commit=%s\nrun=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > artifacts/BUILD.txt
       - name: Upload Android bundle
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: shroot-android-arm64-${{ github.sha }}
-          path: source tree/artifacts/
+          name: shroot-${{ matrix.target }}-arm64-${{ github.sha }}
+          path: |
+            source tree/artifacts/*.tar.gz*
+            source tree/artifacts/*.deb*
+            source tree/artifacts/BUILD.txt
           if-no-files-found: error
           retention-days: 14
       - name: Upload configure evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: configure-android-${{ github.sha }}
+          name: configure-${{ matrix.target }}-${{ github.sha }}
           path: source tree/build/android/CMakeFiles/CMakeConfigureLog.yaml
           retention-days: 14
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [client, linux-runtime, android-build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - name: Publish the tested release bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(cat VERSION)
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $GITHUB_REF_NAME == "v$version" ]]
+          git merge-base --is-ancestor HEAD origin/main
+          assets=()
+          for target in android linux termux; do
+            dir="artifacts/$target"
+            gh run download "$GITHUB_RUN_ID" -n "shroot-$target-arm64-$GITHUB_SHA" -D "$dir"
+            (cd "$dir" && sha256sum --check --strict *.sha256)
+            sums=("$dir"/*.sha256)
+            test "${#sums[@]}" -eq 1
+            assets+=("${sums[0]%.sha256}" "${sums[0]}")
+          done
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes "${assets[@]}"
