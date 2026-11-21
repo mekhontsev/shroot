@@ -17,8 +17,8 @@
  * certifies absence; a set bit never establishes that an FD is tracked. */
 enum { MD_FD_EXACT_SLOTS=32, MD_FD_WIDE_GROUPS=26 };
 static inline unsigned md_fd_group(unsigned fd) {
-    return fd<MD_FD_EXACT_SLOTS ? fd
-        : MD_FD_EXACT_SLOTS+__builtin_clz((unsigned)MD_FD_EXACT_SLOTS)-__builtin_clz(fd);
+    if (fd<MD_FD_EXACT_SLOTS) return fd;
+    return MD_FD_EXACT_SLOTS+__builtin_clz((unsigned)MD_FD_EXACT_SLOTS)-__builtin_clz(fd);
 }
 struct md_fd_absence {
     uint64_t occupied,checkable;
