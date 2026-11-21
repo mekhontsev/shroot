@@ -19,6 +19,7 @@
 #include <sys/wait.h>
 #include <asm/ptrace.h>
 #include <unistd.h>
+#include "trace_stop_diagnostic.h"
 
 static siginfo_t original(int signal) {
     siginfo_t info={.si_signo=signal,.si_code=SI_TKILL};
@@ -114,6 +115,7 @@ static void realtime_order(int retain_again,int number) {
     assert(!ptrace(PTRACE_CONT,pid,NULL,NULL));
     unsigned stops=0;
     while (waitpid(pid,&status,0)==pid && WIFSTOPPED(status)) {
+        if (WSTOPSIG(status)!=number) report_unexpected_stop(pid,status);
         assert(WSTOPSIG(status)==number && ++stops<=4);
         int deliver=number;
         int expected=q.realtime ? MD_SIGNAL_RESTORED : MD_SIGNAL_NEW;

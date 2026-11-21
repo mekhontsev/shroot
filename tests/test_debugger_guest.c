@@ -37,6 +37,7 @@
 #include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
+#include "trace_stop_diagnostic.h"
 
 volatile int magic_value = 42;
 static volatile sig_atomic_t suspend_handled;
@@ -120,6 +121,7 @@ static void syscall_suspend_test(void) {
                 siginfo_t info; assert(!ptrace(PTRACE_GETSIGINFO,child,0,&info));
                 assert(continuation==1 && ++injected==1 && info.si_code==SI_KERNEL && !info.si_pid);
             } else {
+                if (signal!=number || suspend_exits!=1 || delivered) report_unexpected_stop(child,status);
                 assert(signal==number && suspend_exits==1 && !delivered);
                 siginfo_t info; assert(!ptrace(PTRACE_GETSIGINFO,child,0,&info));
                 assert(info.si_code==SI_QUEUE && info.si_value.sival_int==71);
@@ -1158,6 +1160,7 @@ static void syscall_exec_test(void) {
             unsigned long former; assert(!ptrace(PTRACE_GETEVENTMSG,child,0,&former));
             assert(former==(unsigned long)child); ++execs; continue;
         }
+        if (WSTOPSIG(status)!=(SIGTRAP|0x80)) report_unexpected_stop(child,status);
         assert(WSTOPSIG(status)==(SIGTRAP|0x80));
         struct ptrace_syscall_info info={0};
         assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
@@ -1223,6 +1226,7 @@ static void syscall_signal_test(const char *group) {
             if (active) fprintf(stderr,"signal before syscall exit nr=%llu\n",(unsigned long long)nr);
             assert(!active); deliver=SIGUSR1; ++signals; continue;
         }
+        if (WSTOPSIG(status)!=(SIGTRAP|0x80)) report_unexpected_stop(child,status);
         assert(WSTOPSIG(status)==(SIGTRAP|0x80));
         struct ptrace_syscall_info info={0};
         assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);

@@ -54,7 +54,7 @@ static void foreign_fdinfo(int bound) {
         assert(dup2(original,bound)==bound && write(done[1],&byte,1)==1);
         if (read(command[0],&byte,1)!=1) _exit(1);
         assert(!close(bound) && write(done[1],&byte,1)==1);
-        (void)read(command[0],&byte,1); _exit(0);
+        _exit(read(command[0],&byte,1)==0 ? 0 : 1);
     }
     close(command[0]); close(done[1]);
     char path[96]; snprintf(path,sizeof(path),"/proc/%d/fdinfo/%d",child,bound);
