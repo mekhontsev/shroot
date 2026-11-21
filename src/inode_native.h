@@ -22,7 +22,7 @@ int mdi_native_create_in(int objects,const char *parent,const char *name,int fla
 /* Unpublished ordinary regular file, without a data-open effect. Returns an
  * owned O_PATH pin; EOPNOTSUPP leaves no name and permits prepare/open fallback. */
 int mdi_native_pin_create(int directory,const char *name,uint32_t uid,uint32_t gid,mode_t mode);
-int mdi_native_pin_create_in(int directory,const char *parent,const char *name,uint32_t uid,uint32_t gid,mode_t mode);
+int mdi_native_mknod_in(int directory,const char *parent,const char *name,uint32_t uid,uint32_t gid,mode_t mode);
 /* Prepare exceptional metadata under a private, unpublished staging name.
  * The caller publishes by rename only after this succeeds. Persistent storage
  * requires ordered disk publication; temporary stores retain live ordering
@@ -31,10 +31,10 @@ int mdi_native_prepare(int objects,const char *name,int flags,
         uint32_t uid,uint32_t gid,mode_t mode,bool persistent);
 /* Borrow a validated leaf FD, including O_PATH and unlinked descriptions. */
 int mdi_native_stat(int fd, struct stat *);
-int mdi_native_info(int fd, struct stat *, unsigned *acl);
 /* Fresh fstat observation of the same retained FD, under the store owner.
  * Reads mutable metadata without a second fstat or pathname resolution. */
 int mdi_native_project(int fd, struct stat *, unsigned *acl);
+int mdi_native_project_named(int objects,const char *backing,struct stat *,unsigned *acl);
 int mdi_native_metadata(int fd, uint32_t uid, uint32_t gid, mode_t mode,bool persistent);
 int mdi_native_chown(int fd, uint32_t uid, uint32_t gid, mode_t mode,bool persistent);
 ssize_t mdi_native_attribute(int fd, int capability, void *, size_t);

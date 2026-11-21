@@ -33,13 +33,20 @@ int md_fd_filesystem(int fd, struct statfs *out) {
     int probe=eventfd(0,EFD_CLOEXEC);
     if (probe<0) return error;
     int result=fstat(probe,&anonymous);
+    if (!result && st.st_dev==anonymous.st_dev) {
+        /* This is the same anon_inodefs mount. Older simple_statfs leaves
+         * f_fsid zero; backports can publish an ID. Copy the real ABI. */
+        snprintf(path,sizeof(path),"/proc/self/fd/%d",probe);
+        result=syscall(SYS_statfs,path,out);
+        close(probe);
+        return !result && out->f_type==ANON_INODE_FS_MAGIC ? 0 : error;
+    }
     close(probe);
     if (result) return error;
-    unsigned long type=st.st_dev==anonymous.st_dev ? ANON_INODE_FS_MAGIC : PID_FS_MAGIC;
-    /* Both providers use simple_statfs. The hidden kernel mount has no user
+    /* A distinct pidfs uses simple_statfs. Its hidden mount has no user
      * mount flags; ST_VALID is Linux's 0x20. Keep the real device identity. */
     uint64_t dev=(minor(st.st_dev)&0xffU)|(major(st.st_dev)<<8)|((uint64_t)(minor(st.st_dev)&~0xffU)<<12);
-    *out=(struct statfs){.f_type=type,.f_bsize=(unsigned long)getpagesize(),
+    *out=(struct statfs){.f_type=PID_FS_MAGIC,.f_bsize=(unsigned long)getpagesize(),
         .f_frsize=(unsigned long)getpagesize(),.f_namelen=NAME_MAX,.f_flags=0x20};
     _Static_assert(sizeof(out->f_fsid)==sizeof(dev),"native filesystem identity");
     memcpy(&out->f_fsid,&dev,sizeof(dev));

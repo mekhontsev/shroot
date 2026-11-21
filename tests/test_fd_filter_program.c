@@ -319,8 +319,10 @@ void test_fd_filter_program(void) {
                 unsigned reads=0;
                 assert(evaluate_reads(&built,&d,&reads)==SECCOMP_RET_ALLOW && !reads);
             }
-            for (unsigned nr=0;nr<512;++nr) for (unsigned arg=0;arg<6;++arg)
-                for (unsigned alias=0;alias<3;++alias) for (unsigned c=0;c<sizeof(commands)/sizeof(*commands);++c) {
+            for (unsigned nr=0;nr<512;++nr) {
+                unsigned variants=(nr==SYS_fcntl || nr==SYS_ioctl) ? sizeof(commands)/sizeof(*commands)
+                    : nr==SYS_mmap ? 2 : 1;
+                for (unsigned arg=0;arg<6;++arg) for (unsigned alias=0;alias<3;++alias) for (unsigned c=0;c<variants;++c) {
                     struct seccomp_data d={.nr=(int)nr,.instruction_pointer=0x4412345678};
                     for (unsigned n=0;n<6;++n) d.args[n]=(unsigned)(fd+1);
                     d.args[arg]=(unsigned)fd+alias*(MD_FD_SELECTOR_MASK+1u);
@@ -334,6 +336,7 @@ void test_fd_filter_program(void) {
                         assert(evaluate(&built,&d)==expected(kind,fd,&d));
                     }
                 }
+            }
         }
     const struct md_fd_filter_gates grouped[]={
         {0},

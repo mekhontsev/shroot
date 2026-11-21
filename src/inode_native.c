@@ -30,7 +30,7 @@ static int native_path(char path[NAME_MAX+34],const char *parent,const char *nam
         : snprintf(path,NAME_MAX+34,"%s",name);
     return n<0 || n>=NAME_MAX+34 ? -ENAMETOOLONG : 0;
 }
-int mdi_native_pin_create_in(int directory,const char *parent,const char *name,uint32_t uid,uint32_t gid,mode_t mode) {
+int mdi_native_mknod_in(int directory,const char *parent,const char *name,uint32_t uid,uint32_t gid,mode_t mode) {
     if (!mdi_native_eligible(uid,gid,mode)) return -EOPNOTSUPP;
     char path[NAME_MAX+34];
     int r=native_path(path,parent,name);
@@ -41,14 +41,16 @@ int mdi_native_pin_create_in(int directory,const char *parent,const char *name,u
         return error==EPERM || error==EACCES || error==ENOSYS || error==EOPNOTSUPP
             ? -EOPNOTSUPP : -error;
     }
+    return 0;
+}
+int mdi_native_pin_create(int directory,const char *name,uint32_t uid,uint32_t gid,mode_t mode) {
+    int r=mdi_native_mknod_in(directory,NULL,name,uid,gid,mode);
+    if (r) return r;
     int pin=openat(directory,name,O_PATH|O_CLOEXEC|O_NOFOLLOW);
     if (pin>=0) return pin;
     int error=errno;
     if (unlinkat(directory,name,0)) return -errno;
     return -error;
-}
-int mdi_native_pin_create(int directory,const char *name,uint32_t uid,uint32_t gid,mode_t mode) {
-    return mdi_native_pin_create_in(directory,NULL,name,uid,gid,mode);
 }
 int mdi_native_create_in(int directory,const char *parent,const char *name,int flags,uint32_t uid,uint32_t gid,mode_t mode) {
     if (!mdi_native_eligible(uid,gid,mode)) return -EOPNOTSUPP;
@@ -71,9 +73,10 @@ static int change_mode(int fd,mode_t mode) {
     char path[64]; descriptor_path(fd,path);
     return chmod(path,mode) ? -errno : 0;
 }
-static ssize_t get(int fd,void *record,size_t size) {
-    ssize_t n=fgetxattr(fd,MDI_NATIVE_METADATA,record,size);
-    if (n<0 && errno==EBADF) {
+static ssize_t get(int fd,const char *name,void *record,size_t size) {
+    ssize_t n=name ? lgetxattr(name,MDI_NATIVE_METADATA,record,size)
+        : fgetxattr(fd,MDI_NATIVE_METADATA,record,size);
+    if (!name && n<0 && errno==EBADF) {
         char path[64]; descriptor_path(fd,path); n=getxattr(path,MDI_NATIVE_METADATA,record,size);
     }
     return n<0 ? -errno : n;
@@ -125,7 +128,7 @@ struct metadata_buffer {
 static void release(struct metadata_buffer *buffer) {
     if ((void *)buffer->record!=buffer->local) free(buffer->record);
 }
-static int load(int fd,const struct stat *st,struct metadata_buffer *buffer) {
+static int load(int fd,const char *name,const struct stat *st,struct metadata_buffer *buffer) {
     buffer->record=(void *)buffer->local;
     struct metadata *p=buffer->record;
     if (!(st->st_mode&S_ISVTX)) {
@@ -134,14 +137,14 @@ static int load(int fd,const struct stat *st,struct metadata_buffer *buffer) {
     }
     /* The complete xattr is one atomic observation. Common ownership/mode and
      * small ACL records need neither a size query nor a heap allocation. */
-    ssize_t size=get(fd,p,sizeof(buffer->local));
+    ssize_t size=get(fd,name,p,sizeof(buffer->local));
     if (size==-ERANGE) {
-        size=get(fd,NULL,0);
+        size=get(fd,name,NULL,0);
         if (size>0 && size<=65536) {
             p=malloc((size_t)size);
             if (!p) return -ENOMEM;
             buffer->record=p;
-            size=get(fd,p,(size_t)size);
+            size=get(fd,name,p,(size_t)size);
         }
     }
     int r=0;
@@ -172,13 +175,13 @@ static int publish(int fd,const struct stat *st,const struct metadata *old,const
     }
     return r ? r : set(fd,next);
 }
-int mdi_native_project(int fd,struct stat *st,unsigned *acl) {
+static int project(int fd,const char *name,struct stat *st,unsigned *acl) {
     if (acl) *acl=0;
     int r=valid_physical(st);
     if (r) return r;
     if (!(st->st_mode&S_ISVTX)) { st->st_uid=st->st_gid=0; return 0; }
     struct metadata_buffer buffer;
-    r=load(fd,st,&buffer);
+    r=load(fd,name,st,&buffer);
     if (!r) {
         const struct metadata *p=buffer.record;
         st->st_uid=le32toh(p->uid); st->st_gid=le32toh(p->gid); st->st_mode=S_IFREG|le32toh(p->mode);
@@ -187,10 +190,27 @@ int mdi_native_project(int fd,struct stat *st,unsigned *acl) {
     }
     return r;
 }
-int mdi_native_info(int fd,struct stat *st,unsigned *acl) {
-    return fstat(fd,st) ? -errno : mdi_native_project(fd,st,acl);
+int mdi_native_project(int fd,struct stat *st,unsigned *acl) {
+    return project(fd,NULL,st,acl);
 }
-int mdi_native_stat(int fd,struct stat *st) { return mdi_native_info(fd,st,NULL); }
+int mdi_native_project_named(int objects,const char *backing,struct stat *st,unsigned *acl) {
+    /* The namespace gate stabilizes this private backing name. Do not open
+     * it for a metadata query: Linux 5.15 can notify even an O_PATH open. */
+    char path[NAME_MAX+96];
+    int n=snprintf(path,sizeof(path),"/proc/self/fd/%d/%s",objects,backing);
+    if (n<0 || (size_t)n>=sizeof(path)) return -ENAMETOOLONG;
+    struct stat logical=*st,check;
+    int r=project(-1,path,&logical,acl);
+    if (r) return r;
+    if (fstatat(objects,backing,&check,AT_SYMLINK_NOFOLLOW)) return -errno;
+    if (check.st_dev!=st->st_dev || check.st_ino!=st->st_ino
+            || check.st_mode!=st->st_mode || check.st_nlink!=st->st_nlink) return -ESTALE;
+    *st=logical;
+    return 0;
+}
+int mdi_native_stat(int fd,struct stat *st) {
+    return fstat(fd,st) ? -errno : mdi_native_project(fd,st,NULL);
+}
 static int metadata(int fd,uint32_t uid,uint32_t gid,mode_t mode,int clear_capability,bool persistent) {
     if (uid==UINT32_MAX || gid==UINT32_MAX || (mode&~07777)) return -EINVAL;
     struct stat st;
@@ -199,7 +219,7 @@ static int metadata(int fd,uint32_t uid,uint32_t gid,mode_t mode,int clear_capab
     if (!(st.st_mode&S_ISVTX) && mdi_native_eligible(uid,gid,mode))
         return mode==(st.st_mode&07777) ? 0 : change_mode(fd,mode);
     struct metadata_buffer buffer;
-    r=load(fd,&st,&buffer);
+    r=load(fd,NULL,&st,&buffer);
     if (r) return r;
     const struct metadata *old=buffer.record;
     if (le32toh(old->uid)==uid && le32toh(old->gid)==gid && le32toh(old->mode)==mode
@@ -219,7 +239,7 @@ ssize_t mdi_native_attribute(int fd,int capability,void *out,size_t capacity) {
     if (r) return r;
     if (!(st.st_mode&S_ISVTX)) return -ENODATA;
     struct metadata_buffer buffer;
-    r=load(fd,&st,&buffer);
+    r=load(fd,NULL,&st,&buffer);
     if (r) return r;
     const struct metadata *p=buffer.record;
     size_t size=le32toh(capability ? p->cap : p->acl),offset=capability ? le32toh(p->acl) : 0;
@@ -235,7 +255,7 @@ int mdi_native_attribute_set(int fd,int capability,const void *value,size_t size
     int r=physical(fd,&st);
     if (r) return r;
     struct metadata_buffer buffer;
-    r=load(fd,&st,&buffer);
+    r=load(fd,NULL,&st,&buffer);
     if (r) return r;
     const struct metadata *old=buffer.record;
     size_t acl=capability ? le32toh(old->acl) : size,cap=capability ? size : le32toh(old->cap);

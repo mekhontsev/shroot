@@ -51,8 +51,8 @@ int mdi_walk_resolved(struct md_inode_store *s, int dirfd, const char *path,
     return walk(s,dirfd,path,follow,missing,resolve,out,NULL,NULL);
 }
 int mdi_walk_pinned(struct md_inode_store *s,int dirfd,const char *path,
-        enum mdi_follow follow,int missing,uint64_t resolve,struct mdi_location *out,struct mdi_path_pin *pin) {
-    *pin=(struct mdi_path_pin){.fd=-1};
+        enum mdi_follow follow,int missing,uint64_t resolve,struct mdi_location *out,struct mdi_path_pin *pin,int regular_error) {
+    *pin=(struct mdi_path_pin){.fd=-1,.regular_error=regular_error};
     int r=walk(s,dirfd,path,follow,missing,resolve,out,NULL,pin);
     if (r && pin->fd>=0) { close(pin->fd); pin->fd=-1; }
     return r;
@@ -130,7 +130,11 @@ static int walk(struct md_inode_store *s,int dirfd,const char *path,
             if (!r && (resolve&RESOLVE_BENEATH)) r=-EXDEV;
             next=current;
             if (!r && last && attributes) r=mdi_stat(s,&next,attributes);
-        } else r=mdi_path_step(s,&current,name,cursor,resolve,&next,last ? attributes : NULL,last ? pin : NULL);
+        } else {
+            struct mdi_path_pin directory={.fd=-1,.regular_error=-ENOTDIR};
+            struct mdi_path_pin *selection=!last || (slash && follow!=MDI_ENTRY) ? &directory : pin;
+            r=mdi_path_step(s,&current,name,cursor,resolve,&next,last ? attributes : NULL,selection);
+        }
         /* Preserve the first unresolved component for dependency-driven import.
          * Ordinary callers still accept only an absent terminal component. */
         if (r == -ENOENT && !special) {

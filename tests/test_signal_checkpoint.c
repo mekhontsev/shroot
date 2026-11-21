@@ -1769,7 +1769,21 @@ static void stale_continue_control(int protected) {
     assert(waitpid(pid,&status,0)==pid && WIFEXITED(status) && !WEXITSTATUS(status));
     close(start[0]); close(start[1]);
 }
-static void retained_continue(int protected,int process) {
+static int continue_queue(pid_t pid,const siginfo_t *origin) {
+    int queue=0;
+    for (unsigned shared=0;shared<2;++shared) {
+        struct ptrace_peeksiginfo_args args={.flags=shared ? PTRACE_PEEKSIGINFO_SHARED : 0,.nr=64};
+        siginfo_t pending[64];
+        long count=ptrace(PTRACE_PEEKSIGINFO,pid,&args,pending); assert(count>=0 && count<64);
+        for (long i=0;i<count;++i) if (pending[i].si_signo==SIGCONT) {
+            assert(!queue && pending[i].si_code==origin->si_code &&
+                pending[i].si_pid==origin->si_pid && pending[i].si_uid==origin->si_uid);
+            queue=1+(int)shared;
+        }
+    }
+    return queue;
+}
+static int continue_case(int protected,int process,int native) {
     int start[2]; assert(!pipe(start));
     pid_t pid=fork(); assert(pid>=0);
     if (!pid) {
@@ -1794,19 +1808,25 @@ static void retained_continue(int protected,int process) {
     assert(WSTOPSIG(status)==SIGCONT);
     siginfo_t info; assert(!ptrace(PTRACE_GETSIGINFO,pid,NULL,&info));
     struct md_signal_delivery queue={0};
-    int signal=md_signal_delivery_retain(&queue,pid,&info); assert(signal==SIGCONT);
+    uint64_t mask;
+    int signal=SIGCONT;
+    if (native) {
+        assert(!ptrace(PTRACE_GETSIGMASK,pid,(void *)sizeof(mask),&mask));
+        uint64_t blocked=mask|(UINT64_C(1)<<(SIGCONT-1));
+        assert(!ptrace(PTRACE_SETSIGMASK,pid,(void *)sizeof(blocked),&blocked));
+    } else {
+        signal=md_signal_delivery_retain(&queue,pid,&info); assert(signal==SIGCONT);
+    }
     assert(!ptrace(PTRACE_INTERRUPT,pid,NULL,NULL));
     resume(pid,PTRACE_CONT,signal);
     assert(waitpid(pid,&status,0)==pid && WIFSTOPPED(status)
         && (unsigned)status>>16==PTRACE_EVENT_STOP);
-    struct ptrace_peeksiginfo_args args={.nr=1};
-    args.flags=process ? PTRACE_PEEKSIGINFO_SHARED : 0;
-    assert(ptrace(PTRACE_PEEKSIGINFO,pid,&args,&info)==1 && info.si_signo==SIGCONT);
+    int where=continue_queue(pid,&info);
+    assert(where && (process || where==1));
     assert(!kill(pid,SIGSTOP));
-    siginfo_t pending[64]; args.nr=64;
-    long count=ptrace(PTRACE_PEEKSIGINFO,pid,&args,pending); assert(count>=0);
-    for (long i=0;i<count;++i) assert(pending[i].si_signo!=SIGCONT);
-    assert(!md_signal_delivery_publish(&queue,pid,pid) && !md_signal_delivery_pending(&queue));
+    assert(!continue_queue(pid,&info));
+    if (native) assert(!ptrace(PTRACE_SETSIGMASK,pid,(void *)sizeof(mask),&mask));
+    else assert(!md_signal_delivery_publish(&queue,pid,pid) && !md_signal_delivery_pending(&queue));
     resume(pid,PTRACE_CONT,0);
     assert(waitpid(pid,&status,0)==pid && WIFSTOPPED(status) && WSTOPSIG(status)==SIGSTOP);
     resume(pid,PTRACE_CONT,SIGSTOP);
@@ -1824,6 +1844,12 @@ static void retained_continue(int protected,int process) {
     assert(continued==1 && WIFEXITED(status) && !WEXITSTATUS(status));
     md_signal_delivery_clear(&queue);
     close(start[0]); close(start[1]);
+    return where;
+}
+static void retained_continue(int protected,int process) {
+    /* Older kernels requeue even a process-directed signal to this thread. */
+    int native=continue_case(protected,process,1);
+    assert(continue_case(protected,process,0)==native);
 }
 static void *terminal_race_worker(void *argument) {
     int clone=argument!=NULL;
@@ -2222,7 +2248,7 @@ int main(int argc,char **argv) {
         stale_continue_control(protected);
         for (int process=0;process<2;++process) retained_continue(protected,process);
     }
-    puts("PASS retained job control: 4 cases; private/shared requeue preserves STOP cancellation without regenerating CONT or waking the group");
+    puts("PASS retained job control: native queue and sender, STOP cancellation, no spurious wakeup");
     puts("LIMIT checkpoint during replay: 6 controls; userspace checkpoint loses the native no-SA_RESTART decision, read restarts instead of EINTR");
     puts("LIMIT regenerated job control: 2 controls; a retained CONT already invalidated by STOP wakes the stopped group when generated again");
     for (int protected=0;protected<2;++protected)

@@ -31,11 +31,16 @@ void test_descriptor_inode(void);
 void test_ipc_database(void);
 struct uts_reader {
     struct md_uts_view view;
+    pthread_barrier_t published;
     atomic_int done;
-    atomic_uint reads;
 };
+static void uts_observed(struct uts_reader *reader) {
+    int r=pthread_barrier_wait(&reader->published);
+    assert(!r || r==PTHREAD_BARRIER_SERIAL_THREAD);
+}
 static void *uts_read_concurrent(void *opaque) {
     struct uts_reader *reader=opaque;
+    unsigned observed=0;
     do {
         struct utsname names;
         if (!md_uts_view_read(&reader->view,&names)) continue;
@@ -43,8 +48,11 @@ static void *uts_read_concurrent(void *opaque) {
         for (unsigned i=1;i<sizeof(names.nodename)-1;++i)
             assert(names.nodename[i]==names.nodename[0]);
         assert(!names.nodename[sizeof(names.nodename)-1]);
-        atomic_fetch_add(&reader->reads,1);
+        if (observed<2 && names.nodename[0]==(observed ? 'b' : 'a')) {
+            ++observed; uts_observed(reader);
+        }
     } while (!atomic_load(&reader->done));
+    assert(observed==2);
     return NULL;
 }
 static void uts_publication(void) {
@@ -53,12 +61,16 @@ static void uts_publication(void) {
     char name[sizeof(((struct utsname *)0)->nodename)-1]; memset(name,'a',sizeof(name));
     assert(!md_uts_namespace_set(ns,0,name,sizeof(name)));
     md_uts_namespace_subscribe(ns,&subscription,&reader.view);
+    assert(!pthread_barrier_init(&reader.published,NULL,2));
     pthread_t thread; assert(!pthread_create(&thread,NULL,uts_read_concurrent,&reader));
+    uts_observed(&reader);
     for (unsigned i=0;i<10000;++i) {
         memset(name,i&1 ? 'a' : 'b',sizeof(name));
         assert(!md_uts_namespace_set(ns,0,name,sizeof(name)));
+        if (!i) uts_observed(&reader);
     }
-    atomic_store(&reader.done,1); assert(!pthread_join(thread,NULL) && atomic_load(&reader.reads));
+    atomic_store(&reader.done,1); assert(!pthread_join(thread,NULL));
+    assert(!pthread_barrier_destroy(&reader.published));
     md_uts_namespace_unsubscribe(&subscription); md_uts_namespace_release(ns);
     puts("PASS UTS publication: concurrent atomic snapshots never mix namespace generations");
 }

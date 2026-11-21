@@ -61,18 +61,18 @@ static int leaf_path(char out[NAME_MAX+34],const char *parent,const char *name) 
     memcpy(out,parent,prefix); out[prefix]='/'; memcpy(out+prefix+1,name,length+1);
     return 0;
 }
+int mdi_leaf_mknod(struct md_inode_store *s,const struct mdi_node *parent,const char *name,mode_t mode) {
+    if (parent->mode<0 || (parent->acl_mask&MD_ACL_DEFAULT)) return -EOPNOTSUPP;
+    uint32_t uid,gid;
+    int r=birth_attributes(s,parent,name,&uid,&gid,&mode);
+    return r ? r : mdi_native_mknod_in(s->objects,parent->backing,name,uid,gid,mode);
+}
 int mdi_leaf_create(struct md_inode_store *s,const struct mdi_node *parent,const char *name,int flags,mode_t mode) {
     if (parent->mode<0) return -EOPNOTSUPP;
     uint32_t uid,gid;
     int r=birth_attributes(s,parent,name,&uid,&gid,&mode);
     if (r) return r;
     flags&=~(O_CREAT|O_EXCL|O_TRUNC|O_NOFOLLOW|O_NOCTTY);
-    if (flags&O_PATH) {
-        /* mknod publishes a name, not a data open. Exceptional metadata uses
-         * catalogue creation, whose unpublished backing is not watch-visible. */
-        return parent->acl_mask&MD_ACL_DEFAULT ? -EOPNOTSUPP
-            : mdi_native_pin_create_in(s->objects,parent->backing,name,uid,gid,mode);
-    }
     if (!(parent->acl_mask&MD_ACL_DEFAULT) && mdi_native_eligible(uid,gid,mode))
         return mdi_native_create_in(s->objects,parent->backing,name,flags,uid,gid,mode);
     char stage[33],target[NAME_MAX+34];
@@ -231,13 +231,9 @@ static int leaf(struct md_inode_store *s,const struct mdi_node *parent,
     strcpy(node.backing,backing);
     struct stat logical=*physical;
     if (physical->st_mode&S_ISVTX) {
-        int fd=descriptor>=0 ? descriptor : mdi_backing_open(s,&node,O_PATH);
-        if (fd<0) return fd;
-        int r=descriptor>=0 ? mdi_native_project(fd,&logical,&node.acl_mask)
-            : mdi_native_info(fd,&logical,&node.acl_mask);
-        if (descriptor<0) close(fd);
+        int r=descriptor>=0 ? mdi_native_project(descriptor,&logical,&node.acl_mask)
+            : mdi_native_project_named(s->objects,backing,&logical,&node.acl_mask);
         if (r) return r;
-        if (logical.st_dev!=physical->st_dev || logical.st_ino!=physical->st_ino) return -ESTALE;
     } else {
         if (!mdi_native_eligible(0,0,physical->st_mode&07777)) return -EIO;
         logical.st_uid=logical.st_gid=0;
@@ -257,6 +253,14 @@ int mdi_leaf_lookup(struct md_inode_store *s,const struct mdi_node *parent,const
     const char *selected=directory<0 ? path : name;
     if (directory<0) directory=s->objects;
     struct stat st;
+    if (pin && pin->regular_error) {
+        /* A known type-only rejection must not open an fd. Even O_PATH
+         * publishes OPEN/CLOSE on some kernels. Never authorize by name. */
+        if (fstatat(directory,selected,&st,AT_SYMLINK_NOFOLLOW)) return -errno;
+        if (!S_ISREG(st.st_mode) || st.st_nlink>1) return -EXDEV;
+        if (s->mount_boundary && md_inode_mount_contains(s->mount_boundary,st.st_dev,st.st_ino)) return -EXDEV;
+        return pin->regular_error;
+    }
     if (pin) {
         int fd=openat(directory,selected,O_PATH|O_NOFOLLOW|O_CLOEXEC);
         if (fd<0) return -errno;

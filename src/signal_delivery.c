@@ -108,9 +108,8 @@ int md_signal_delivery_retain(struct md_signal_delivery *q,pid_t tid,const sigin
         if (ptrace(PTRACE_SETSIGMASK,tid,(void *)sizeof(mask),&mask)<0) return -errno;
         q->kernel_mask|=signal;
     }
-    /* Resume this real delivery stop with the same blocked signal. ptrace
-     * requeues it without repeating generation-time STOP/CONT side effects;
-     * a later opposite signal can then discard it in the kernel normally. */
+    /* Let ptrace requeue the blocked signal using this kernel's queue rules.
+     * A later opposite signal cancels it there; never send a saved CONT. */
     return info->si_signo;
 }
 static int carrier_signal(const struct md_signal_delivery_node *node) {

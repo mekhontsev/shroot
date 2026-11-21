@@ -48,7 +48,7 @@ static void pidfd_filesystem(void) {
     struct statfs fallback;
     assert(!md_fd_filesystem(fd,&fallback) && !memcmp(&value,&fallback,sizeof(value)));
     int copy=dup(fd); assert(copy>=0 && !close(fd));
-    assert(!md_fd_filesystem(copy,&fallback));
+    assert(!md_fd_filesystem(copy,&fallback) && !memcmp(&value,&fallback,sizeof(value)));
     assert(md_fd_filesystem(event,&fallback)==-EACCES);
     assert(md_fd_filesystem(file,&fallback)==-EACCES);
     close(copy); close(event); close(file);

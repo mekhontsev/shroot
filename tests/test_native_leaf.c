@@ -23,6 +23,7 @@
 #include <sys/inotify.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/xattr.h>
 #include <unistd.h>
@@ -144,21 +145,22 @@ static void pinned_birth(int directory) {
     int watch=inotify_init1(IN_NONBLOCK|IN_CLOEXEC); assert(watch>=0);
     char proc[64]; test_format(proc,sizeof(proc),"/proc/self/fd/%d",directory);
     assert(inotify_add_watch(watch,proc,IN_CREATE|IN_OPEN|IN_CLOSE)>0);
-    int fd=mdi_native_pin_create(directory,"pinned",0,0,0644);
-    if (fd==-EOPNOTSUPP) {
+    int created=mdi_native_mknod_in(directory,NULL,"pinned",0,0,0644);
+    if (created==-EOPNOTSUPP) {
         close(watch);
         puts("SKIP native pin creation: host mknodat regular-file policy; preparation fallback retained"); return;
     }
-    assert(fd>=0 && (fcntl(fd,F_GETFL)&O_PATH) && (fcntl(fd,F_GETFD)&FD_CLOEXEC));
-    metadata(fd,0,0,0644,1);
-    assert(mdi_native_pin_create(directory,"pinned",0,0,0600)==-EEXIST);
-    close(fd);
+    assert(!created && mdi_native_pin_create(directory,"pinned",0,0,0600)==-EEXIST);
     union { struct inotify_event align; char bytes[1024]; } event;
     ssize_t size=read(watch,event.bytes,sizeof(event.bytes));
     assert(size==(ssize_t)(sizeof(event.align)+event.align.len) && event.align.mask==IN_CREATE);
     assert(event.align.len && !strcmp(event.align.name,"pinned"));
     assert(read(watch,event.bytes,sizeof(event.bytes))<0 && errno==EAGAIN);
     close(watch); assert(!unlinkat(directory,"pinned",0));
+    int fd=mdi_native_pin_create(directory,"pinned",0,0,0644);
+    assert(fd>=0 && (fcntl(fd,F_GETFL)&O_PATH) && (fcntl(fd,F_GETFD)&FD_CLOEXEC));
+    metadata(fd,0,0,0644,1);
+    close(fd); assert(!unlinkat(directory,"pinned",0));
     pid_t child=fork(); assert(child>=0);
     if (!child) {
         struct rlimit limit; assert(!getrlimit(RLIMIT_NOFILE,&limit));
@@ -511,7 +513,13 @@ static void creation_events(struct md_inode_store *s,int dir) {
             assert(n<3 && e->mask==expected[n] && e->len && !strcmp(e->name,name)); ++n;
         }
         assert(n==3);
+        struct stat observed;
+        assert(!md_inode_stat(s,dir,name,0,&observed));
+        assert((observed.st_mode&0777)==(variant==1 ? 0400 : 0644));
+        assert(!md_inode_rename(s,dir,name,dir,"renamed-events",0));
+        assert(!md_inode_rename(s,dir,"renamed-events",dir,name,0));
         assert(!md_inode_unlink(s,dir,name,0));
+        assert(md_inode_watch_read(s,observer,events.data,sizeof(events.data),NULL,NULL)==-EAGAIN);
         s->native_files=variant!=2;
         assert(!md_inode_mknod(s,dir,name,S_IFREG|(variant==1 ? 0400 : 0644),0));
         s->native_files=1;
@@ -528,7 +536,19 @@ static void creation_events(struct md_inode_store *s,int dir) {
         assert(md_inode_watch_read(s,observer,events.data,sizeof(events.data),NULL,NULL)==-EAGAIN);
         assert(!md_inode_unlink(s,dir,name,0));
     }
-    close(observer);
+    int sock=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0);
+    assert(sock>=0);
+    for (unsigned i=0;i<2;++i) {
+        const char *name=i ? "socket-events" : "fifo-events";
+        assert(!(i ? md_inode_socket_bind(s,dir,name,name,0600,sock) : md_inode_mkfifo(s,dir,name,0600)));
+        union { struct inotify_event align; char data[4096]; } events;
+        ssize_t count=md_inode_watch_read(s,observer,events.data,sizeof(events.data),NULL,NULL);
+        assert(count>0 && count==(ssize_t)(sizeof(events.align)+events.align.len));
+        assert(events.align.mask==IN_CREATE && events.align.len && !strcmp(events.align.name,name));
+        assert(!md_inode_unlink(s,dir,name,0));
+        assert(md_inode_watch_read(s,observer,events.data,sizeof(events.data),NULL,NULL)==-EAGAIN);
+    }
+    close(sock); close(observer);
     puts("PASS creation events: open has CREATE/OPEN/CLOSE; mknod has only CREATE, for native and catalogue allocation");
 }
 static void birth_fallback(struct md_inode_store *s,int dir) {

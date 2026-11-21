@@ -628,12 +628,12 @@ static int make_unopened(struct md_inode_store *s,const char *id,mode_t mode) {
         int end=mdi_watch_marker(s,"publication-v1.end");
         if (!r) r=end;
     }
-    if (r) return r;
-    int pin=openat(s->objects,id,O_PATH|O_CLOEXEC|O_NOFOLLOW);
-    return pin<0 ? -errno : pin;
+    return r;
 }
 static int make_object(struct md_inode_store *s, char id[33], mode_t kind, mode_t mode, int flags,
-        const char *target, const char *parent, struct mdi_node *node, int *fd) {
+        const char *target, const char *parent, struct mdi_node *node, int *result_fd) {
+    int unused, *fd=result_fd ? result_fd : &unused;
+    if (!result_fd && flags!=O_PATH) return -EINVAL;
     uint32_t uid = s->identity ? s->identity->uid.fs : (uint32_t)geteuid();
     uint32_t gid = s->identity ? s->identity->gid.fs : (uint32_t)getegid();
     struct mdi_node p={0};
@@ -661,8 +661,12 @@ static int make_object(struct md_inode_store *s, char id[33], mode_t kind, mode_
         if (*fd<0) return *fd;
     } else if (kind == S_IFREG || kind == S_IFSOCK || kind == S_IFIFO || kind == S_IFCHR || kind == S_IFBLK) {
         if (flags&O_PATH) {
-            *fd=make_unopened(s,id,native);
-            if (*fd<0) return *fd;
+            int r=make_unopened(s,id,native);
+            if (r) return r;
+            if (result_fd) {
+                *fd=openat(s->objects,id,O_PATH|O_CLOEXEC|O_NOFOLLOW);
+                if (*fd<0) return -errno;
+            }
         } else {
             *fd=openat(s->objects,id,O_CREAT|O_EXCL|flags|O_CLOEXEC|O_NOFOLLOW,native);
             if (*fd<0) return -errno;

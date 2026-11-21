@@ -63,8 +63,13 @@ static void cancel_collected(void) {
         pid_t pid=md_task_wait_take(&state,&status,NULL);
         if (!pid) pid=waitpid(-1,&status,__WALL);
         if (pid<0) { assert(errno==ECHILD); break; }
-        if (WIFSTOPPED(status)) assert(!ptrace(PTRACE_CONT,pid,0,0));
-        else { assert(WIFEXITED(status) || WIFSIGNALED(status)); ++reaped; }
+        unsigned i=0;
+        while (i<CHILDREN && children[i]!=pid) ++i;
+        assert(i<CHILDREN);
+        /* SIGKILL may invalidate an already collected EXIT stop. Only
+         * the final wait status counts as reaping that exact child. */
+        if (WIFSTOPPED(status)) assert(!ptrace(PTRACE_CONT,pid,0,0) || errno==ESRCH);
+        else { assert(WIFEXITED(status) || WIFSIGNALED(status)); children[i]=0; ++reaped; }
     }
     assert(reaped==CHILDREN && !state.pending_count);
     puts("PASS collected cancellation: terminal batch drained before blocking reap");

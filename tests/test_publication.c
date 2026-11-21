@@ -94,11 +94,13 @@ static void pinned_lookup(const char *path,int filtered) {
     unsigned before=descriptors();
     struct md_open_completion completion;
     for (unsigned i=0;i<64;++i) {
-        assert(md_inode_plan_open(s,-1,"work/file/",O_RDONLY,0,0,&completion,1,NULL)==-ENOTDIR);
-        assert(md_inode_plan_open(s,-1,"work/file",O_DIRECTORY,0,0,&completion,1,NULL)==-ENOTDIR);
-        assert(md_inode_plan_open(s,-1,"work/missing",O_RDONLY,0,0,&completion,1,NULL)==-ENOENT);
+        int plan=i%2;
+        assert(md_inode_plan_open(s,-1,"work/file/",O_RDONLY,0,0,&completion,plan,NULL)==-ENOTDIR);
+        assert(md_inode_plan_open(s,-1,"work/file/child",O_RDONLY,0,0,&completion,plan,NULL)==-ENOTDIR);
+        assert(md_inode_plan_open(s,-1,"work/file",O_DIRECTORY,0,0,&completion,plan,NULL)==-ENOTDIR);
+        assert(md_inode_plan_open(s,-1,"work/missing",O_RDONLY,0,0,&completion,plan,NULL)==-ENOENT);
         s->readonly=1;
-        assert(md_inode_plan_open(s,-1,"work/file",O_WRONLY,0,0,&completion,1,NULL)==-EROFS);
+        assert(md_inode_plan_open(s,-1,"work/file",O_WRONLY,0,0,&completion,plan,NULL)==-EROFS);
         s->readonly=0;
     }
     unsigned after=descriptors();
@@ -108,7 +110,7 @@ static void pinned_lookup(const char *path,int filtered) {
     struct mdi_location location;
     struct mdi_path_pin pin;
     assert(!mdi_begin(s,0));
-    assert(!mdi_walk_pinned(s,-1,"work/file",MDI_FOLLOW,0,0,&location,&pin));
+    assert(!mdi_walk_pinned(s,-1,"work/file",MDI_FOLLOW,0,0,&location,&pin,0));
     assert(pin.fd>=0 && location.node.native && location.node.descriptor==pin.fd+1);
     assert(location.node.uid==41 && location.node.gid==42);
     assert(!renameat(directory,"file",directory,"old"));

@@ -68,26 +68,20 @@ static int create_node(struct md_inode_store *s, int dirfd, const char *path,
             && !md_identity_capable(s->identity,CAP_MKNOD)) r=-EPERM;
     if (!r) r=mdi_landlock(s,&loc.parent,NULL,md_landlock_make_access(kind));
     if (!r && kind==S_IFREG) {
-        int fd=mdi_leaf_create(s,&loc.parent,loc.name,O_PATH,mode);
-        if (fd!=-EOPNOTSUPP) {
-            r=mdi_finish(s,fd<0 ? fd : 0);
-            if (r && fd>=0) close(fd);
-            return r ? r : fd;
-        }
+        int result=mdi_leaf_mknod(s,&loc.parent,loc.name,mode);
+        if (result!=-EOPNOTSUPP) return mdi_finish(s,result);
     }
     if (!r) r=mdi_write(s);
     struct mdi_node node;
-    int fd = -1;
     if (!r) r = mdi_allocate(s, kind, mode, O_PATH, target,
-        loc.parent.id, &node, &fd);
+        loc.parent.id, &node, NULL);
     if (!r && (kind==S_IFCHR || kind==S_IFBLK)) r=mdi_device_number(s,&node,device);
     if (!r) r = mdi_add_name(s, loc.parent.id, loc.name, node.id);
     if (!r) r = mdi_event(s, loc.parent.id, &node, loc.name, IN_CREATE, NULL);
     r = mdi_commit(s, r);
     /* Retain unpublished objects on failure: commit IO errors can have an
      * unknown outcome. Reclamation requires a separate lifetime contract. */
-    if (r) { if (fd >= 0) close(fd); return r; }
-    return fd >= 0 ? fd : 0;
+    return r;
 }
 int md_inode_create(struct md_inode_store *s, int dirfd, const char *path, mode_t mode) {
     return md_inode_open(s, dirfd, path, O_CREAT | O_EXCL | O_RDWR, mode);
@@ -96,9 +90,7 @@ int md_inode_mkdir(struct md_inode_store *s, int dirfd, const char *path, mode_t
     return create_node(s, dirfd, path, S_IFDIR, mode, NULL, 0);
 }
 int md_inode_mkfifo(struct md_inode_store *s, int dirfd, const char *path, mode_t mode) {
-    int r = create_node(s, dirfd, path, S_IFIFO, mode, NULL, 0);
-    if (r >= 0) { close(r); return 0; }
-    return r;
+    return create_node(s, dirfd, path, S_IFIFO, mode, NULL, 0);
 }
 int mdi_device_number(struct md_inode_store *s,struct mdi_node *node,dev_t device) {
     if (node->kind!=S_IFCHR && node->kind!=S_IFBLK) return device ? -EINVAL : 0;
@@ -114,9 +106,7 @@ int mdi_device_number(struct md_inode_store *s,struct mdi_node *node,dev_t devic
 int md_inode_mknod(struct md_inode_store *s,int dirfd,const char *path,mode_t mode,dev_t device) {
     mode_t kind=mode&S_IFMT;
     if (kind!=S_IFREG && kind!=S_IFIFO && kind!=S_IFCHR && kind!=S_IFBLK) return -EINVAL;
-    int r=create_node(s,dirfd,path,kind,mode&07777,NULL,device);
-    if (r>=0) { close(r); return 0; }
-    return r;
+    return create_node(s,dirfd,path,kind,mode&07777,NULL,device);
 }
 int md_inode_symlink(struct md_inode_store *s, const char *target, int dirfd, const char *path) {
     if (!target) return -EFAULT;
@@ -197,7 +187,10 @@ static int open_resolved(struct md_inode_store *s, int dirfd, const char *path, 
     struct mdi_location loc;
     enum mdi_follow follow=create && (flags&O_EXCL) ? MDI_ENTRY : flags&O_NOFOLLOW ? MDI_NOFOLLOW : MDI_FOLLOW;
     struct mdi_path_pin pin={.fd=-1};
-    r=native_plan ? mdi_walk_pinned(s,dirfd,path,follow,!!create,resolve,&loc,&pin)
+    int regular_error=!create && (flags&O_DIRECTORY) ? -ENOTDIR
+        : !create && (flags&(O_WRONLY|O_RDWR)) && mdi_readonly(s) ? -EROFS : 0;
+    if ((flags&O_TRUNC) && !(flags&MD_O_ACCMODE)) regular_error=0;
+    r=native_plan || regular_error ? mdi_walk_pinned(s,dirfd,path,follow,!!create,resolve,&loc,&pin,regular_error)
         : mdi_walk_resolved(s,dirfd,path,follow,!!create,resolve,&loc);
     int fd=pin.fd;
     /* The selected provider owns data-open semantics. Do not reject this

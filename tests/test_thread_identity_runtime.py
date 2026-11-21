@@ -33,6 +33,7 @@ def main():
         else:
             source = Path(__file__).with_name('test_thread_identity.c')
             suite.upload(source, suite.base + '/thread.c')
+            suite.upload(source.with_name('kernel_clone.h'), suite.base + '/kernel_clone.h')
             suite.command(base + ['--bind', suite.base, target, '--deadline-seconds', '60',
                                  '--', '/usr/bin/cc', '-O2', '-pthread']
                           + (['-static'] if args.native_control else []) + [target + '/thread.c',

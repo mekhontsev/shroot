@@ -147,7 +147,7 @@ struct mdi_location {
 };
 /* Optional final native-leaf capture. The caller owns fd on success; metadata
  * and identity come from that exact descriptor, never another pathname lookup. */
-struct mdi_path_pin { int fd; struct stat physical; };
+struct mdi_path_pin { int fd,regular_error; struct stat physical; };
 /* Borrowed physical directory, or -1. Never substitutes catalogue admission. */
 int mdi_directory_pin(const struct md_inode_store *,const struct mdi_node *);
 int mdi_overlay_native_name(struct md_inode_store *,const struct mdi_node *,const char *);
@@ -261,7 +261,7 @@ int mdi_host_boundary(struct md_inode_store *, const char *parent, const char *n
 int mdi_walk_resolved(struct md_inode_store *, int, const char *, enum mdi_follow, int missing,
         uint64_t resolve, struct mdi_location *);
 int mdi_walk_pinned(struct md_inode_store *, int, const char *, enum mdi_follow, int missing,
-        uint64_t resolve, struct mdi_location *, struct mdi_path_pin *);
+        uint64_t resolve, struct mdi_location *, struct mdi_path_pin *,int regular_error);
 int mdi_location_path(struct md_inode_store *, const struct mdi_location *, char *, size_t);
 int mdi_node_path(struct md_inode_store *, const struct mdi_node *, char *, size_t);
 int mdi_dentry_capture(struct md_inode_store *,const struct mdi_location *,uint64_t *);
