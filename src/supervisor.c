@@ -985,6 +985,8 @@ int main(int argc, char **argv) {
         md_cost_end(statistics ? &statistics->pid_collect : NULL,collect_start);
         int status; struct rusage usage; pid_t pid = wait_event(&status, &usage);
         if (!pid) break;
+        if ((!WIFSTOPPED(status) || (unsigned)status>>16==PTRACE_EVENT_EXIT)
+                && retained_actor_exit(pid,status)) continue;
         struct thread *signalled=WIFSTOPPED(status) && (unsigned)status>>16==PTRACE_EVENT_STOP
             ? find_thread(pid) : NULL;
         if (signalled && signalled->machine.signal_alias) {

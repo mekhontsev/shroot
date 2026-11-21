@@ -129,6 +129,14 @@ cleanup without invoking a guest SIGSEGV handler. The supervisor owns queued
 terminal events and replays each once cleanup finishes. Only pending mm owners
 enter its work queue; private actor lookup uses a PID index rather than a
 scan on every syscall.
+
+If an idle actor receives a fatal signal, its ptrace exit stop still holds the
+original address space. Read-only robust cleanup can finish there without
+resuming it. A subsequent registration or private-memory repair can create a
+replacement; registrations and queued exits transfer only after it is ready.
+The old child is reaped through the usual parent wait path. Loss during an
+in-flight effect, or a required atomic update or wake without a live executor,
+is a supervision failure, never a successful cleanup.
 Registration, cleanup and pending terminal replay retain exclusive custody of
 the guest continuation. The shared task-action admission excludes that task
 from filter installation, FD capture and temporary-FD retirement, even when

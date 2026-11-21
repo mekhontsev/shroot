@@ -94,14 +94,22 @@ static int robust_managed(const struct thread *t) {
 }
 
 struct retained_memory *retained_memory_get(struct thread *t) {
-    if (t->memory_actor) return t->memory_actor;
+    struct retained_memory *old=t->memory_actor;
+    if (old && (!old->exit_held || old->cleaning)) return old;
+    if (old && old->replacement) return old->replacement;
     struct retained_memory *m=calloc(1,sizeof(*m));
     if (!m) return NULL;
     m->memory=t->memory; m->next=retained_memories; retained_memories=m;
-    for (struct thread *p=threads;p;p=p->next) if (p->pid && p->born && p->memory==t->memory) {
-        CHECK(!p->memory_actor); p->memory_actor=m; ++m->members;
+    if (old) {
+        /* Keep the old mm readable and its child indexed until the new
+         * actor is actually ready. A failed birth cannot erase registration. */
+        old->replacement=m; m->previous=old;
+    } else {
+        for (struct thread *p=threads;p;p=p->next) if (p->pid && p->born && p->memory==t->memory) {
+            CHECK(!p->memory_actor); p->memory_actor=m; ++m->members;
+        }
+        CHECK(t->memory_actor==m);
     }
-    CHECK(t->memory_actor==m);
     retained_schedule(m);
     return m;
 }
@@ -148,7 +156,8 @@ int robust_call(struct thread *t,const struct seccomp_data *call,struct user_pt_
     if (call->args[1]!=sizeof(struct md_robust_head)) {
         return_task_value(t,regs,-EINVAL,boundary); return 1;
     }
-    if (!call->args[0] || (t->terminal_observation && t->memory_actor && t->memory_actor->ready)) {
+    if (!call->args[0] || (t->terminal_observation && t->memory_actor && t->memory_actor->ready
+            && !t->memory_actor->exit_held)) {
         robust_register(t,call->args[0]);
         return_task_value(t,regs,0,boundary); return 1;
     }
@@ -170,6 +179,20 @@ int robust_call(struct thread *t,const struct seccomp_data *call,struct user_pt_
     return 1;
 }
 
+static void retained_replace_finish(struct retained_memory *m,int commit) {
+    struct retained_memory *old=m->previous;
+    if (!old) return;
+    CHECK(old->replacement==m && !old->cleaning);
+    old->replacement=NULL; m->previous=NULL;
+    if (commit) {
+        for (struct thread *p=threads;p;p=p->next)
+            if (p->memory_actor==old) p->memory_actor=m;
+        m->members=old->members; m->pending=old->pending;
+        old->members=old->pending=0; old->retiring=1; old->memory=NULL;
+    }
+    retained_schedule(old);
+}
+
 static void retained_creation_finish(struct retained_memory *m,long error) {
     struct thread *t=m->creator;
     if (m->checkpoint_suspended) md_task_checkpoint_restore(&checkpoints,t->pid);
@@ -178,6 +201,7 @@ static void retained_creation_finish(struct retained_memory *m,long error) {
         CHECK(!md_resource_order_complete(&m->order));
     if (retained_barrier) CHECK(!md_task_quiesce_release(retained_barrier));
     m->error=error; m->ready=!error;
+    retained_replace_finish(m,!error);
     if (t && !m->retained.parent_terminal) {
         t->kernel_stopped=1;
         t->robust.boundary=m->retained.parent.boundary;
@@ -233,7 +257,9 @@ static void retained_track_actor(struct retained_memory *m) {
 static void robust_cleanup_complete(struct retained_memory *m,int state) {
     if (state<0) {
         fprintf(stderr,"Shroot: robust cleanup actor=%d error=%d\n",m->retained.actor,state);
-        cancel_tree(125); return;
+        /* The held terminal event cannot complete. The guardian owns tree
+         * cleanup after a fatal error; graceful cancellation needs this exit. */
+        exit(125);
     }
     if (state!=1) { m->cleaning=state==2 ? 2 : 1; return; }
     struct thread *t=m->terminal;
@@ -252,19 +278,26 @@ void retained_progress(void) {
             retained_unschedule(m); continue;
         }
         if (m->cleaning==2) robust_cleanup_complete(m,md_task_robust_progress(&m->cleanup));
-        if (m->pending && m->ready && !m->cleaning && !m->retiring && !quiescence_busy(NULL)) {
+        if (m->pending && m->ready && !m->cleaning && !m->retiring && !m->replacement && !quiescence_busy(NULL)) {
             for (struct thread *t=threads;t;t=t->next) if (t->pid && t->memory_actor==m && t->robust.terminal==1) {
                 --m->pending;
                 m->terminal=t;
-                robust_cleanup_complete(m,md_task_robust_begin(&m->cleanup,native_trace,m->retained.actor,
+                robust_cleanup_complete(m,md_task_robust_begin(&m->cleanup,m->exit_held ? NULL : native_trace,m->retained.actor,
                     &abi,t->robust.subject->robust.head,t->robust.subject->robust.tid));
                 break;
             }
         }
         if (m->ready || m->retiring || m->creator || retained_barrier || quiescence_busy(NULL)) continue;
         struct thread *t;
-        for (t=threads;t;t=t->next) if (t->pid && t->memory_actor==m && t->robust.registering) break;
-        if (!t) continue;
+        struct retained_memory *owner=m->previous ? m->previous : m;
+        for (t=threads;t;t=t->next) if (t->pid && t->memory_actor==owner && t->robust.registering) break;
+        if (!t) {
+            if (m->previous) {
+                retained_replace_finish(m,0); m->retiring=1; m->memory=NULL;
+                if (m->order.queue) CHECK(!md_resource_order_cancel(&m->order));
+            }
+            continue;
+        }
         if (!m->order.queue) CHECK(md_memory_order_begin(t->memory,&m->order,fd_wakeup)>=0);
         if (md_resource_order_state(&m->order)!=MD_RESOURCE_ORDER_READY) continue;
         CHECK(!md_resource_order_start(&m->order));
@@ -273,7 +306,7 @@ void retained_progress(void) {
 }
 
 static void retained_memory_release(struct retained_memory *m) {
-    CHECK(!m->members && !m->creator && !m->cleaning);
+    CHECK(!m->members && !m->creator && !m->cleaning && !m->previous && !m->replacement);
     struct retained_memory **link=&retained_memories;
     while (*link && *link!=m) link=&(*link)->next;
     CHECK(*link==m); *link=m->next;
@@ -323,6 +356,13 @@ static int retained_retirement_group_ready(pid_t parent,uint64_t pass) {
     return 1;
 }
 
+static void retained_retire_child(struct retained_memory *m) {
+    m->killed=1;
+    if (m->dead) return;
+    if (m->exit_held) CHECK(!native_trace(PTRACE_CONT,m->retained.actor,NULL,NULL) || errno==ESRCH);
+    else CHECK(!kill(m->retained.actor,SIGKILL) || errno==ESRCH);
+}
+
 void retained_barrier_blocked(pid_t pid) {
     struct retained_retirement *r=retained_retirement;
     if (!r || r->stage || !md_task_quiesce_contains(retained_barrier,pid)) return;
@@ -355,9 +395,7 @@ static void retained_retirement_progress(void) {
             CHECK(md_resource_order_state(&r->order)==MD_RESOURCE_ORDER_RUNNING);
             CHECK(!md_buffers_take_reserved(md_memory_buffers(t->memory),&r->buffer));
             r->peer=md_memory_buffer_address(t->memory,&r->buffer);
-            m->killed=1;
-            CHECK(!kill(m->retained.actor,SIGKILL) || errno==ESRCH);
-            if (m->exit_held) CHECK(!native_trace(PTRACE_CONT,m->retained.actor,NULL,NULL) || errno==ESRCH);
+            retained_retire_child(m);
             r->stage=1;
         }
         if (!m->dead || r->stage!=1) return;
@@ -392,7 +430,7 @@ static void retained_retirement_progress(void) {
     }
     for (struct retained_memory *m=retained_work,*next;m;m=next) {
         next=m->work_next;
-        if (!m->retiring || m->members || m->cleaning || m->creator) continue;
+        if (!m->retiring || m->members || m->cleaning || m->creator || m->replacement) continue;
         if (!m->retained.actor) { retained_memory_release(m); continue; }
         pid_t stable_parent,group; int signal;
         long parent=retained_child_identity(m,&stable_parent,&group,&signal)
@@ -407,11 +445,7 @@ static void retained_retirement_progress(void) {
         }
         if (parent==getpid() || (m->dead && parent==-ENOENT)) {
             if (m->dead) { retained_memory_release(m); continue; }
-            if (!m->killed) {
-                m->killed=1;
-                CHECK(!kill(m->retained.actor,SIGKILL) || errno==ESRCH);
-                if (m->exit_held) CHECK(!native_trace(PTRACE_CONT,m->retained.actor,NULL,NULL) || errno==ESRCH);
-            }
+            if (!m->killed) retained_retire_child(m);
             continue;
         }
         /* Existing helper/exit owners finish before the parent/children
@@ -499,6 +533,26 @@ pid_t retained_take(int *status,struct rusage *usage) {
     return 0;
 }
 
+/* Exit custody precedes borrowed-actor dispatch: an exit is not an
+ * acknowledgement of a mapping change or robust-list operation. */
+int retained_actor_exit(pid_t pid,int status) {
+    struct retained_memory *m=retained_actor(pid);
+    if (!m || !m->ready || m->retiring) return 0;
+    int held=WIFSTOPPED(status);
+    unsigned long reason=0;
+    int known=!held || !native_trace(PTRACE_GETEVENTMSG,pid,NULL,&reason);
+    int wait_status=held ? (int)reason : status;
+    int busy=m->cleanup.running || (memory_execution && memory_execution->executor==m);
+    fprintf(stderr,"Shroot: retained memory executor %d: signal=%d exit=%d members=%u state=%s\n",
+        pid,known && WIFSIGNALED(wait_status) ? WTERMSIG(wait_status) : -1,
+        known && WIFEXITED(wait_status) ? WEXITSTATUS(wait_status) : -1,m->members,
+        !held ? "exited" : busy ? "in-flight" : "read-only");
+    if (!held || busy) exit(125);
+    m->cleanup.trace=NULL;
+    m->exit_held=1;
+    return 1;
+}
+
 int retained_event(pid_t pid,int status,const struct rusage *usage) {
     unsigned event=(unsigned)status>>16;
     struct retained_memory *m=retained_actor(pid);
@@ -531,10 +585,7 @@ int retained_event(pid_t pid,int status,const struct rusage *usage) {
             /* The real parent's wait/signalfd must be held before ptrace
              * releases a private child to its final exit and SIGCHLD. */
             m->exit_held=1;
-            if (!m->retiring) {
-                fprintf(stderr,"Shroot: lost retained memory executor %d\n",pid);
-                exit(125);
-            }
+            CHECK(m->retiring);
             if (m->killed) CHECK(!native_trace(PTRACE_CONT,pid,NULL,NULL) || errno==ESRCH);
             return 1;
         }

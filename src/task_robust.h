@@ -19,7 +19,8 @@ struct md_task_robust {
 /* 0 awaits an actor event; 1 completed with the actor still stopped; 2 needs
  * another progress turn. Read-only walks have a bounded per-turn budget so
  * a malformed list cannot monopolize the supervisor event loop. Negative
- * errors retain ownership for cancellation; they never imply cleanup success. */
+ * errors retain ownership for cancellation; they never imply cleanup success.
+ * A NULL tracer permits reads from an exit-held mm but no native effects. */
 int md_task_robust_begin(struct md_task_robust *,long (*trace)(int,pid_t,void *,void *),
     pid_t,const struct md_interception_abi *,uintptr_t head,uint32_t owner);
 int md_task_robust_progress(struct md_task_robust *);

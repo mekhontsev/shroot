@@ -10,6 +10,7 @@
  * The mm pointer is borrowed from the attached guest tasks, not a writer pin. */
 struct retained_memory {
     struct retained_memory *next,*work_next,*indexed;
+    struct retained_memory *previous,*replacement;
     struct md_interception_memory *memory;
     struct md_task_wait_member wait;
     struct md_task_retained retained;
@@ -54,6 +55,7 @@ void retained_progress(void);
 int retained_barrier_event(pid_t pid,int status,const struct rusage *usage);
 void retained_barrier_blocked(pid_t pid);
 int retained_runnable(void);
+int retained_actor_exit(pid_t pid,int status);
 pid_t retained_take(int *status,struct rusage *usage);
 int retained_event(pid_t pid,int status,const struct rusage *usage);
 void retained_cancel(void);

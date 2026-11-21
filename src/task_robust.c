@@ -20,6 +20,7 @@ static int registers(struct md_task_robust *t,struct user_pt_regs *r,int writing
     return trace(t,writing ? PTRACE_SETREGSET : PTRACE_GETREGSET,(void *)NT_PRSTATUS,&io);
 }
 static int execute(struct md_task_robust *t) {
+    if (!t->trace) return -EOWNERDEAD;
     const struct md_robust_request *q=&t->cleanup.request;
     struct user_pt_regs r=md_task_registers_entry(
         q->operation==MD_ROBUST_CMPXCHG ? t->abi.compare_exchange : t->abi.task_call,0,t->pstate);
@@ -48,15 +49,17 @@ int md_task_robust_progress(struct md_task_robust *t) {
 }
 int md_task_robust_begin(struct md_task_robust *t,long (*tracer)(int,pid_t,void *,void *),
         pid_t actor,const struct md_interception_abi *abi,uintptr_t head,uint32_t owner) {
-    if (!t || !tracer || actor<=0 || !abi || !abi->compare_exchange || !abi->exchanged
+    if (!t || actor<=0 || !abi || !abi->compare_exchange || !abi->exchanged
             || !abi->task_call || !abi->task_return || !abi->task_completed
             || !owner || (owner&~FUTEX_TID_MASK)) return -EINVAL;
     if (t->running || (t->actor && t->cleanup.request.operation)) return -EBUSY;
     *t=(struct md_task_robust){.trace=tracer,.actor=actor,.abi=*abi};
-    struct user_pt_regs r;
-    int error=registers(t,&r,0);
-    if (error) return error;
-    t->pstate=r.pstate;
+    if (tracer) {
+        struct user_pt_regs r;
+        int error=registers(t,&r,0);
+        if (error) return error;
+        t->pstate=r.pstate;
+    }
     md_robust_begin(&t->cleanup,head,owner);
     return md_task_robust_progress(t);
 }

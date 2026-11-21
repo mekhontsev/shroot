@@ -420,6 +420,30 @@ static void native_child_membership(void) {
     assert(md_task_parent(child)==-ENOENT);
     puts("PASS native child classification and retirement: parent/child exit ownership, wait class and parenthesized comm");
 }
+static __attribute__((noinline)) void retained_replacement(void) {
+    struct thread *saved=threads,peer={.pid=321,.born=1};
+    struct thread caller={.pid=123,.born=1,.robust.head=5678,.next=&peer};
+    assert(!retained_work && !retained_memories);
+    threads=&caller;
+    struct retained_memory *old=retained_memory_get(&caller);
+    assert(old && old->members==2 && peer.memory_actor==old);
+    old->ready=1; old->exit_held=1; old->pending=1;
+    struct retained_memory *next=retained_memory_get(&caller);
+    assert(next && next!=old && retained_memory_get(&peer)==next && !next->members);
+    retained_replace_finish(next,0);
+    assert(caller.memory_actor==old && peer.memory_actor==old && caller.robust.head==5678);
+    assert(!old->retiring && !old->replacement && old->pending==1);
+    retained_memory_release(next);
+    next=retained_memory_get(&peer); assert(next);
+    retained_replace_finish(next,1);
+    assert(old->retiring && !old->members && !old->pending && !next->previous);
+    assert(next->pending==1 && next->members==2 && caller.memory_actor==next && peer.memory_actor==next);
+    assert(caller.robust.head==5678);
+    retained_memory_release(old);
+    retained_detach(&caller); retained_detach(&peer); retained_memory_release(next);
+    assert(!retained_work && !retained_memories); threads=saved;
+    puts("PASS retained replacement: shared birth, rollback and exact transfer of registrations and pending exits");
+}
 static void retained_retirement_shared_parent(void) {
     enum { CHILDREN=256, PASSES=8 };
     struct retained_memory children[CHILDREN]={0};
@@ -8974,6 +8998,7 @@ int main(void) {
     borrowed_close_release_receipt();
     borrowed_continuations();
     native_child_membership();
+    retained_replacement();
     retained_retirement_shared_parent();
     private_wait_selection();
     private_wait_buffer_cancel();

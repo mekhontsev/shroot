@@ -136,6 +136,21 @@ static void scheduling(void) {
     assert(state==1 && turns>1 && n.word==owner+1);
     assert(md_task_robust_begin(&task,cursor_trace,getpid(),&abi,0,owner)==1);
 }
+static void read_only_cleanup(void) {
+    struct node n={.word=owner+1};
+    struct md_robust_head h=head_for(&n);
+    n.next=(uintptr_t)&h;
+    struct md_interception_abi abi=retained_abi();
+    struct md_task_robust task={0};
+    assert(md_task_robust_begin(&task,NULL,getpid(),&abi,(uintptr_t)&h,owner)==1);
+    n.word=owner|FUTEX_WAITERS;
+    assert(md_task_robust_begin(&task,NULL,getpid(),&abi,(uintptr_t)&h,owner)==-EOWNERDEAD);
+    assert(!task.running && n.word==(owner|FUTEX_WAITERS));
+    task=(struct md_task_robust){0};
+    h.pending=h.next; h.next=(uintptr_t)&h; n.word=0;
+    assert(md_task_robust_begin(&task,NULL,getpid(),&abi,(uintptr_t)&h,owner)==-EOWNERDEAD);
+    assert(task.cleanup.request.operation==MD_ROBUST_WAKE && !task.running);
+}
 static void retained_termination(void) {
     int statuses[]={SIGKILL,0,(PTRACE_EVENT_EXIT<<16)|(SIGTRAP<<8)|0x7f,
         (PTRACE_EVENT_EXEC<<16)|(SIGTRAP<<8)|0x7f};
@@ -598,7 +613,7 @@ int main(int argc,char **argv) {
     }
     if (argc==3 && !strcmp(argv[1],"--native")) { native(argv[2],argv[0]); return 0; }
     assert(argc==1);
-    ordinary(); races(); incomplete(); malformed(); scheduling(); retained_termination();
+    ordinary(); races(); incomplete(); malformed(); scheduling(); read_only_cleanup(); retained_termination();
     puts("PASS robust futex cursor: owner races, waiters, pending operation, malformed list");
     return 0;
 }
