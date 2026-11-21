@@ -677,8 +677,9 @@ independent of OCI parsing and launch-local directory attachments.
   and parent mutation checks use that same membership model. Root is always attached;
   detached directories report zero links and reject enumeration and new entries.
   No pathname reopening or cached native attribute snapshot substitutes for an FD.
-  Final native-leaf resolution returns its fresh `fstatat` observation to stat,
-  avoiding a second lookup of the same pathname. The resolved parent is passed
+  Ordinary native leaves need one `fstatat`. For encoded metadata, a name-only
+  lookup also checks that the backing still matches after reading the private
+  attribute; it does not produce an inotify open event. The resolved parent is passed
   to leaf lookup rather than fetched again. All stat paths share the logical
   attribute projection; native data attributes are never cached across calls.
   Fixed-width leaf-ID encoding preserves the existing format-17 bytes. Word-wise

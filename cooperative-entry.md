@@ -909,9 +909,10 @@ Ordinary and task-affine deferred directory opens use the same path/flag owner.
 
 Native-leaf path resolution can retain the final O_PATH descriptor and its fresh
 fstat together, avoiding a separate pathname stat followed by reopening. The
-walk owns that descriptor until transfer or failure cleanup. Unpinned metadata
-lookups still compare identity after opening an encoded-metadata file: a prior
-pathname stat is not proof that the later descriptor names the same object.
+walk owns that descriptor until transfer or failure cleanup. Name-only metadata
+lookups do not open the file. For encoded metadata, the store reads the private
+attribute without following the final component and rechecks the backing identity
+under its namespace gate. A replacement returns `ESTALE`.
 
 Ordinary interception reuses this provider pin for eligible existing-file opens
 too: the engine transfers it to the origin and opens the data OFD from that exact
