@@ -74,6 +74,8 @@ int shroot_relative_sources(shroot_store *, const struct shroot_io *, shroot_job
 int shroot_launches(shroot_store *, const struct shroot_io *, shroot_job **);
 int shroot_stop(shroot_store *, const char *launch_id, const struct shroot_io *, shroot_job **);
 int shroot_applications(shroot_store *, const struct shroot_io *, shroot_job **);
+/* Offline distribution presentation: optional prettyName, versionId and hex PNG. */
+int shroot_os_info(shroot_store *, const struct shroot_io *, shroot_job **);
 int shroot_icon(shroot_store *, const char *name, const struct shroot_io *, shroot_job **);
 int shroot_export_tree(shroot_store *, const char *guest_path, const char *destination,
     const struct shroot_io *, shroot_job **);

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "image_launch.h"
+#include "image_presentation.h"
 #include "image_io.h"
 #include "image_json.h"
 #include "inode_internal.h"
@@ -63,22 +64,6 @@ static int scan(struct md_inode_store *s, const char *path, unsigned depth, unsi
     }
     close(fd); return r;
 }
-static int icon(struct md_inode_store *s, const char *path) {
-    struct stat node;
-    int status = md_inode_stat(s, -1, path, 0, &node);
-    if (status) return status;
-    if (!S_ISREG(node.st_mode)) return -EINVAL;
-    int fd = md_inode_open(s, -1, path, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
-    if (fd < 0) return fd;
-    struct stat st; unsigned char data[16384];
-    int r = fstat(fd, &st) ? -errno : 0;
-    if (!r && (!S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > (off_t)sizeof(data))) r = -EFBIG;
-    if (!r && pread(fd, data, st.st_size, 0) != st.st_size) r = -EIO;
-    close(fd);
-    if (!r && (st.st_size < 8 || memcmp(data, "\211PNG\r\n\032\n", 8))) r = -EINVAL;
-    if (!r) { for (off_t i = 0; i < st.st_size; ++i) printf("%02x", data[i]); putchar('\n'); }
-    return r;
-}
 int md_image_applications(const char *store, const char *name) {
     struct md_inode_store *s = NULL;
     int r = md_inode_store_open_inspect(store, &s), guest = 0;
@@ -106,22 +91,12 @@ int md_image_applications(const char *store, const char *name) {
         else roots[root_count++] = part;
     }
     if (!r && name) {
-        if (*name == '/') { if (icon(s, name)) puts(""); }
-        else if (strlen(name) > 1024 || strchr(name, '/')) r = -EINVAL;
+        if (*name!='/' && (strlen(name)>1024 || strchr(name,'/'))) r=-EINVAL;
         else {
-            int found = 0; const int sizes[] = {96,64,48,128,32,256,24,16};
-            for (unsigned root = 0; root < root_count && !found; ++root) {
-                char path[PATH_MAX];
-                for (unsigned i = 0; i < sizeof(sizes)/sizeof(*sizes) && !found; ++i) {
-                    int n = snprintf(path, sizeof(path), "%s/icons/hicolor/%dx%d/apps/%s%s", roots[root], sizes[i], sizes[i],
-                        name, strlen(name) >= 4 && !strcmp(name+strlen(name)-4, ".png") ? "" : ".png");
-                    if (n > 0 && n < (int)sizeof(path)) found = !icon(s, path);
-                }
-                int n = snprintf(path, sizeof(path), "%s/pixmaps/%s%s", roots[root], name,
-                    strlen(name) >= 4 && !strcmp(name+strlen(name)-4, ".png") ? "" : ".png");
-                if (!found && n > 0 && n < (int)sizeof(path)) found = !icon(s, path);
-            }
-            if (!found) puts("");
+            unsigned char data[16384];
+            int size=md_image_find_icon(s,roots,root_count,name,0,data,sizeof(data));
+            for (int i=0;i<size;++i) printf("%02x",data[i]);
+            putchar('\n');
         }
     } else if (!r) {
         unsigned count = 0; size_t bytes = 0;

@@ -27,6 +27,7 @@ STORE_OPERATION(shroot_sources, "sources")
 STORE_OPERATION(shroot_relative_sources, "relative-sources")
 STORE_OPERATION(shroot_launches, "launches")
 STORE_OPERATION(shroot_applications, "applications")
+STORE_OPERATION(shroot_os_info, "os-info")
 #undef STORE_OPERATION
 #define STORE_ARGUMENT(name, operation) \
     int name(shroot_store *store, const char *argument, const struct shroot_io *io, shroot_job **out) { \

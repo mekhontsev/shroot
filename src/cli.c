@@ -114,7 +114,7 @@ static int submit(shroot_context *context, int argc, char **argv, shroot_job **o
     struct { const char *name; int (*function)(shroot_store *, const struct shroot_io *, shroot_job **); } unary[] = {
         {"inspect", shroot_inspect}, {"prepare", shroot_prepare}, {"maintain", shroot_maintain},
         {"remove", shroot_remove}, {"sources", shroot_sources}, {"relative-sources", shroot_relative_sources},
-        {"launches", shroot_launches}, {"applications", shroot_applications}
+        {"launches", shroot_launches}, {"applications", shroot_applications}, {"os-info", shroot_os_info}
     };
     r = -EINVAL;
     if (argc == 2) for (size_t i = 0; i < sizeof(unary)/sizeof(*unary); ++i)
@@ -154,7 +154,7 @@ static void usage(void) {
         "  A bare name selects an environment; use ./STORE or /path for a store.\n"
         "  rootfs ARCHIVE NEW_IMAGE | import OCI_LAYOUT NEW_IMAGE --preserve-ownership\n"
         "  create IMAGE NEW_INSTANCE | restore ARCHIVE NEW_INSTANCE\n"
-        "  inspect STORE | prepare STORE | maintain STORE | remove STORE\n"
+        "  inspect STORE | os-info STORE | prepare STORE | maintain STORE | remove STORE\n"
         "  backup STORE NEW_ARCHIVE | sources STORE | launches STORE | stop STORE ID\n"
         "  run STORE [OPTIONS] [-- COMMAND...] | exec STORE [OPTIONS] -- COMMAND...\n"
         "  login STORE [OPTIONS] [-- SHELL...]\n"

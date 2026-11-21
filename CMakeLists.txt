@@ -268,6 +268,7 @@ target_compile_options(shroot-image-http PRIVATE -std=c17 -O2 -Wall -Wextra -Wer
 target_compile_definitions(shroot-image-http PRIVATE SHROOT_VERSION="${SHROOT_VERSION}")
 target_link_libraries(shroot-image-http PRIVATE CURL::libcurl_static)
 guest_executable(image HOST_LIBC ${src}/image_main.c ${src}/process_owner.c ${src}/image_io.c ${src}/image_json.c ${src}/launch_registry.c ${src}/image_launches.c ${src}/image_applications.c
+    ${src}/image_presentation.c
     ${src}/image_import.c ${src}/image_library.c ${src}/image_library_gc.c ${src}/image_registry.c ${src}/image_oci.c ${src}/image_layer.c ${src}/image_pool.c ${src}/image_backup.c ${src}/image_maintenance.c ${src}/image_relocate.c
     ${src}/image_acl.c ${src}/image_publish.c ${src}/image_launch.c ${src}/image_prepare.c ${src}/image_export.c ${src}/guest_accounts.c ${src}/socket_routes.c ${inodes}
     ${namespace_engine} ${mounts} ${src}/image_catalogue.c ${src}/elf_admission.c ${identity} ${src}/proc_paths.c

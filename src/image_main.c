@@ -11,6 +11,7 @@
 #include "launch_registry.h"
 int md_image_launches(const char *store);
 int md_image_applications(const char *store, const char *icon);
+#include "image_presentation.h"
 #include "inode_internal.h"
 #include "launch_identity.h"
 #include <errno.h>
@@ -79,6 +80,7 @@ static int execute(int argc, char **argv) {
     else if (argc == 3 && !strcmp(argv[1], "launches")) r = md_image_launches(argv[2]);
     else if (argc == 4 && !strcmp(argv[1], "stop")) r = md_launch_stop(argv[2], argv[3]);
     else if (argc == 3 && !strcmp(argv[1], "applications")) r = md_image_applications(argv[2], NULL);
+    else if (argc == 3 && !strcmp(argv[1], "os-info")) r = md_image_os_info(argv[2]);
     else if (argc == 4 && !strcmp(argv[1], "icon")) r = md_image_applications(argv[2], argv[3]);
     else if (argc == 5 && !strcmp(argv[1], "export-tree")) r = md_image_export_tree(argv[2], argv[3], argv[4]);
     else if ((argc == 4 || (argc == 5 && !strcmp(argv[4], "--replace"))) && !strcmp(argv[1], "resolver"))

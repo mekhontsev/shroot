@@ -58,6 +58,9 @@ add_test(NAME benchmark_signal_checkpoint COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_signal_checkpoint.py" "${CMAKE_CURRENT_BINARY_DIR}" --executor local --mode benchmark)
 set_tests_properties(benchmark_signal_checkpoint PROPERTIES LABELS benchmark TIMEOUT 100 RUN_SERIAL TRUE)
 shroot_component(lwip_context test_lwip_context)
+add_test(NAME component_os_info COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_os_info.py" "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties(component_os_info PROPERTIES LABELS component TIMEOUT 30)
 foreach(case signals uts mapping ipc registry network route route-lifetimes socket-filter ethernet
         tc endpoint nft launch private-loopback ipv6 tun ownership)
     shroot_component(task_resources_${case} test_task_resources --case ${case})

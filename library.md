@@ -4,6 +4,14 @@ A library is a directory of named, independently writable
 environments. The native image owner manages it; the CLI and `libshroot` use the
 same implementation. Names are local to that library, not global distributions.
 
+`shroot os-info /path/to/store` reads distribution presentation without
+starting a guest. It returns JSON with `prettyName`, `versionId` and a
+hex-encoded PNG (empty fields mean unavailable). The guest's
+`/etc/os-release` takes precedence over `/usr/lib/os-release`. A named
+logo is resolved in system icon directories, not on the host or the network.
+These values are display hints, not a store identity or a software version
+constraint.
+
 Without options, the standalone CLI uses the absolute `$XDG_DATA_HOME/shroot`,
 or `$HOME/.local/share/shroot` when XDG data home is unset, empty or relative.
 The Termux package selects its target `$PREFIX/var/lib/shroot` at build time;
