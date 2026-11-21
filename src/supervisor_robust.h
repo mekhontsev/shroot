@@ -19,7 +19,7 @@ struct retained_memory {
     struct thread *creator, *terminal, *parent;
     int parent_exit_signal;
     unsigned members,pending;
-    int ready, cleaning, retiring, dead, checkpoint_suspended, killed, exit_held,queued;
+    int ready, cleaning, retiring, dead, checkpoint_suspended, killed, exit_held,core_exit,queued;
     long error;
 };
 

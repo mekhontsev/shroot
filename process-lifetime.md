@@ -137,6 +137,10 @@ replacement; registrations and queued exits transfer only after it is ready.
 The old child is reaped through the usual parent wait path. Loss during an
 in-flight effect, or a required atomic update or wake without a live executor,
 is a supervision failure, never a successful cleanup.
+When the kernel is collecting a core dump across address-space peers, the
+helper must leave its exit stop: keeping it there can block the faulting task
+before its own exit. Read-only cleanup then uses the guest's actual pre-exit
+stop, never a post-exec image. The parent receives its child's native signal.
 Registration, cleanup and pending terminal replay retain exclusive custody of
 the guest continuation. The shared task-action admission excludes that task
 from filter installation, FD capture and temporary-FD retirement, even when
@@ -187,7 +191,7 @@ context and returns the terminal event to its owner, not to stale registers. Ado
 transfers reaping to the next real parent or the supervisor. This does not add
 ordinary read/write interception, periodic scans or synthetic child notices.
 
-`test_thread_identity_runtime.py --case robust` tests ten cases both directly
+`test_thread_identity_runtime.py --case robust` tests eleven cases both directly
 and in a logical PID namespace with stock glibc/musl. `--native-control` compares
 the same static fixture outside Shroot. On the qualified 6.12.23 device, native
 nonleader exec does not publish owner death for the tested process-shared mutex;

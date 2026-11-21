@@ -114,13 +114,13 @@ long md_task_umask(int tid) {
     RAW1(close,fd);
     return result;
 }
-long md_task_parent(int tid) {
-    char text[1024];
+static long status_decimal(int tid,const char *field) {
+    char text[2048];
     long result=task_status(tid,text,sizeof(text));
     if (result<0) return result;
     for (char *p=text;*p;++p) {
-        if ((p!=text && p[-1]!='\n') || !md_prefix(p,"PPid:")) continue;
-        p+=5;
+        if ((p!=text && p[-1]!='\n') || !md_prefix(p,field)) continue;
+        p+=md_length(field);
         while (*p==' ' || *p=='\t') ++p;
         unsigned value=0,digits=0;
         while (*p>='0' && *p<='9') {
@@ -130,6 +130,11 @@ long md_task_parent(int tid) {
         return !digits || *p!='\n' ? -EIO : (long)value;
     }
     return -ENOTSUP;
+}
+long md_task_parent(int tid) { return status_decimal(tid,"PPid:"); }
+long md_task_core_dumping(int tid) {
+    long value=status_decimal(tid,"CoreDumping:");
+    return value>1 ? -EIO : value;
 }
 int md_task_child_class(pid_t tid,pid_t *group,int *exit_signal) {
     char path[64]="/proc/",text[2048];

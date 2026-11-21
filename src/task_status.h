@@ -10,6 +10,8 @@ long md_task_umask_fd(int fd);
 long md_task_umask(int tid);
 long md_task_signal_dispositions(int tid, uint64_t *caught, uint64_t *ignored);
 long md_task_parent(int tid);
+/* 0/1 from the kernel, or a negative error when not observable. */
+long md_task_core_dumping(int tid);
 int md_task_child_class(pid_t,pid_t *group,int *exit_signal);
 /* Cross-task prlimit may be denied by Android while its proc snapshot is readable. */
 long md_task_limit(int tid,unsigned resource,struct rlimit *value);

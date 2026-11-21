@@ -12,6 +12,7 @@
 #include <string.h>
 #include <grp.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/mman.h>
 #include <sys/signalfd.h>
 #include <sys/syscall.h>
@@ -372,6 +373,23 @@ static void robust_process(const char *mode) {
     assert(!munmap(lock,sizeof(*lock)));
     printf("PASS robust shared mutex owner %s\n",mode);
 }
+static void robust_core(void) {
+    pid_t child=fork(); assert(child>=0);
+    if (!child) {
+        struct rlimit limit={0,0};
+        assert(!setrlimit(RLIMIT_CORE,&limit));
+        struct robust_list_head list={0};
+        list.list.next=&list.list;
+        assert(!syscall(SYS_set_robust_list,&list,sizeof(list)));
+        assert(signal(SIGILL,SIG_DFL)!=SIG_ERR);
+        __asm__ volatile(".inst 0"); /* A synchronous ARM64 illegal instruction. */
+        _exit(120);
+    }
+    int status;
+    assert(waitpid(child,&status,0)==child && WIFSIGNALED(status) && WTERMSIG(status)==SIGILL);
+    assert(waitpid(-1,&status,__WALL|WNOHANG)==-1 && errno==ECHILD);
+    puts("PASS robust core signal: parent reaps its own child with SIGILL");
+}
 static void robust_orphan(void) {
     assert(!prctl(PR_SET_CHILD_SUBREAPER,1));
     pthread_mutex_t *lock=mmap(NULL,sizeof(*lock),PROT_READ|PROT_WRITE,MAP_SHARED|MAP_ANONYMOUS,-1,0);
@@ -409,6 +427,7 @@ int main(int argc,char **argv) {
         if (!strcmp(argv[1],"--robust-thread-children")) { robust_thread_children(); return 0; }
         if (!strcmp(argv[1],"--robust-notices")) { robust_notices(); return 0; }
         if (!strcmp(argv[1],"--robust-orphan")) { robust_orphan(); return 0; }
+        if (!strcmp(argv[1],"--robust-core")) { robust_core(); return 0; }
         if (!strncmp(argv[1],"--robust-",9)) { robust_process(argv[1]+9); return 0; }
         assert(!strcmp(argv[1],"--pid-futex"));
         priority_inheritance(getpid()==1);

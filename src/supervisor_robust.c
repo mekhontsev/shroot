@@ -156,6 +156,9 @@ int robust_call(struct thread *t,const struct seccomp_data *call,struct user_pt_
     if (call->args[1]!=sizeof(struct md_robust_head)) {
         return_task_value(t,regs,-EINVAL,boundary); return 1;
     }
+    if (t->memory_actor && t->memory_actor->core_exit) {
+        return_task_value(t,regs,-ESRCH,boundary); return 1;
+    }
     if (!call->args[0] || (t->terminal_observation && t->memory_actor && t->memory_actor->ready
             && !t->memory_actor->exit_held)) {
         robust_register(t,call->args[0]);
@@ -269,6 +272,13 @@ static void robust_cleanup_complete(struct retained_memory *m,int state) {
     m->cleanup=(struct md_task_robust){0};
 }
 
+static pid_t retained_terminal_reader(const struct thread *t) {
+    /* An exit stop still owns the old mm. An exec stop already names the new
+     * image, and a final wait status no longer owns a task at all. */
+    return t && WIFSTOPPED(t->robust.status) && (unsigned)t->robust.status>>16==PTRACE_EVENT_EXIT
+        ? t->pid : 0;
+}
+
 void retained_progress(void) {
     if (!retained_work) return;
     retained_retirement_progress();
@@ -282,8 +292,10 @@ void retained_progress(void) {
             for (struct thread *t=threads;t;t=t->next) if (t->pid && t->memory_actor==m && t->robust.terminal==1) {
                 --m->pending;
                 m->terminal=t;
-                robust_cleanup_complete(m,md_task_robust_begin(&m->cleanup,m->exit_held ? NULL : native_trace,m->retained.actor,
-                    &abi,t->robust.subject->robust.head,t->robust.subject->robust.tid));
+                pid_t reader=m->core_exit ? retained_terminal_reader(t) : m->retained.actor;
+                robust_cleanup_complete(m,reader ? md_task_robust_begin(&m->cleanup,
+                    m->exit_held || m->core_exit ? NULL : native_trace,reader,&abi,
+                    t->robust.subject->robust.head,t->robust.subject->robust.tid) : -EOWNERDEAD);
                 break;
             }
         }
@@ -357,6 +369,7 @@ static int retained_retirement_group_ready(pid_t parent,uint64_t pass) {
 }
 
 static void retained_retire_child(struct retained_memory *m) {
+    if (m->killed) return;
     m->killed=1;
     if (m->dead) return;
     if (m->exit_held) CHECK(!native_trace(PTRACE_CONT,m->retained.actor,NULL,NULL) || errno==ESRCH);
@@ -539,16 +552,27 @@ int retained_actor_exit(pid_t pid,int status) {
     struct retained_memory *m=retained_actor(pid);
     if (!m || !m->ready || m->retiring) return 0;
     int held=WIFSTOPPED(status);
+    if (m->core_exit && !held) { m->dead=1; return 1; }
     unsigned long reason=0;
     int known=!held || !native_trace(PTRACE_GETEVENTMSG,pid,NULL,&reason);
     int wait_status=held ? (int)reason : status;
     int busy=m->cleanup.running || (memory_execution && memory_execution->executor==m);
+    long dumping=held && !busy ? md_task_core_dumping(pid) : 0;
     fprintf(stderr,"Shroot: retained memory executor %d: signal=%d exit=%d members=%u state=%s\n",
         pid,known && WIFSIGNALED(wait_status) ? WTERMSIG(wait_status) : -1,
         known && WIFEXITED(wait_status) ? WEXITSTATUS(wait_status) : -1,m->members,
-        !held ? "exited" : busy ? "in-flight" : "read-only");
-    if (!held || busy) exit(125);
+        !held ? "exited" : busy ? "in-flight" : dumping<0 ? "core-state-unavailable"
+            : dumping ? "core-dump" : "read-only");
+    if (!held || busy || dumping<0) exit(125);
     m->cleanup.trace=NULL;
+    if (dumping==1) {
+        /* Some kernels wait for every CLONE_VM peer, including private
+         * children in other thread groups, before the dumper can exit. */
+        if (m->cleaning && !(m->cleanup.actor=retained_terminal_reader(m->terminal))) exit(125);
+        m->core_exit=1; m->killed=1;
+        CHECK(!native_trace(PTRACE_CONT,pid,NULL,NULL) || errno==ESRCH);
+        return 1;
+    }
     m->exit_held=1;
     return 1;
 }

@@ -51,7 +51,7 @@ def main():
                 assert 'PASS PI futex admission' in output, output
             if args.case in ('all', 'robust'):
                 for case in ('query', 'thread', 'exit', 'kill', 'exec', 'thread-exec',
-                             'children', 'thread-children', 'notices', 'orphan'):
+                             'children', 'thread-children', 'notices', 'orphan', 'core'):
                     record = dict(name='robust-' + case, pidNamespace=bool(wrapper), native=native, passed=False)
                     suite.report['cases'].append(record)
                     try:

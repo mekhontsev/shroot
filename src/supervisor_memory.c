@@ -1552,7 +1552,9 @@ void memory_progress(void) {
         if (execution->error) { memory_finish(execution); return; }
         execution->executor=retained_memory_get(t);
         if (!execution->executor) { execution->error=-ENOMEM; memory_finish(execution); return; }
-        if (execution->executor->exit_held) { execution->error=-EOWNERDEAD; memory_finish(execution); return; }
+        if (execution->executor->exit_held || execution->executor->core_exit) {
+            execution->error=-EOWNERDEAD; memory_finish(execution); return;
+        }
         execution->stage=MEMORY_ACTOR;
         if (!execution->executor->ready) {
             /* The caller already owns the mm turn and writer barrier. Reuse
