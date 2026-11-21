@@ -2,12 +2,14 @@
 
 **Run ARM64 Linux environments on Android and Linux, without root or a VM.**
 
-Shroot is a native userspace runtime and environment manager. It runs stock
-Linux programs on the host kernel and supplies filesystem, credential,
-namespace and networking interfaces that the host does not expose to the caller.
+Install a distribution from an OCI image or rootfs archive, then run its
+unmodified binaries on the host kernel. The same native runtime works in
+Termux, under an Android app's own UID, and as an ordinary user on ARM64 Linux.
+Workloads include systemd, sandboxed Chromium and k3s.
 
-Use the `shroot` CLI directly, or integrate the [`libshroot` C API](embedding.md)
-into another project. Both use the same runtime, environment catalog and storage.
+Use the `shroot` CLI for your own environments or the [`libshroot` C API](embedding.md)
+to add Linux to another application. Both manage the same stores; neither
+requires Java or an Android service.
 
 [Get started](#get-started) |
 [Build](#build) |
@@ -45,13 +47,12 @@ capabilities; it does not change SELinux or silently elevate privileges.
 See [host requirements](architecture.md#execution-policy) and
 [kernel compatibility](kernel-compatibility.md).
 
-**Termux (aarch64):** starting with v1.0.0, stable [GitHub Releases](https://github.com/mekhontsev/shroot/releases)
-provide a native package for the standard Termux prefix. To install or upgrade,
-choose a published tag and run in Termux:
+**Termux (aarch64):** install the native package from the
+[latest stable release](https://github.com/mekhontsev/shroot/releases/latest).
+Run in Termux:
 
 ```sh
-tag=v1.0.0
-url="https://github.com/mekhontsev/shroot/releases/download/$tag"
+url="https://github.com/mekhontsev/shroot/releases/latest/download"
 pkg=shroot-termux-aarch64.deb
 curl -fLO "$url/$pkg" && curl -fLO "$url/$pkg.sha256" &&
   sha256sum -c "$pkg.sha256" && apt install "./$pkg"
@@ -59,7 +60,12 @@ curl -fLO "$url/$pkg" && curl -fLO "$url/$pkg.sha256" &&
 
 No root, extra APK or APT repository is needed. APT installs the runtime;
 your environments stay in `$PREFIX/var/lib/shroot` across package upgrades.
-Use a newer release tag to update. For a source checkout, see [Build](#build).
+Run the same commands to update. For a source checkout, see [Build](#build).
+
+**ARM64 Linux:** download the Linux bundle and its matching checksum from the
+same release. Verify the downloaded archive with `sha256sum -c <checksum-file>`,
+then unpack it with `tar -xzf <archive> --strip-components=1 -C "$HOME/.local"`
+after creating that directory. Put `$HOME/.local/bin` on your `PATH`.
 
 Once Shroot is installed, create an ARM64 environment from an OCI registry
 and open its shell:

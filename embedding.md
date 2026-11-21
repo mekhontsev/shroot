@@ -83,8 +83,9 @@ audit its ELF dependencies and execute the shared native client/CLI workflow.
 Cross-built archives use the same layout audit without executing target code:
 
 ```sh
-python3 tests/audit_bundle.py artifacts/shroot-1.0.0-dev-android-aarch64.tar.gz \
-    --readelf /path/to/ndk/llvm-readelf --system Android --version 1.0.0-dev --production
+version=$(cat VERSION)
+python3 tests/audit_bundle.py "artifacts/shroot-$version-android-aarch64.tar.gz" \
+    --readelf /path/to/ndk/llvm-readelf --system Android --version "$version" --production
 ```
 
 The audit verifies the checksum, helper set, dependency notices, ARM64 ELF
