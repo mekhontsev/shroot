@@ -11,12 +11,28 @@ Use the `shroot` CLI for your own environments or the [`libshroot` C API](embedd
 to add Linux to another application. Both manage the same stores; neither
 requires Java or an Android service.
 
-[Get started](#get-started) |
+[Install in Termux](#install-in-termux) |
+[Start a distribution](#get-started) |
 [Build](#build) |
 [Embed](embedding.md) |
 [Architecture](architecture.md) |
 [Host tests](tests/README.md#qualified-hosts) |
 [Distribution matrix](tests/validation-matrix.md)
+
+## Install In Termux
+
+Run these commands in **aarch64 Termux** to install or upgrade Shroot directly
+from the [latest GitHub release](https://github.com/mekhontsev/shroot/releases/latest):
+
+```sh
+url="https://github.com/mekhontsev/shroot/releases/latest/download"
+pkg=shroot-termux-aarch64.deb
+curl -fLO "$url/$pkg" && curl -fLO "$url/$pkg.sha256" &&
+  sha256sum -c "$pkg.sha256" && apt install "./$pkg"
+```
+
+No root, extra APK or APT repository is needed. Environments stay in
+`$PREFIX/var/lib/shroot` across package upgrades. Next, [install a distribution](#get-started).
 
 ## What It Runs
 
@@ -48,23 +64,9 @@ The host launches the native Shroot runtime. The distribution lives in Shroot's
 environment store, where Shroot's own ELF loader opens and loads guest programs.
 See [kernel compatibility](kernel-compatibility.md) for host requirements.
 
-**Termux (aarch64):** install the native package from the
-[latest stable release](https://github.com/mekhontsev/shroot/releases/latest).
-Run in Termux:
-
-```sh
-url="https://github.com/mekhontsev/shroot/releases/latest/download"
-pkg=shroot-termux-aarch64.deb
-curl -fLO "$url/$pkg" && curl -fLO "$url/$pkg.sha256" &&
-  sha256sum -c "$pkg.sha256" && apt install "./$pkg"
-```
-
-No root, extra APK or APT repository is needed. APT installs the runtime;
-your environments stay in `$PREFIX/var/lib/shroot` across package upgrades.
-Run the same commands to update. For a source checkout, see [Build](#build).
-
 **ARM64 Linux:** download the Linux bundle and its matching checksum from the
-same release. Verify the downloaded archive with `sha256sum -c <checksum-file>`,
+[latest release](https://github.com/mekhontsev/shroot/releases/latest).
+Verify the downloaded archive with `sha256sum -c <checksum-file>`,
 then unpack it with `tar -xzf <archive> --strip-components=1 -C "$HOME/.local"`
 after creating that directory. Put `$HOME/.local/bin` on your `PATH`.
 
