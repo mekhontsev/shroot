@@ -148,14 +148,11 @@ static int image_layout_call(struct thread *t,struct user_pt_regs *regs) {
         regs->regs[3]=MREMAP_MAYMOVE|MREMAP_FIXED;
         regs->regs[4]=bootstrap_layout.base+segment->offset;
         move->expected=regs->regs[4];
-    } else if (move->step==bootstrap_layout.count+1) {
-        number=SYS_munmap;
-        regs->regs[0]=move->source;
-        regs->regs[1]=bootstrap_layout.size;
-        move->expected=0;
     } else {
+        /* mremap has removed each source segment. Gaps between original
+         * PT_LOAD mappings were never ours; only trim the new reservation. */
         number=SYS_munmap;
-        int prefix=move->step==bootstrap_layout.count+2;
+        int prefix=move->step==bootstrap_layout.count+1;
         regs->regs[0]=prefix ? move->allocation : bootstrap_layout.base+bootstrap_layout.size;
         regs->regs[1]=prefix ? move->prefix : move->suffix;
         move->expected=0;
@@ -226,9 +223,9 @@ int image_layout_event(struct thread *t,int status) {
     if (move->step && move->step<=bootstrap_layout.count
             && bootstrap_layout.segments[move->step-1].entry) move->code_moved=1;
     ++move->step;
-    if (move->step==bootstrap_layout.count+2 && !move->prefix) ++move->step;
-    if (move->step==bootstrap_layout.count+3 && !move->suffix) ++move->step;
-    if (move->step<=bootstrap_layout.count+3) {
+    if (move->step==bootstrap_layout.count+1 && !move->prefix) ++move->step;
+    if (move->step==bootstrap_layout.count+2 && !move->suffix) ++move->step;
+    if (move->step<=bootstrap_layout.count+2) {
         regs=move->initial;
         regs.pc=(move->code_moved ? bootstrap_layout.base : move->source)+bootstrap_layout.entry;
         move->entered=0;

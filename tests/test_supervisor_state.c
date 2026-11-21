@@ -162,7 +162,7 @@ static void bootstrap_reservation(void) {
     move.allocation=bootstrap_layout.base-md_page_size;
     move.prefix=md_page_size; move.suffix=2*md_page_size;
     for (unsigned i=0;i<2;++i) {
-        move.step=bootstrap_layout.count+2+i;
+        move.step=bootstrap_layout.count+1+i;
         struct user_pt_regs regs={0}; assert(image_layout_call(&t,&regs));
         assert(regs.regs[8]==SYS_munmap);
         assert(regs.regs[0]==(i ? bootstrap_layout.base+bootstrap_layout.size : move.allocation));
