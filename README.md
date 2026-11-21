@@ -40,12 +40,13 @@ and a Raspberry Pi 5 on 16 KiB pages. Those are distinct configurations.
 
 ## Get Started
 
-Use an ARM64 Android or Linux host with **Linux 5.15 or newer** and executable
-storage. Android application UIDs, Android Shell and ordinary unprivileged Linux
-users run the same engine. Shroot checks the selected identity's actual
-capabilities; it does not change SELinux or silently elevate privileges.
-See [host requirements](architecture.md#execution-policy) and
-[kernel compatibility](kernel-compatibility.md).
+Shroot runs on **ARM64 Android and ARM64 Linux with a host kernel of 5.15 or
+newer**. On Android it runs under an ordinary app UID (including Termux) or
+Android Shell; on Linux it runs as your normal user.
+
+The host launches the native Shroot runtime. The distribution lives in Shroot's
+environment store, where Shroot's own ELF loader opens and loads guest programs.
+See [kernel compatibility](kernel-compatibility.md) for host requirements.
 
 **Termux (aarch64):** install the native package from the
 [latest stable release](https://github.com/mekhontsev/shroot/releases/latest).
