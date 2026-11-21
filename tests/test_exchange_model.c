@@ -34,11 +34,13 @@ static int scheduled_word(const atomic_uint *word) {
         word==&channel.awake || word==&channel.control_awake;
 }
 static unsigned observe(const atomic_uint *word,memory_order order) {
-    if (!scheduled_word(word)) return atomic_load_explicit(word,order);
-    assert(order==memory_order_seq_cst);
-    enter(word==&channel.state ? "check-state" : "check-peer");
+    int scheduled=scheduled_word(word);
+    if (scheduled) {
+        assert(order==memory_order_seq_cst);
+        enter(word==&channel.state ? "check-state" : "check-peer");
+    }
     unsigned value=atomic_load_explicit(word,order);
-    leave();
+    if (scheduled) leave();
     return value;
 }
 static void publish(atomic_uint *word,unsigned value,memory_order order) {
