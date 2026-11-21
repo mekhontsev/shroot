@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "network_neighbor.h"
+#include "temporary_directory.h"
 #include "network_vxlan.h"
 #include "network_internal.h"
 #include "network_tc.h"
@@ -412,6 +413,7 @@ void md_network_namespace_release(struct md_network_namespace *n) {
     pthread_mutex_unlock(&f->lock);
     if (atomic_fetch_sub_explicit(&f->references,1,memory_order_acq_rel)==1) {
         md_network_forward_shutdown(f);
+        if (f->loopback_directory) md_temporary_directory_release(f->loopback_directory-1);
         pthread_mutex_destroy(&f->lock); free(f);
     }
     md_network_filter_free(n->filter);

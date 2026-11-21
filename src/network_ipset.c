@@ -310,7 +310,7 @@ long md_network_ipset(struct md_network_namespace *n,const struct md_identity *i
         else next->generation=md_network_filter_next_generation(n->filter);
     }
     if (!error) error=dispatch(writing ? next : n->filter,h,port,&out);
-    if (!error && writing) error=md_network_filter_prepare(n,next,&update);
+    if (!error && writing) error=md_network_filter_prepare(n,next,&update,NULL);
     if (error) out.size=0;
     int encoded=md_network_message_done(&out,h,port,error,dump,capped);
     long result=encoded ? encoded : publication && out.size ? publication->publish(publication->context,out.data,out.size) : (long)out.size;

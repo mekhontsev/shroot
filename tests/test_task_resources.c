@@ -603,6 +603,7 @@ void test_network_tc(void);
 void test_network_endpoint(void);
 void test_network_nft(void);
 void test_network_launch(void);
+void test_network_loopback(void);
 void test_network_ipv6(void);
 void test_network_tun(void);
 void test_task_registry_exit(void);
@@ -702,7 +703,7 @@ int main(int argc,char **argv) {
         {"route",test_network_route},{"route-lifetimes",test_network_route_lifetimes},
         {"socket-filter",test_socket_filter},{"ethernet",test_network_ethernet},
         {"tc",test_network_tc},{"endpoint",test_network_endpoint},
-        {"nft",test_network_nft},{"launch",test_network_launch},
+        {"nft",test_network_nft},{"launch",test_network_launch},{"private-loopback",test_network_loopback},
         {"ipv6",test_network_ipv6},{"tun",test_network_tun},{"ownership",ownership}};
     unsigned executed=0;
     for (unsigned i=0;i<sizeof(cases)/sizeof(*cases);++i) {

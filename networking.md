@@ -84,6 +84,14 @@ these logical addresses without sharing ports or owners. The supervisor owns
 both namespaces; the fabric's peer list remains weak, avoiding a reference cycle.
 Routed remains a supported low-level mode, not an obsolete bridge alias.
 
+Private loopback normally uses host IP sockets. Only with `--network none`,
+when the host denies creation of a TCP or UDP socket with `EPERM` or `EACCES`,
+Shroot carries same-namespace IPv4/IPv6 loopback traffic over private Unix
+sockets. Port allocation, bind conflicts, logical names and firewall admission
+still belong to the network namespace. The carrier has no uplink or published
+port; unsupported IP options, ancillary data and routes requiring a relay
+are not silently passed through. Ordinary connected reads and writes stay native.
+
 The profile resolves `--subnet`, `--ip`, `--ip6` and `--gateway` once before
 preparation. Both topology and publication rules consume the same typed family
 configuration. Original strings are borrowed only to replay arguments through

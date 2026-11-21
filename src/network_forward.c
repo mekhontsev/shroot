@@ -1050,7 +1050,7 @@ static void restore_reserved(struct md_network_forward *f,struct listener *l) {
     epoll_ctl(f->epoll,EPOLL_CTL_DEL,l->fd,NULL); close(l->fd);
     l->fd=l->reserved; l->reserved=-1; l->listening=l->active=0;
 }
-int md_network_forward_prepare(struct md_network_namespace *n,struct md_network_filter *filter,struct md_network_forward_update **out) {
+int md_network_forward_prepare(struct md_network_namespace *n,struct md_network_filter *filter,struct md_network_forward_update **out,struct md_filter_port *failed) {
     *out=NULL;
     struct md_filter_port ports[512]; size_t count=0;
     int error=0;
@@ -1066,7 +1066,8 @@ int md_network_forward_prepare(struct md_network_namespace *n,struct md_network_
     error=ensure(n->fabric); if (error) return error;
     struct md_network_forward_update *u=calloc(1,sizeof(*u)); if (!u) return -ENOMEM;
     u->owner=n->fabric->forward; u->space=n->inode;
-    for (size_t i=0;!error && i<count;++i) {
+    size_t i=0;
+    for (;i<count;++i) {
         struct md_inet_address address={.ip=ports[i].address,.port=ports[i].port};
         int type=ports[i].protocol==IPPROTO_TCP ? SOCK_STREAM : SOCK_DGRAM;
         struct listener *l=u->owner->ports;
@@ -1082,9 +1083,12 @@ int md_network_forward_prepare(struct md_network_namespace *n,struct md_network_
         }
         u->reuse[u->count]=l->reuse;
         u->ports[u->count++]=l;
-        if (type==SOCK_DGRAM) error=listener_reuse(l,0);
+        if (type==SOCK_DGRAM && (error=listener_reuse(l,0))) break;
     }
-    if (error) { md_network_forward_abort(u); return error; }
+    if (error) {
+        if (failed) *failed=ports[i];
+        md_network_forward_abort(u); return error;
+    }
     *out=u; return 0;
 }
 void md_network_forward_abort(struct md_network_forward_update *u) {

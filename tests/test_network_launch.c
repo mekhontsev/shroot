@@ -292,7 +292,7 @@ static void reserved_publication(void) {
     assert(!md_network_forward_bind(n,&token,SOCK_STREAM,&logical,0,&reservation));
     md_network_forward_bound(reservation,1);
     port_state(&address,0);
-    assert(!md_network_forward_prepare(n,&f,&update));
+    assert(!md_network_forward_prepare(n,&f,&update,NULL));
     md_network_forward_abort(update);
     port_state(&address,0);
     int occupied=-1;
@@ -301,30 +301,32 @@ static void reserved_publication(void) {
     uint16_t port=htons(busy);
     memcpy(rules[1].expressions[5].value,&port,2);
     f.rules=rules; f.rule_count=2;
-    assert(md_network_forward_prepare(n,&f,&update)==-EADDRINUSE && !update);
+    struct md_filter_port failed={0};
+    assert(md_network_forward_prepare(n,&f,&update,&failed)==-EADDRINUSE && !update);
+    assert(failed.port==port && failed.protocol==IPPROTO_TCP);
     port_state(&address,0);
     close(occupied); f.rules=&rule; f.rule_count=1;
     for (unsigned i=0;i<3;++i) {
-        assert(!md_network_forward_prepare(n,&f,&update));
+        assert(!md_network_forward_prepare(n,&f,&update,NULL));
         md_network_forward_commit(update);
         port_state(&address,1);
-        assert(!md_network_forward_prepare(n,NULL,&update));
+        assert(!md_network_forward_prepare(n,NULL,&update,NULL));
         md_network_forward_commit(update);
         port_state(&address,0);
     }
-    assert(!md_network_forward_prepare(n,&f,&update));
+    assert(!md_network_forward_prepare(n,&f,&update,NULL));
     md_network_forward_commit(update);
     assert(!md_network_forward_listen(n,&token,4));
-    assert(!md_network_forward_prepare(n,NULL,&update));
+    assert(!md_network_forward_prepare(n,NULL,&update,NULL));
     md_network_forward_commit(update);
     port_state(&address,1);
     md_network_forward_endpoint_closed(n,&token);
     /* A guest may reserve a port after NAT publication, then outlive it. */
-    assert(!md_network_forward_prepare(n,&f,&update));
+    assert(!md_network_forward_prepare(n,&f,&update,NULL));
     md_network_forward_commit(update);
     assert(!md_network_forward_bind(n,&token,SOCK_STREAM,&logical,0,&reservation));
     md_network_forward_bound(reservation,1);
-    assert(!md_network_forward_prepare(n,NULL,&update));
+    assert(!md_network_forward_prepare(n,NULL,&update,NULL));
     md_network_forward_commit(update);
     port_state(&address,0);
     md_network_forward_endpoint_closed(n,&token);
@@ -339,11 +341,11 @@ static void reserved_publication(void) {
     for (unsigned stage=0;stage<5;++stage) {
         pthread_mutex_lock(&n->fabric->lock);
         if (stage==1 || stage==3) {
-            assert(!md_network_forward_prepare(n,&f,&update));
+            assert(!md_network_forward_prepare(n,&f,&update,NULL));
             if (stage==1) md_network_forward_abort(update);
             else md_network_forward_commit(update);
         } else if (stage==4) {
-            assert(!md_network_forward_prepare(n,NULL,&update));
+            assert(!md_network_forward_prepare(n,NULL,&update,NULL));
             md_network_forward_commit(update);
         }
         pthread_mutex_unlock(&n->fabric->lock);

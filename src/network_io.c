@@ -111,7 +111,8 @@ int md_network_io_progress(struct md_network_io *n,struct md_ipc_io *io,struct m
     int fd=(*fds)->fds[0];
     long nr=n->number;
     if (nr==SYS_setsockopt || nr==SYS_getsockopt) {
-        if (md_network_endpoint_option(n->args[1],n->args[2]))
+        if (md_network_endpoint_option(n->args[1],n->args[2]) || (md_network_endpoint_local_carrier(n->endpoint)
+                && !(n->args[1]==SOL_SOCKET && n->args[2]==SO_BINDTODEVICE)))
             *result=md_network_endpoint_sockopt(n->endpoint,fd,n->identity,nr==SYS_setsockopt,n->args[1],n->args[2],
                 message->control,&message->address_size);
         else if (n->args[1]!=SOL_SOCKET || n->args[2]!=SO_BINDTODEVICE) *result=-ENOPROTOOPT;
@@ -144,6 +145,7 @@ int md_network_io_progress(struct md_network_io *n,struct md_ipc_io *io,struct m
             unsigned family=md_network_endpoint_family(n->endpoint);
             struct md_network_packet_info value={.source=md_ip_any(family),.destination=md_ip_any(family)},*info=NULL;
             int error=message->control_size>sizeof(message->control) ? -EMSGSIZE
+                : sending && message->control_size && md_network_endpoint_local_carrier(n->endpoint) ? -EOPNOTSUPP
                 : sending ? packet_info(message->control,message->control_size,message->flags,1,refs,&count,&value) : 0;
             if (!error && count) {
                 struct md_network_packet_info address=read_info(refs);

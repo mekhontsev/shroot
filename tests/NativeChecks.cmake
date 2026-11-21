@@ -59,7 +59,7 @@ add_test(NAME benchmark_signal_checkpoint COMMAND "${Python3_EXECUTABLE}"
 set_tests_properties(benchmark_signal_checkpoint PROPERTIES LABELS benchmark TIMEOUT 100 RUN_SERIAL TRUE)
 shroot_component(lwip_context test_lwip_context)
 foreach(case signals uts mapping ipc registry network route route-lifetimes socket-filter ethernet
-        tc endpoint nft launch ipv6 tun ownership)
+        tc endpoint nft launch private-loopback ipv6 tun ownership)
     shroot_component(task_resources_${case} test_task_resources --case ${case})
 endforeach()
 foreach(mode exit kill exec exec-fault exec-real-first exec-private-first exec-directed

@@ -149,7 +149,11 @@ unsigned domain_descriptor_policy(struct thread *t,const struct seccomp_data *ca
         && md_network_socket_namespace(object);
     if (md_network_socket_offline(object)) policy|=MD_DISPATCH_OFFLINE_SOCKET;
     if (md_network_socket_control(object) || interface) policy|=MD_DISPATCH_NETWORK_CONTROL;
-    if (md_network_endpoint_is(object) && !interface) policy|=MD_DISPATCH_NETWORK_DATA;
+    if (md_network_endpoint_is(object) && !interface) {
+        policy|=MD_DISPATCH_NETWORK_DATA;
+        if ((call->nr==SYS_getsockopt || call->nr==SYS_setsockopt) && md_network_endpoint_local_carrier(object))
+            policy|=MD_DISPATCH_LOCAL_INET_OPTION;
+    }
     if (md_device_events_is(object)) policy|=MD_DISPATCH_DEVICE_EVENTS;
     md_fd_object_release(object);
     return policy;

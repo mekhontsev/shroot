@@ -19,7 +19,8 @@ void md_network_event_remove(struct md_network_event_source *);
 void md_network_forward_wake(struct md_network_fabric *);
 /* All methods except final fabric shutdown run under the fabric lock. New
  * listeners are prepared before ACK and become visible only with the ruleset. */
-int md_network_forward_prepare(struct md_network_namespace *,struct md_network_filter *,struct md_network_forward_update **);
+struct md_filter_port;
+int md_network_forward_prepare(struct md_network_namespace *,struct md_network_filter *,struct md_network_forward_update **,struct md_filter_port *failed);
 void md_network_forward_commit(struct md_network_forward_update *);
 void md_network_forward_abort(struct md_network_forward_update *);
 void md_network_forward_changed(struct md_network_fabric *);

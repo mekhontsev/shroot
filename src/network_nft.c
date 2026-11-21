@@ -236,7 +236,7 @@ long md_network_nft(struct md_network_namespace *n,const struct md_identity *ide
                 }
             if (!used && (next->sets[i].flags&NFT_SET_ANONYMOUS)) md_filter_set_delete(next,i); else ++i;
         }
-        error=md_network_filter_prepare(n,next,&forward);
+        error=md_network_filter_prepare(n,next,&forward,NULL);
         if (error) {
             rejected=1;
             discard_echoes(&out);

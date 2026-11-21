@@ -8,6 +8,7 @@ struct md_user_namespace;
  * and its publications after the owned process tree has been reaped. */
 struct md_network_launch {
     struct md_network_namespace *gateway, *space;
+    const char *temporary_parent;
 };
 int md_network_launch_open(const struct md_network_profile *,struct md_user_namespace *,struct md_network_launch *);
 void md_network_launch_close(struct md_network_launch *);

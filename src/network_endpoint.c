@@ -3,6 +3,7 @@
 #include "network_internal.h"
 #include "network_forward.h"
 #include "network_connection.h"
+#include "network_loopback.h"
 #include "network_policy.h"
 #include "fd_selector.h"
 #include "guest_identity.h"
@@ -19,8 +20,8 @@ struct md_network_endpoint {
     struct md_fd_object object;
     struct md_network_namespace *space;
     struct md_network_endpoint *next;
-    int type, protocol, bound, connected, accepted, v6only;
-    int reuse_address, reuse_port, priority;
+    int type, protocol, bound, connected, accepted, v6only, local_carrier;
+    int reuse_address, reuse_port, priority, nodelay;
     unsigned family;
     int published, publication_requested, listening, backlog;
     unsigned device;
@@ -43,6 +44,8 @@ static void detach(struct md_network_endpoint *e) {
     struct md_network_endpoint **at=&f->endpoints;
     while (*at && *at!=e) at=&(*at)->next;
     if (*at) *at=e->next;
+    if (e->local_carrier && e->bound && !e->accepted)
+        md_loopback_unbind(f,e->inode,e->native);
     endpoint_changed(e);
     md_network_forward_endpoint_closed(e->space,e);
     while (e->direct) { struct direct_path *p=e->direct; e->direct=p->next; free(p); }
@@ -115,6 +118,9 @@ int md_network_endpoint_transport_update(struct md_network_namespace *n) {
     return 0;
 }
 int md_network_endpoint_is(const struct md_fd_object *o) { return o && o->type==&endpoint_type; }
+int md_network_endpoint_local_carrier(const struct md_fd_object *o) {
+    return md_network_endpoint_is(o) && ((const struct md_network_endpoint *)o)->local_carrier;
+}
 struct md_network_namespace *md_network_endpoint_namespace(const struct md_fd_object *o) {
     return md_network_endpoint_is(o) ? ((const struct md_network_endpoint *)o)->space : NULL;
 }
@@ -152,10 +158,14 @@ int md_network_endpoint_open(struct md_network_namespace *n,uint32_t uid,int fam
     struct md_network_endpoint *e=create(n,family,base,expected);
     if (!e) return -ENOMEM;
     int native=socket(family,type|SOCK_CLOEXEC,protocol);
+    if (native<0 && (errno==EPERM || errno==EACCES) && n->mode==MD_NETWORK_PRIVATE && n->fabric->loopback_parent) {
+        native=socket(AF_UNIX,type|SOCK_CLOEXEC,0);
+        e->local_carrier=native>=0;
+    }
     if (native<0) { int error=-errno; md_fd_object_release(&e->object); return error; }
     struct stat st;
     if (fstat(native,&st)) { int error=-errno; close(native); md_fd_object_release(&e->object); return error; }
-    if (base==SOCK_STREAM && !(e->connection=md_network_connection_new(native))) {
+    if (base==SOCK_STREAM && !e->local_carrier && !(e->connection=md_network_connection_new(native))) {
         int error=-errno; close(native); md_fd_object_release(&e->object); return error;
     }
     pthread_mutex_lock(&n->fabric->lock);
@@ -163,9 +173,9 @@ int md_network_endpoint_open(struct md_network_namespace *n,uint32_t uid,int fam
     int error=0;
     if (family==AF_INET6) {
         e->v6only=(int)n->bindv6only;
-        if (setsockopt(native,IPPROTO_IPV6,IPV6_V6ONLY,&e->v6only,sizeof(e->v6only))) error=-errno;
+        if (!e->local_carrier && setsockopt(native,IPPROTO_IPV6,IPV6_V6ONLY,&e->v6only,sizeof(e->v6only))) error=-errno;
     }
-    if (expected==IPPROTO_TCP) {
+    if (expected==IPPROTO_TCP && !e->local_carrier) {
         const int options[]={TCP_KEEPIDLE,TCP_KEEPINTVL,TCP_KEEPCNT};
         for (unsigned i=0;i<3 && !error;++i) {
             int value=(int)n->tcp_keepalive[i];
@@ -296,6 +306,7 @@ static int bind_locked(struct md_network_endpoint *e,int fd,struct md_inet_addre
     int error=0;
     if (md_ip_linklocal(logical.ip) && !logical.scope) logical.scope=e->device;
     if (e->bound) error=-EINVAL;
+    else if (e->local_carrier && !md_ip_unspecified(logical.ip) && !md_ip_is_loopback(logical.ip)) error=-EADDRNOTAVAIL;
     else if (!md_ip_unspecified(logical.ip) && !md_ip_multicast(logical.ip) && !local_interface(n,logical.ip,0)) error=-EADDRNOTAVAIL;
     else if (md_ip_linklocal(logical.ip) && !logical.scope && !e->device) error=-EINVAL;
     else if (logical.port && ntohs(logical.port)<n->unprivileged_port
@@ -347,6 +358,10 @@ static int bind_locked(struct md_network_endpoint *e,int fd,struct md_inet_addre
                 }
                 if (error) { if (automatic && error==-EADDRINUSE) continue; break; }
             }
+            if (e->local_carrier) {
+                error=md_loopback_bind(n->fabric,fd,e->inode,logical);
+                native=logical; break;
+            }
             native.port=0;
             if (!md_inet_bind(fd,&native,e->family)) { error=0; break; }
             error=-errno;
@@ -354,7 +369,7 @@ static int bind_locked(struct md_network_endpoint *e,int fd,struct md_inet_addre
             if (!automatic || error!=-EADDRINUSE) break;
         }
         if (!error) {
-            if (md_inet_name(fd,0,&native)) error=-errno;
+            if (!e->local_carrier && md_inet_name(fd,0,&native)) error=-errno;
             else {
                 e->local=logical; e->binding=logical.ip; e->native=native; e->bound=1;
                 e->published=published; e->publication_requested=external;
@@ -374,7 +389,7 @@ static int bind_endpoint(struct md_fd_object *o,int fd,const struct md_identity 
     struct md_network_endpoint *e=(void *)o;
     struct md_inet_address logical;
     int v6only=e->v6only;
-    if (e->family==AF_INET6) {
+    if (!e->local_carrier && e->family==AF_INET6) {
         socklen_t size=sizeof(v6only);
         if (getsockopt(fd,IPPROTO_IPV6,IPV6_V6ONLY,&v6only,&size)) return -errno;
     }
@@ -535,17 +550,30 @@ static int destination_locked(struct md_network_endpoint *e,struct md_inet_addre
     if (!error && md_ip_linklocal(logical.ip) && !selected) error=-EINVAL;
     if (!error && device && !(device->info.flags&IFF_UP)) error=-ENETUNREACH;
     logical.ip=socket_destination(e,local.ip,logical.ip,selected);
+    if (e->local_carrier && !md_ip_is_loopback(logical.ip)) return -ENETUNREACH;
     if (!error && selected) md_network_policy_route(n,local.ip,logical.ip,e->mark,selected,NULL,&error);
     if (!error && multicast && e->type==SOCK_DGRAM) {
         struct md_filter_packet packet={.source=local.ip,.source_port=local.port,
             .destination=logical.ip,.destination_port=logical.port,.protocol=e->protocol,.state=8,.mark=e->mark};
         error=md_network_forward_group(n,e,&e->native,&packet,selected,info && info->hops_set ? info->hops : -1,&native);
-    } else if (!error && !md_network_forward_destination(n,e,e->type,&local,&logical,&native)) {
+    } else if (!error && (e->local_carrier || !md_network_forward_destination(n,e,e->type,&local,&logical,&native))) {
         struct md_filter_packet packet={.source=local.ip,.source_port=local.port,
             .destination=logical.ip,.destination_port=logical.port,.protocol=e->protocol,.state=8,.mark=e->mark};
         struct md_network_flow_path path;
         error=md_network_flow_route(n,&packet,0,selected,&path);
-        if (!error) error=md_network_endpoint_resolve(n->fabric,&path,e->type,&native,NULL);
+        const void *receiver=NULL;
+        if (!error) error=md_network_endpoint_resolve(n->fabric,&path,e->type,&native,&receiver);
+        if (e->local_carrier) {
+            if (error) return error;
+            const struct md_network_endpoint *peer=receiver;
+            if (!peer || !peer->local_carrier || peer->space!=n || !md_ip_is_loopback(path.translated.destination))
+                return -ENETUNREACH;
+            if (path.mediated) return -EOPNOTSUPP;
+            error=direct_path(e,&path);
+            if (error) return error;
+            if (info) *info=(struct md_network_packet_info){0};
+            return md_loopback_address(n->fabric,peer->inode,peer->native,out,out_length);
+        }
         /* A private datagram's queued source must outlive the sending socket.
          * The existing bounded flow owner retains both logical directions. */
         if (!error && e->type==SOCK_DGRAM && path.destination) path.mediated=1;
@@ -624,7 +652,7 @@ int md_network_endpoint_autobind(struct md_fd_object *o,int fd,const struct md_i
     struct md_network_interface *route=md_network_policy_route(e->space,e->binding,target.ip,e->mark,
         output ? output : e->device ? e->device : target.scope,&entry,NULL);
     e->source=md_network_route_source(e->space,route,&entry,target.ip);
-    if (e->family==AF_INET6 && route) error=md_network_transport_apply(&e->transport,fd,e->type,
+    if (!e->local_carrier && e->family==AF_INET6 && route) error=md_network_transport_apply(&e->transport,fd,e->type,
         md_network_route_transport(route,&entry));
     pthread_mutex_unlock(&e->space->fabric->lock);
     if (error) return error;
@@ -654,7 +682,19 @@ int md_network_endpoint_sockopt(struct md_fd_object *o,int fd,const struct md_id
     }
     pthread_mutex_lock(&e->space->fabric->lock);
     int error=0;
-    if (md_network_multicast_option(level,option)) {
+    if (e->local_carrier && ((level==SOL_SOCKET && (option==SO_PROTOCOL || option==SO_DOMAIN))
+            || (level==IPPROTO_IPV6 && option==IPV6_V6ONLY && e->family==AF_INET6)
+            || (level==IPPROTO_TCP && option==TCP_NODELAY && e->type==SOCK_STREAM))) {
+        int value=level==SOL_SOCKET ? (option==SO_DOMAIN ? (int)e->family : e->protocol)
+            : level==IPPROTO_IPV6 ? e->v6only : e->nodelay;
+        if (writing && level==SOL_SOCKET) error=-ENOPROTOOPT;
+        else if (writing && (*size<sizeof(value) || (level==IPPROTO_IPV6 && e->bound))) error=-EINVAL;
+        else if (writing) {
+            memcpy(&value,buffer,sizeof(value));
+            if (level==IPPROTO_IPV6) e->v6only=!!value; else e->nodelay=!!value;
+        } else { if (*size>sizeof(value)) *size=sizeof(value); memcpy(buffer,&value,*size); }
+    } else if (e->local_carrier && (!md_network_endpoint_option(level,option) || level!=SOL_SOCKET)) error=-ENOPROTOOPT;
+    else if (md_network_multicast_option(level,option)) {
         error=e->type!=SOCK_DGRAM ? -EOPNOTSUPP : md_network_multicast_option_io(e->space,
             &e->multicast[level==IPPROTO_IPV6],e->family,e->device,writing,level,option,buffer,size);
     } else if (level==SOL_SOCKET && option==SO_MARK) {
@@ -694,7 +734,7 @@ int md_network_endpoint_sockopt(struct md_fd_object *o,int fd,const struct md_id
             if (*size<sizeof(int)) error=-EINVAL;
             else {
                 int value; memcpy(&value,buffer,sizeof(value));
-                error=setsockopt(fd,SOL_SOCKET,option,&value,sizeof(value)) ? -errno : 0;
+                error=!e->local_carrier && setsockopt(fd,SOL_SOCKET,option,&value,sizeof(value)) ? -errno : 0;
                 if (!error) {
                     int previous=*setting;
                     *setting=!!value;
@@ -763,8 +803,9 @@ int md_network_endpoint_connected(struct md_fd_object *o,int fd,const struct soc
     struct md_inet_address peer={.ip=md_ip_any(e->family)},native;
     int disconnect=length>=sizeof(sa_family_t) && a->sa_family==AF_UNSPEC;
     int error=disconnect ? 0 : address(e,a,length,&peer); if (error) return error;
-    if (md_inet_name(fd,0,&native)) return -errno;
+    if (!e->local_carrier && md_inet_name(fd,0,&native)) return -errno;
     pthread_mutex_lock(&e->space->fabric->lock);
+    if (e->local_carrier) native=e->native;
     if (!disconnect) peer.ip=socket_destination(e,e->binding,peer.ip,e->device);
     e->peer=peer; e->connected=!disconnect; e->native=native;
     endpoint_changed(e);
@@ -788,14 +829,13 @@ int md_network_endpoint_name(struct md_fd_object *o,int fd,int peer,struct socka
     if (!md_network_endpoint_is(o)) return -EBADF;
     struct md_network_endpoint *e=(void *)o;
     struct md_inet_address native;
-    if (md_inet_name(fd,peer,&native)) return -errno;
+    if (!e->local_carrier && md_inet_name(fd,peer,&native)) return -errno;
     pthread_mutex_lock(&e->space->fabric->lock);
     struct md_inet_address result=peer ? e->peer : e->local;
-    if (peer && md_network_connection_result(e->connection,NULL)) {
+    if (peer && ((e->local_carrier && !e->connected) || md_network_connection_result(e->connection,NULL))) {
         pthread_mutex_unlock(&e->space->fabric->lock); return -ENOTCONN;
     }
-    if (peer && !e->connected) result=native;
-    else if (!peer && !e->bound) result=native;
+    if (!e->local_carrier && (peer ? !e->connected : !e->bound)) result=native;
     int error=md_inet_encode(&result,e->family,out,size);
     pthread_mutex_unlock(&e->space->fabric->lock); return error;
 }
@@ -807,6 +847,17 @@ int md_network_endpoint_source_info(struct md_fd_object *o,struct sockaddr_stora
     if (!md_network_endpoint_is(o)) return -EBADF;
     struct md_network_endpoint *e=(void *)o;
     struct md_inet_address decoded,*a=&decoded;
+    if (e->local_carrier) {
+        int error=md_loopback_source(e->space->fabric,address,*length,a);
+        if (error) return error;
+        if (md_ip_unspecified(a->ip)) a->ip=md_ip_loopback(e->family==AF_INET ? AF_INET : a->ip.family);
+        pthread_mutex_lock(&e->space->fabric->lock);
+        struct md_ip_address local=e->local.ip;
+        pthread_mutex_unlock(&e->space->fabric->lock);
+        if (md_ip_unspecified(local)) local=md_ip_loopback(a->ip.family);
+        if (info) *info=(struct md_network_packet_info){.interface=1,.source=local,.destination=local};
+        return md_inet_encode(a,e->family,address,length);
+    }
     int error=md_inet_decode((void *)address,*length,a);
     if (error) return error;
     /* Logical inter-namespace traffic is transported over native loopback.
@@ -858,13 +909,15 @@ int md_network_endpoint_accept(struct md_fd_object *o,int fd,struct md_fd_object
     if (!e) return -ENOMEM;
     pthread_mutex_lock(&parent->space->fabric->lock);
     e->local=parent->local; e->native=parent->native; e->bound=e->connected=e->accepted=1;
+    e->local_carrier=parent->local_carrier;
+    e->nodelay=parent->nodelay;
     if (md_ip_unspecified(e->local.ip)) e->local.ip=info.destination;
     if (md_ip_linklocal(e->local.ip)) e->local.scope=info.interface;
     e->device=parent->device; e->v6only=parent->v6only; e->binding=e->local.ip;
     e->transport=parent->transport; e->priority=parent->priority; e->mark=parent->mark;
     e->inode=st.st_ino; e->uid=parent->uid;
     error=md_inet_decode((void *)&peer,length,&e->peer);
-    if (!error && e->family==AF_INET6) {
+    if (!error && e->family==AF_INET6 && !e->local_carrier) {
         struct md_network_route_entry route={0};
         struct md_network_interface *link=md_network_policy_route(e->space,e->local.ip,e->peer.ip,e->mark,e->device,&route,NULL);
         if (link) error=md_network_transport_apply(&e->transport,fd,e->type,md_network_route_transport(link,&route));

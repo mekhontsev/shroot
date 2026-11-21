@@ -9,6 +9,7 @@
 /* Endpoint metadata never retains a native socket. The caller captures its
  * actual description under the file-table turn for each operation. */
 int md_network_endpoint_is(const struct md_fd_object *);
+int md_network_endpoint_local_carrier(const struct md_fd_object *);
 struct md_network_namespace *md_network_endpoint_namespace(const struct md_fd_object *);
 int md_network_endpoint_enabled(const struct md_network_namespace *);
 unsigned md_network_endpoint_family(const struct md_fd_object *);

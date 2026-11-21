@@ -728,6 +728,7 @@ int main(int argc, char **argv) {
     if (argument<argc && !strcmp(argv[argument],"--runtime-tmp")) {
         CHECK(argument+2<argc);
         CHECK(!md_database_temporary_directory(argv[argument+1]));
+        launch_network.temporary_parent=argv[argument+1];
         argument+=2;
     }
     setvbuf(stderr, NULL, _IONBF, 0);

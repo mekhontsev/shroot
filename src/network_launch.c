@@ -11,6 +11,8 @@
 #include <linux/if.h>
 #include <netinet/in.h>
 #include <string.h>
+#include <arpa/inet.h>
+#include <stdio.h>
 
 static int configure(struct md_network_namespace *n,unsigned index,uint32_t ip,unsigned prefix) {
     struct md_network_interface *link=md_network_interface_find(n,index,NULL);
@@ -126,7 +128,14 @@ static int publications(struct md_network_namespace *gateway,const struct md_net
         }
     }
     struct md_network_forward_update *update=NULL;
-    if (!error) error=md_network_filter_prepare(gateway,filter,&update);
+    struct md_filter_port failed={0};
+    if (!error) error=md_network_filter_prepare(gateway,filter,&update,&failed);
+    if (error && failed.port) {
+        char address[INET6_ADDRSTRLEN];
+        const char *ip=inet_ntop(failed.address.family,failed.address.bytes,address,sizeof(address));
+        fprintf(stderr,"Shroot: cannot publish %s port %u on %s: %s\n",
+            failed.protocol==IPPROTO_TCP ? "TCP" : "UDP",(unsigned)ntohs(failed.port),ip ? ip : "?",strerror(-error));
+    }
     if (!error) filter=md_network_filter_commit(gateway,filter,update);
     else md_network_forward_abort(update);
     md_network_filter_free(filter); return error;
@@ -151,6 +160,7 @@ int md_network_launch_open(const struct md_network_profile *profile,struct md_us
     struct md_network_fabric *fabric=launch->space->fabric;
     pthread_mutex_lock(&fabric->lock);
     fabric->endpoints_enabled=1;
+    if (profile->policy==MD_NETWORK_NONE) fabric->loopback_parent=launch->temporary_parent;
     error=configure(launch->space,1,htonl(INADDR_LOOPBACK),8);
     if (!error && launch->gateway) {
         error=topology(launch,families);

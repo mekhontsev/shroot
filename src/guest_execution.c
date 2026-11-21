@@ -118,7 +118,7 @@ long md_guest_execute(const struct md_guest_execution *call) {
         return nr==SYS_socket ? md_network_open(args) : md_device_event_call(nr,args);
     if (policy&MD_DISPATCH_NETWORK_DATA) {
         if (nr==SYS_recvmmsg) return md_socket_ancillary_batch(&md_files,args,call->prepared);
-        return md_network_data_call(nr,args);
+        return md_network_data_call(nr,args,policy&MD_DISPATCH_LOCAL_INET_OPTION);
     }
     if (policy&MD_DISPATCH_NETWORK_CONTROL) return md_network_call(nr,args);
     if ((policy&MD_DISPATCH_NETWORK_SCOPED) && nr==SYS_socket) return md_network_open(args);

@@ -5,10 +5,10 @@
 #include "network_forward.h"
 
 int md_network_filter_prepare(struct md_network_namespace *n,struct md_network_filter *next,
-        struct md_network_forward_update **update) {
+        struct md_network_forward_update **update,struct md_filter_port *failed) {
     int error=md_filter_validate(next);
     if (!error) error=md_network_endpoint_policy_update(n,next);
-    if (!error) error=md_network_forward_prepare(n,next,update);
+    if (!error) error=md_network_forward_prepare(n,next,update,failed);
     return error;
 }
 struct md_network_filter *md_network_filter_commit(struct md_network_namespace *n,

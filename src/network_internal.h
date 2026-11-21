@@ -64,6 +64,8 @@ struct md_network_fabric {
     struct md_network_namespace *spaces;
     struct md_network_endpoint *endpoints;
     int endpoints_enabled;
+    const char *loopback_parent;
+    int loopback_directory; /* Owned directory fd + 1, allocated on first private bind. */
     uint64_t policy_generation, endpoint_generation;
     struct md_network_forward *forward;
     int64_t configuration_deadline;

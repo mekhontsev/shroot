@@ -121,9 +121,11 @@ static long data_send_batch(const unsigned long *a) {
     }
     return count;
 }
-long md_network_data_call(long nr,const unsigned long *a) {
+long md_network_data_call(long nr,const unsigned long *a,int local_option) {
     int device=(nr==SYS_setsockopt || nr==SYS_getsockopt) && a[1]==SOL_SOCKET && a[2]==SO_BINDTODEVICE;
     int transport=(nr==SYS_setsockopt || nr==SYS_getsockopt) && md_network_endpoint_option(a[1],a[2]);
+    if (local_option && !device && !transport && !(a[1]==SOL_SOCKET && (queue_option(a[1],a[2])
+            || a[2]==SO_TYPE || a[2]==SO_KEEPALIVE || a[2]==SO_LINGER || a[2]==SO_RCVLOWAT))) transport=1;
     int option=device || transport;
     if (nr==SYS_read || nr==SYS_write || nr==SYS_readv || nr==SYS_writev
             || md_socket_payload_native(nr,a[4])
