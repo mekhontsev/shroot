@@ -2,6 +2,7 @@
 #include "network_endpoint.h"
 #include "network_internal.h"
 #include "network_forward.h"
+#include "network_route_ip.h"
 #include "network_conntrack.h"
 #include "network_proc.h"
 #include "control_epoll.h"
@@ -16,11 +17,19 @@
 #include <linux/if.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+static _Atomic int64_t retained_at;
+int64_t __real_md_network_lifetime_now(void);
+int64_t __wrap_md_network_lifetime_now(void) {
+    int64_t t=atomic_load_explicit(&retained_at,memory_order_relaxed);
+    return t ? t : __real_md_network_lifetime_now();
+}
 
 static int table_has_inode(const char *text,unsigned long long inode) {
     for (const char *row=text;row;row=strchr(row,'\n')) {
@@ -625,6 +634,9 @@ static void published_datagram_reuse(unsigned family) {
     /* Keep distinct native clients alive: port reuse must not reduce this
      * burst to fewer retained UDP tuples. TCP shares the same forwarder. */
     int clients[1152];
+    /* This checks simultaneous capacity, not the speed needed to generate a
+     * burst within the UDP idle lifetime. Socket IO still uses real time. */
+    atomic_store_explicit(&retained_at,__real_md_network_lifetime_now(),memory_order_relaxed);
     for (unsigned i=0;i<sizeof(clients)/sizeof(*clients);++i) {
         clients[i]=socket(family,SOCK_DGRAM|SOCK_CLOEXEC,0); assert(clients[i]>=0);
         assert(sendto(clients[i],"b",1,0,(void *)&wire,length)==1);
@@ -677,6 +689,7 @@ static void published_datagram_reuse(unsigned family) {
     assert(client>=0 && !bind(client,(void *)&wire,length)); close(client);
     md_identity_release(&identity); md_network_namespace_release(n);
     printf("PASS IPv%u published UDP reuse: wildcard/exact selection, conflict checks, surviving owner, retained burst and atomic flush\n",family==AF_INET ? 4 : 6);
+    atomic_store_explicit(&retained_at,0,memory_order_relaxed);
 }
 static void multicast(unsigned family) {
     struct md_network_namespace *root=md_network_namespace_new(NULL,MD_NETWORK_ROUTED);

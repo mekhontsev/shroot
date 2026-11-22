@@ -7,6 +7,10 @@
 #include <time.h>
 struct md_image_catalogue;
 struct md_fs_service;
+/* Bind reserves the abstract address. No peer may connect until activation;
+ * the caller owns the descriptor even when activation fails. */
+int md_fs_listener_bind(const char *abstract_name);
+int md_fs_listener_activate(int fd);
 int md_fs_listen(const char *abstract_name);
 struct md_fs_work_source {
     int fd;

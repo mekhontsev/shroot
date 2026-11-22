@@ -15,6 +15,12 @@
 #include <unistd.h>
 
 static _Thread_local unsigned long reads;
+static _Thread_local int mknod_error;
+int __real_mknodat(int,const char *,mode_t,dev_t);
+int __wrap_mknodat(int dir,const char *path,mode_t mode,dev_t dev) {
+    if (mknod_error) { errno=mknod_error; return -1; }
+    return __real_mknodat(dir,path,mode,dev);
+}
 struct dirent *__real_readdir(DIR *);
 struct dirent *__wrap_readdir(DIR *dir) {
     ++reads; return __real_readdir(dir);
@@ -90,6 +96,18 @@ static void *independent_scan(void *data) {
     int fd=openat(md_provider_tree_root(tree),".",O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(fd>=0);
     assert(scan(tree,fd,96)==1024 && !close(fd)); return NULL;
 }
+static void placeholder(int upper) {
+    assert(md_provider_placeholder(upper,"empty",S_IFDIR|0700)==-EINVAL);
+    assert(!md_provider_placeholder(upper,"empty",0000));
+    struct stat empty;
+    assert(!fstatat(upper,"empty",&empty,AT_SYMLINK_NOFOLLOW) && S_ISREG(empty.st_mode)
+        && !(empty.st_mode&07777) && !empty.st_size);
+    assert(md_provider_placeholder(upper,"empty",0600)==-EEXIST);
+    assert(!symlinkat("untouched",upper,"alias"));
+    assert(md_provider_placeholder(upper,"alias",0600)==-EEXIST);
+    assert(fstatat(upper,"untouched",&empty,AT_SYMLINK_NOFOLLOW)<0 && errno==ENOENT);
+    assert(!unlinkat(upper,"alias",0) && !unlinkat(upper,"empty",0));
+}
 void md_test_provider_directory(const char *path) {
     assert(!mkdir(path,0700));
     int parent=open(path,O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(parent>=0);
@@ -97,6 +115,10 @@ void md_test_provider_directory(const char *path) {
     int lower=openat(parent,"lower",O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(lower>=0);
     struct md_provider_tree *tree=md_provider_tree_new(parent,lower,NULL,0,&ops,NULL); assert(tree);
     int upper=md_provider_tree_root(tree);
+    placeholder(upper);
+    mknod_error=EOPNOTSUPP; placeholder(upper);
+    mknod_error=EIO; assert(md_provider_placeholder(upper,"empty",0600)==-EIO);
+    mknod_error=0;
     unsigned long type;
     assert(!md_provider_tree_filesystem_at(tree,upper,&type) && type==TMPFS_MAGIC);
     assert(!md_provider_tree_filesystem_at(tree,lower,&type) && type==TMPFS_MAGIC);

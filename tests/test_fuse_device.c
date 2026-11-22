@@ -6,6 +6,7 @@
 #include "fs_mount_internal.h"
 #include "fs_storage.h"
 #include "fs_continuation.h"
+#include "file_open.h"
 #include "inode_internal.h"
 #include "mount_graph.h"
 #include <assert.h>
@@ -66,8 +67,15 @@ static void portable_metadata(struct md_filesystem *fs,int imported) {
     struct stat host_before,host_after;
     assert(!stat("/dev/urandom",&host_before));
     struct md_fs_context root={.filesystem=fs,.has_identity=1,.task={.identity=md_identity_new(0,0)}};
-    struct md_fs_request q={.operation=MD_FS_STAT,.directory={-1,-1},.path={"/dev/urandom",NULL}};
+    struct md_fs_request q={.operation=MD_FS_STAT,.directory={-1,-1}};
     struct md_fs_result r;
+    const char *path; uint64_t device;
+    for (unsigned i=0;md_open_device_node(i,&path,&device);++i) {
+        q.path[0]=path;
+        md_fs_context_execute(&root,&q,&r,NULL);
+        assert(!r.error && S_ISCHR(r.info.mode) && r.info.rdev==device);
+    }
+    q.path[0]="/dev/urandom";
     md_fs_context_execute(&root,&q,&r,NULL);
     assert(!r.error && S_ISCHR(r.info.mode) && r.info.rdev==makedev(1,9));
     if (imported) assert(r.info.uid==123 && r.info.gid==456 && (r.info.mode&0777)==0600);

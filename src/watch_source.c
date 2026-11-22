@@ -154,6 +154,6 @@ int md_watch_listener_next(struct md_watch_listener *p,struct md_watch_event *ou
         *out=(struct md_watch_event){.mask=IN_UNMOUNT,.sequence=p->unmount};
         p->unmount=0; found=1;
     }
-    if (!p->first && !p->overflow && !p->unmount) md_event_acknowledge(p->event);
+    if (found && !p->first && !p->overflow && !p->unmount) md_event_acknowledge(p->event);
     pthread_mutex_unlock(&p->source->lock); return found;
 }

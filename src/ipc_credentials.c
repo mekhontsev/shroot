@@ -45,8 +45,8 @@ void md_ipc_credentials_close(struct md_ipc_credentials *s) {
     }
     if (s->db) sqlite3_close(s->db);
     if (s->directory>=0) close(s->directory);
-    if (s->gate >= 0) close(s->gate);
     md_ipc_scope_release(s->scope);
+    if (s->gate >= 0) close(s->gate);
     free(s);
 }
 int md_ipc_credentials_pollfd(const struct md_ipc_credentials *s) {
@@ -84,11 +84,13 @@ int md_ipc_credentials_open(const char *store, enum md_ipc_ancillary_transport o
     int first = !r && !flock(s->scope->lease, LOCK_EX | LOCK_NB);
     if (!r && !first && errno != EWOULDBLOCK) r = -errno;
     s->directory=dir;
-    if (!r) r=md_database_open(dir,"credentials.db",1,&s->db);
-    if (!r && first) r = execute(s, "DROP TABLE IF EXISTS endpoints;DROP TABLE IF EXISTS connections;DROP TABLE IF EXISTS messages;DROP TABLE IF EXISTS native_sockets;DROP TABLE IF EXISTS datagrams;DROP TABLE IF EXISTS socket_paths;");
+    if (!r) r=md_database_open(dir,"credentials.db",first,&s->db);
     if (!r && first && unlinkat(dir,"auth",0) && errno!=ENOENT) r=-errno;
     if (!r && first && unlinkat(dir,"auth.pending",0) && errno!=ENOENT) r=-errno;
-    if (!r) r = execute(s, "PRAGMA journal_mode=WAL;PRAGMA synchronous=NORMAL;"
+    if (!r) r=execute(s,first ? "PRAGMA journal_mode=WAL;PRAGMA synchronous=NORMAL" : "PRAGMA synchronous=NORMAL");
+    if (!r && first) r = execute(s,
+        "BEGIN;DROP TABLE IF EXISTS endpoints;DROP TABLE IF EXISTS connections;DROP TABLE IF EXISTS messages;"
+        "DROP TABLE IF EXISTS native_sockets;DROP TABLE IF EXISTS datagrams;DROP TABLE IF EXISTS socket_paths;"
         "CREATE TABLE IF NOT EXISTS endpoints(name BLOB PRIMARY KEY,cookie INTEGER,revision INTEGER,identity BLOB,ready INTEGER,transport INTEGER NOT NULL);"
         "CREATE TABLE IF NOT EXISTS connections(cookie INTEGER PRIMARY KEY,name BLOB,identity BLOB,peer BLOB,endpoint BLOB,revision INTEGER,hidden INTEGER,valid INTEGER,link BLOB,side INTEGER,transport INTEGER NOT NULL);"
         "CREATE INDEX IF NOT EXISTS connection_name ON connections(name);"
@@ -97,12 +99,15 @@ int md_ipc_credentials_open(const char *store, enum md_ipc_ancillary_transport o
         "CREATE TABLE IF NOT EXISTS datagrams(name BLOB PRIMARY KEY,cookie INTEGER UNIQUE,device INTEGER,inode INTEGER,link BLOB,transport INTEGER NOT NULL);"
         "CREATE TABLE IF NOT EXISTS native_sockets(cookie INTEGER PRIMARY KEY);"
         "CREATE TABLE IF NOT EXISTS socket_paths(endpoint TEXT PRIMARY KEY,path TEXT NOT NULL);"
-        "CREATE TABLE IF NOT EXISTS messages(nonce BLOB PRIMARY KEY,link BLOB,device INTEGER,inode INTEGER,pid INTEGER,uid INTEGER,gid INTEGER,side INTEGER,process BLOB);");
+        "CREATE TABLE IF NOT EXISTS messages(nonce BLOB PRIMARY KEY,link BLOB,device INTEGER,inode INTEGER,pid INTEGER,uid INTEGER,gid INTEGER,side INTEGER,process BLOB);"
+        "COMMIT");
     /* The first live owner discards stale metadata, including cookies from an
      * earlier boot. This directory is not part of OCI/image inode metadata. */
     if (!r && flock(s->scope->lease, LOCK_SH)) r = -errno;
-    if (s->gate >= 0) flock(s->gate, LOCK_UN);
-    if (r) md_ipc_credentials_close(s); else *out = s;
+    if (!r && flock(s->gate,LOCK_UN)) r=-errno;
+    /* On failure, close rolls back unpublished DDL and releases our epoch
+     * lease before the gate admits another opener. */
+    if (r) md_ipc_credentials_close(s); else *out=s;
     return r;
 }
 static int socket_key(int fd, uint64_t *cookie) {

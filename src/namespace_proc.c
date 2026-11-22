@@ -393,6 +393,17 @@ static long native_call(const struct md_fs *fs, long nr, const unsigned long *a)
     return nr==SYS_statx ? md_namespace_native_statx(fs,a)
         : md_raw(nr,a[0],a[1],a[2],a[3],a[4],a[5]);
 }
+static long reopen_capture(const struct md_fs *fs,const char *anchor,int flags,int directory) {
+    char selected[PATH_MAX];
+    long r=md_proc_task_path(anchor,selected,sizeof(selected));
+    if (r<0) return r;
+    flags&=~(O_CREAT|O_EXCL);
+    struct md_fs_request q={.operation=MD_FS_REOPEN,.directory={-1,-1},
+        .capture={{selected,O_PATH|(directory ? O_DIRECTORY : 0)}},.flags=(unsigned)flags,.mode=MD_FS_REOPEN_NATIVE};
+    struct md_fs_response out;
+    r=md_namespace_request(fs,&q,&out);
+    return r<0 ? r : md_namespace_open_result(&out.result,flags);
+}
 static long host_call(const struct md_fs *fs, const char *exe, long nr, const unsigned long *a,
                             unsigned path_index, const char *path, uint64_t proc_namespace) {
     struct md_proc_path ref = md_proc_path(path);
@@ -436,6 +447,19 @@ static long host_call(const struct md_fs *fs, const char *exe, long nr, const un
         if (*ref.tail) return -ENOTDIR;
         if (nr==SYS_openat) return mount_table_open(fs,&ref,path,(int)a[2]);
         ref.kind=MD_PROC_NONE;
+    }
+    if (nr==SYS_openat && (control==MD_PROC_FD || control==MD_PROC_CWD) && ref.tail && *ref.tail
+            && !(a[2] & O_CREAT) && (a[2] & O_TMPFILE)!=O_TMPFILE) {
+        const char *suffix=ref.tail;
+        while (*suffix=='/') ++suffix;
+        if (!*suffix) {
+            /* A slash requires a directory, not a search for its "." child.
+             * Keep the directory constraint on the authorized capture, not
+             * in the open-description flags returned to the caller. */
+            char anchor[PATH_MAX];
+            memcpy(anchor,path,ref.anchor_length); anchor[ref.anchor_length]=0;
+            return reopen_capture(fs,anchor,(int)a[2],1);
+        }
     }
     /* Image bytes need the selected process, but metadata and access checks
      * belong to the native proc inode, just as they do for our own image. */
@@ -548,15 +572,7 @@ static long host_call(const struct md_fs *fs, const char *exe, long nr, const un
             return md_namespace_open(fs,AT_FDCWD,".",flags&~(O_CREAT|O_EXCL),0);
         /* The followed magic link already selected an existing object. Creation
          * and exclusive-link semantics were handled above, not by its backing. */
-        char selected[PATH_MAX];
-        long result=md_proc_task_path(path,selected,sizeof(selected));
-        if (result<0) return result;
-        struct md_fs_request q={.operation=MD_FS_REOPEN,.directory={-1,-1},
-            .capture={{selected,O_PATH}},.flags=flags&~(O_CREAT|O_EXCL),.mode=MD_FS_REOPEN_NATIVE};
-        struct md_fs_response out;
-        result=md_namespace_request(fs,&q,&out);
-        if (result<0) return result;
-        return md_namespace_open_result(&out.result,flags&~(O_CREAT|O_EXCL));
+        return reopen_capture(fs,path,flags,0);
     }
     char anchor[PATH_MAX],selected[PATH_MAX];
     size_t length = tail ? ref.anchor_length : md_length(path);

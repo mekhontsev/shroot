@@ -79,6 +79,11 @@ high-water mark. A Unix stream socket carries one readiness byte, never event pa
 Its reader supplies native poll/epoll and last-reader lifetime, including dup,
 fork, exec and queued SCM_RIGHTS. The owner retains no permanent read alias.
 
+The worker wakes on source readiness. An explicit read, read reservation or
+`FIONREAD` query also checks for queued source records when a subscribed source
+was not reported ready: records can precede the readiness notification in a
+layered runtime. Idle workers do not poll for these records.
+
 `watch_calls.c` activates FD-class seccomp selectors before returning a watch or
 ordinary duplicate. The shared ancillary publisher prepares each received alias
 before copying its FD number to the caller, even when a later header, address

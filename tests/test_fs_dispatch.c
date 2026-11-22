@@ -9,6 +9,7 @@
 #include "interception_buffers.h"
 #include "fs_buffer.h"
 #include "fs_wire.h"
+#include "test_fd_accounting.h"
 #include "fs_buffer_service.h"
 #include "fd_mutation.h"
 #include "fd_channel.h"
@@ -700,17 +701,33 @@ static void pause_wait(struct md_fs_worker *worker, struct md_fs_worker_pause *p
     }
     assert(md_fs_worker_pause_state(pause)==1);
 }
+static atomic_int listener_timeout;
+int __real_md_fs_listener_bind(const char *);
+int __wrap_md_fs_listener_bind(const char *endpoint) {
+    return atomic_exchange(&listener_timeout,0) ? -ETIMEDOUT : __real_md_fs_listener_bind(endpoint);
+}
 static void worker_start_failure(const char *store) {
+    md_test_prepare_fd_transfer();
     unsigned before=all_fds();
     char endpoint[80],missing[PATH_MAX];
     snprintf(endpoint,sizeof(endpoint),"md-worker-start-%d",getpid());
     assert(snprintf(missing,sizeof(missing),"%s/missing-runtime",store)<PATH_MAX);
     struct md_fs_worker *worker=NULL;
+    atomic_store(&listener_timeout,1);
+    assert(md_fs_worker_start(store,endpoint,NULL,NULL,NULL,NULL,&worker)==-ETIMEDOUT);
+    assert(!worker && all_fds()==before);
     assert(md_fs_worker_start(missing,endpoint,NULL,NULL,NULL,NULL,&worker)==-ENOENT);
     assert(!worker && all_fds()==before);
     assert(md_fs_worker_start(store,"",NULL,NULL,NULL,NULL,&worker)==-EINVAL);
     assert(!worker && all_fds()==before);
-    int listener=md_fs_listen(endpoint); assert(listener>=0);
+    int listener=md_fs_listener_bind(endpoint); assert(listener>=0);
+    struct sockaddr_un address;
+    long length=md_fs_address(endpoint,&address); assert(length>0);
+    int peer=socket(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0); assert(peer>=0);
+    assert(connect(peer,(struct sockaddr *)&address,(socklen_t)length)<0 && errno==ECONNREFUSED);
+    assert(md_fs_worker_start(missing,endpoint,NULL,NULL,NULL,NULL,&worker)==-EADDRINUSE);
+    assert(!md_fs_listener_activate(listener));
+    assert(!connect(peer,(struct sockaddr *)&address,(socklen_t)length) && !close(peer));
     assert(md_fs_worker_start(store,endpoint,NULL,NULL,NULL,NULL,&worker)==-EADDRINUSE);
     assert(!worker && fcntl(listener,F_GETFD)>=0 && all_fds()==before+1);
     assert(!close(listener));

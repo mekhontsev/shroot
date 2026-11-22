@@ -508,23 +508,42 @@ static int drain_native(struct md_inode_watches *w, struct watch_source *source,
     }
     return r;
 }
-int md_inode_watch_pump(struct md_inode_store *s) {
+static int subscribed_to(const struct instance *i,const struct watch_source *source,
+        const struct provider_source *provider) {
+    for (const struct subscription *p=i ? i->subscriptions : NULL;p;p=p->next)
+        if (p->source==source && p->provider==provider) return 1;
+    return 0;
+}
+static int pump(struct md_inode_store *s,int reader,struct instance **selected) {
+    if (selected) *selected=NULL;
     struct md_inode_watches *w = s->watches;
     if (!w) return 0;
     /* Bounded dispatch batch, independent of the configurable user quota. */
     struct epoll_event events[128];
     int n = epoll_wait(w->epoll, events, 128, 0);
-    if (n < 0) return errno == EINTR ? 0 : -errno;
+    if (n < 0) {
+        if (errno != EINTR) return -errno;
+        n = 0; /* The reader and its queue still exist without a readiness sample. */
+    }
     for (int j = 0; j < n; ++j) if (events[j].events & (EPOLLERR | EPOLLHUP)) {
         struct instance **link = &w->instances;
         while (*link && md_watch_queue_lifetime((*link)->queue) != events[j].data.fd) link = &(*link)->next;
         if (*link) { struct instance *i = *link; *link = i->next; free_instance(w, i); }
     }
     if (!w->instances) { md_inode_watch_close(s); return 0; }
+    struct instance *target=selected ? find(s,reader) : NULL;
+    if (selected) *selected=target;
     for (struct watch_source *p=w->sources;p;p=p->next) {
         /* WAL changes wake the same native source even if a writer dies before
          * publishing its marker. Idle sources need no catalogue snapshot. */
-        if (!source_ready(events,n,p->native)) continue;
+        if (!source_ready(events,n,p->native)) {
+            if (!subscribed_to(target,p,NULL)) continue;
+            /* A forwarded source may already hold records before its readiness
+             * reaches epoll. Only an explicit reader queries that source. */
+            int bytes=0;
+            if (ioctl(p->native,FIONREAD,&bytes)) return -errno;
+            if (!bytes) continue;
+        }
         if (!p->logical_subscriptions) {
             int r=drain_native(w,p,4*65536);
             if (r) return r;
@@ -544,7 +563,8 @@ int md_inode_watch_pump(struct md_inode_store *s) {
         if (r) return r;
     }
     for (struct provider_source *p=w->providers;p;p=p->next) {
-        if (!source_ready(events,n,md_watch_listener_descriptor(p->listener))) continue;
+        if (!source_ready(events,n,md_watch_listener_descriptor(p->listener))
+                && !subscribed_to(target,NULL,p)) continue;
         struct md_watch_event event;
         for (unsigned budget=0;budget<PROVIDER_EVENT_BUDGET && md_watch_listener_next(p->listener,&event);++budget) {
             if (event.mask&IN_Q_OVERFLOW) {
@@ -574,6 +594,7 @@ int md_inode_watch_pump(struct md_inode_store *s) {
     source_collect(w);
     return 0;
 }
+int md_inode_watch_pump(struct md_inode_store *s) { return pump(s,-1,NULL); }
 int md_inode_watch_pollfd(struct md_inode_store *s) { return s->watches ? s->watches->epoll : -1; }
 static int add(struct md_inode_store *owner, struct md_inode_store *selected,
         int fd, int object, unsigned mask) {
@@ -712,22 +733,22 @@ int md_inode_watch_remove(struct md_inode_store *s, int fd, int wd) {
     return r;
 }
 ssize_t md_inode_watch_bytes(struct md_inode_store *s, int fd) {
-    int r = md_inode_watch_pump(s);
+    struct instance *i;
+    int r = pump(s,fd,&i);
     if (r) return r;
-    struct instance *i = find(s, fd);
     return i ? (ssize_t)md_watch_queue_bytes(i->queue) : -EINVAL;
 }
 ssize_t md_inode_watch_read(struct md_inode_store *s, int fd, void *data, size_t capacity,
         int (*deliver)(void *, const void *, size_t), void *context) {
-    int r = md_inode_watch_pump(s);
+    struct instance *i;
+    int r = pump(s,fd,&i);
     if (r) return r;
-    struct instance *i = find(s, fd);
     return i ? md_watch_queue_read(i->queue, fd, data, capacity, deliver, context) : -EINVAL;
 }
 ssize_t md_inode_watch_reserve(struct md_inode_store *s, int fd, void *data, size_t capacity) {
-    int r = md_inode_watch_pump(s);
+    struct instance *i;
+    int r = pump(s,fd,&i);
     if (r) return r;
-    struct instance *i = find(s, fd);
     return i ? md_watch_queue_reserve(i->queue, fd, data, capacity) : -EINVAL;
 }
 int md_inode_watch_complete(struct md_inode_store *s, int fd, int delivered) {

@@ -5,6 +5,7 @@
 #include <asm/ptrace.h>
 #include <dirent.h>
 #include <elf.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -77,7 +78,19 @@ static void open_admission(void) {
     char directory[]="native-directory-XXXXXX";
     assert(mkdtemp(directory));
     int pin=open(directory,O_PATH|O_CLOEXEC); assert(pin>=0);
-    assert(!chmod(directory,0400));
+    int origin=open(".",O_PATH|O_CLOEXEC); assert(origin>=0);
+    assert(!fchdir(pin) && !chmod(".",0400));
+    int cwd=open("/proc/self/cwd/",O_RDONLY|O_NOFOLLOW);
+    struct stat cwd_st,pin_st;
+    assert(cwd>=0 && !fstat(cwd,&cwd_st) && !fstat(pin,&pin_st));
+    assert(cwd_st.st_dev==pin_st.st_dev && cwd_st.st_ino==pin_st.st_ino);
+    assert(!close(cwd) && !fchdir(origin) && !close(origin));
+    char child[64];
+    snprintf(child,sizeof(child),"/proc/self/fd/%d/.",pin);
+    int dot=openat(pin,".",O_RDONLY);
+    if (dot<0) {
+        assert(errno==EACCES && open(child,O_RDONLY)==-1 && errno==EACCES);
+    } else assert(!close(dot));
     const unsigned modes[]={O_RDONLY,O_PATH};
     for (unsigned removed=0;removed<2;++removed) {
         if (removed) assert(!rmdir(directory));
@@ -96,6 +109,11 @@ static void open_admission(void) {
         }
     }
     assert(!close(pin));
+    char regular[]="native-file-XXXXXX";
+    pin=mkstemp(regular); assert(pin>=0);
+    snprintf(child,sizeof(child),"/proc/self/fd/%d//",pin);
+    assert(open(child,O_PATH)==-1 && errno==ENOTDIR);
+    assert(!close(pin) && !unlink(regular));
     for (unsigned i=0;i<8;++i) {
         unsigned flags=O_PATH | (i&1 ? O_DIRECTORY : 0) | (i&2 ? O_CLOEXEC : 0)
             | (i&4 ? O_NOFOLLOW : 0);

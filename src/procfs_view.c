@@ -152,10 +152,9 @@ struct md_provider_tree *md_procfs_new(int parent,const char *text,const struct 
     for (size_t i=0;!error && i<sizeof(sampled)/sizeof(*sampled);++i) {
         int sample=openat(lower,sampled[i],O_RDONLY|O_CLOEXEC);
         if (sample>=0) close(sample);
-        else if (errno==EACCES || errno==EPERM || errno==ENOENT) {
-            sample=openat(md_provider_tree_root(tree),sampled[i],O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,0444);
-            if (sample<0) error=errno; else close(sample);
-        } else error=errno;
+        else if (errno==EACCES || errno==EPERM || errno==ENOENT)
+            error=-md_provider_placeholder(md_provider_tree_root(tree),sampled[i],0444);
+        else error=errno;
     }
     close(lower);
     if (!tree || error) { md_provider_tree_release(tree); errno=error; return NULL; }
@@ -165,29 +164,21 @@ struct md_provider_tree *md_procfs_new(int parent,const char *text,const struct 
             || mkdirat(root,"sys/fs/binfmt_misc",0755))) error=errno;
     for (unsigned i=MD_PROC_FILE_HOSTNAME;!error && i<=MD_PROC_FILE_INOTIFY_QUEUE;++i) {
         char path[64]; snprintf(path,sizeof(path),"%s/%s",md_proc_sysctl_directory(i),md_proc_sysctl_name(i));
-        int fd=openat(root,path,O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,0600);
-        if (fd<0) error=errno; else close(fd);
+        error=-md_provider_placeholder(root,path,0600);
     }
     if (!error && mkdirat(root,"sys/user",0755)) error=errno;
     if (!error && (mkdirat(root,"sys/vm",0755) || mkdirat(root,"sys/kernel/keys",0755))) error=errno;
-    for (unsigned i=0;!error && i<MD_KERNEL_POLICY_COUNT;++i) {
-        int fd=openat(root,md_kernel_policy_specs[i].path,O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,0600);
-        if (fd<0) error=errno; else close(fd);
-    }
+    for (unsigned i=0;!error && i<MD_KERNEL_POLICY_COUNT;++i)
+        error=-md_provider_placeholder(root,md_kernel_policy_specs[i].path,0600);
     const char *files[]={"sys/user/max_user_namespaces","devices","cmdline","filesystems","swaps","diskstats","modules"};
-    for (size_t i=0;!error && i<sizeof(files)/sizeof(*files);++i) {
-        int fd=openat(root,files[i],O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,0600);
-        if (fd<0) error=errno; else close(fd);
-    }
+    for (size_t i=0;!error && i<sizeof(files)/sizeof(*files);++i)
+        error=-md_provider_placeholder(root,files[i],0600);
     /* Host-global nodes have inert, inaccessible private attachment points.
      * Container runtimes may open O_PATH before covering them with a mount. */
     for (size_t i=0;!error && i<sizeof(kernel_nodes)/sizeof(*kernel_nodes);++i) {
         if (kernel_nodes[i].directory) {
             if (mkdirat(root,kernel_nodes[i].name,0700)) error=errno;
-        } else {
-            int fd=openat(root,kernel_nodes[i].name,O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,0000);
-            if (fd<0) error=errno; else close(fd);
-        }
+        } else error=-md_provider_placeholder(root,kernel_nodes[i].name,0000);
     }
     if (error) { md_provider_tree_release(tree); errno=error; return NULL; }
     return tree;
@@ -481,10 +472,8 @@ static int network_entry(struct md_filesystem *fs,const char *path,const char *n
     return 0;
 }
 static int network_file(int root,const char *path) {
-    int fd=openat(root,path,O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,0600);
-    if (fd>=0) close(fd);
-    else if (errno!=EEXIST) return -errno;
-    return 0;
+    int error=md_provider_placeholder(root,path,0600);
+    return error==-EEXIST ? 0 : error;
 }
 static int network_bridge_nodes(const struct md_view_mount *mount) {
     if (!mount->provider) return 0;

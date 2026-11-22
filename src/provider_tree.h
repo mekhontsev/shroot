@@ -4,6 +4,9 @@
 #include "mount_policy.h"
 #include <sys/types.h>
 struct md_provider_tree;
+/* Create an exclusive, empty regular entry in the provider's private tree.
+ * Use only where no caller requires a descriptor or guest open/close semantics. */
+int md_provider_placeholder(int directory,const char *path,mode_t mode);
 struct md_user_namespace;
 /* Superblock policy is shared by aliases; mount policy remains independent.
  * Imported policies are read-only observers of the original owner. */

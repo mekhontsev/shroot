@@ -195,8 +195,10 @@ static int runtime_open(struct md_fs_worker *w,struct worker_runtime *runtime,
     fs->statistics=rpc;
     const char *stage=NULL;
     int64_t started=0;
-    startup_stage(w,&stage,&started,"inode store");
-    int error=md_inode_store_open(w->store,0,&fs->store);
+    startup_stage(w,&stage,&started,"filesystem address");
+    runtime->listener=md_fs_listener_bind(w->endpoint);
+    int error=runtime->listener<0 ? runtime->listener : 0;
+    if (!error) { startup_stage(w,&stage,&started,"inode store"); error=md_inode_store_open(w->store,0,&fs->store); }
     if (!error && stats) md_inode_measure(fs->store,stats);
     if (!error) { startup_stage(w,&stage,&started,"runtime directories"); error=md_inode_runtime_prepare(fs->store); }
     if (!error && w->admit) { startup_stage(w,&stage,&started,"image catalogue"); error=md_image_catalogue_open(fs->store,w->admit,&fs->images); }
@@ -234,8 +236,7 @@ static int runtime_open(struct md_fs_worker *w,struct worker_runtime *runtime,
     w->inherited=NULL;
     if (!error) {
         startup_stage(w,&stage,&started,"filesystem listener");
-        runtime->listener=md_fs_listen(w->endpoint);
-        if (runtime->listener<0) error=runtime->listener;
+        error=md_fs_listener_activate(runtime->listener);
     }
     if (error) fprintf(stderr,"Shroot filesystem startup (%s): %s\n",stage,strerror(-error));
     startup_stage(w,&stage,&started,error ? "failed" : "ready");
@@ -322,6 +323,7 @@ static void *run(void *context) {
     md_queue_signal_send(&w->done);
     return NULL;
 }
+static int stop_and_join(struct md_fs_worker *,int *service_error);
 int md_fs_worker_start(const char *store, const char *endpoint, const char *admit, struct md_task_registry *tasks, struct md_fd_exchanges *exchanges,
         const struct md_fs_worker_launch *launch, struct md_fs_worker **out) {
     struct md_fs_worker *w = calloc(1, sizeof(*w));
@@ -364,7 +366,11 @@ int md_fs_worker_start(const char *store, const char *endpoint, const char *admi
     error = (int)md_event_wait_fd(w->ready, POLLIN, md_event_now() + 30000000000LL);
     if (error >= 0) { pthread_mutex_lock(&w->lock); error = w->error; pthread_mutex_unlock(&w->lock); }
     if (error < 0) {
-        if (md_fs_worker_stop(w) == -ETIMEDOUT) _exit(125);
+        int join_error=stop_and_join(w,NULL);
+        if (join_error) {
+            fprintf(stderr,"Shroot filesystem startup: %s; worker shutdown: %s\n",strerror(-error),strerror(-join_error));
+            _exit(125);
+        }
         return error;
     }
     *out = w; return 0;
@@ -538,8 +544,7 @@ int md_fs_worker_dispatch(struct md_fs_worker *w) {
     }
     return error;
 }
-int md_fs_worker_stop(struct md_fs_worker *w) {
-    if (!w) return 0;
+static int stop_and_join(struct md_fs_worker *w,int *service_error) {
     pthread_mutex_lock(&w->lock); w->stopping=1; pthread_mutex_unlock(&w->lock);
     md_event_signal(w->stop);
     /* EVENT_WAIT: worker exit after stop readiness; expiry leaves its memory
@@ -553,13 +558,14 @@ int md_fs_worker_stop(struct md_fs_worker *w) {
         md_queue_signal_acknowledge(&w->done);
     }
     int error = pthread_join(w->thread, NULL);
-    if (!error && w->statistics) {
+    if (error) return -error;
+    if (w->statistics) {
         const struct md_cost *costs[]={&w->queued,&w->execution,&w->delivery,&w->completion};
         const char *names[]={"queue","execute","delivery","complete"};
         for (unsigned i=0;i<4;++i) fprintf(stderr,"MD_WORKER phase=%s calls=%llu ns=%llu\n",names[i],
             (unsigned long long)costs[i]->calls,(unsigned long long)costs[i]->nanoseconds);
     }
-    if (!error && w->error != -ESHUTDOWN) error = -w->error;
+    if (service_error) *service_error=w->error==-ESHUTDOWN ? 0 : w->error;
     if (w->pause) *w->pause=(struct md_fs_worker_pause){0};
     if (w->copy_fence) md_fs_worker_copy_fence_end(w->copy_fence);
     while (w->completed) {
@@ -574,7 +580,13 @@ int md_fs_worker_stop(struct md_fs_worker *w) {
     md_device_events_release(w->device_events);
     md_ofd_orders_release(w->cursors);
     pthread_mutex_destroy(&w->lock); free(w);
-    return -error;
+    return 0;
+}
+int md_fs_worker_stop(struct md_fs_worker *w) {
+    if (!w) return 0;
+    int service_error=0;
+    int error=stop_and_join(w,&service_error);
+    return error ? error : service_error;
 }
 
 struct control_work {

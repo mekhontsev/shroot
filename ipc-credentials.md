@@ -26,8 +26,9 @@ directory descriptors cannot select a previously held directory.
 namespace worker. Workers sharing a store serialize metadata operations with a
 kernel file lock. They never hold this lock across guest connect, accept or IO.
 `<store>/ipc` is transient state, separate from image/inode metadata. A shared
-live-owner lease makes the first owner discard stale records, including socket
-cookies retained across a device reboot. Connection bindings can retain this
+live-owner lease makes the first owner replace stale socket metadata in one
+SQLite transaction. Other owners open the existing database without creating
+it or changing its schema. Connection bindings can retain this
 epoch after the worker closes SQLite. They share its scope by reference without
 duplicating descriptors; the scope retains the epoch lease and the store's
 shared maintenance lock. Database/gate resources close independently. The last

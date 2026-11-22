@@ -14,6 +14,15 @@
 #include <string.h>
 #include <unistd.h>
 
+int md_provider_placeholder(int directory,const char *path,mode_t mode) {
+    if (mode&~07777) return -EINVAL;
+    if (!mknodat(directory,path,S_IFREG|mode,0)) return 0;
+    if (errno!=EPERM && errno!=EACCES && errno!=ENOSYS && errno!=EOPNOTSUPP) return -errno;
+    int fd=openat(directory,path,O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,mode);
+    if (fd<0) return -errno;
+    return close(fd) ? -errno : 0;
+}
+
 struct directory_identity {
     dev_t device;
     ino_t inode;

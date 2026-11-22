@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "ipc_credentials.h"
 #include "fd_bundle.h"
+#include "storage_database.h"
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -592,7 +593,41 @@ static void exposure(const char *store) {
     md_ipc_credentials_close(other); md_ipc_credentials_close(owner);
     puts("PASS IPC native boundary: atomic export rejection, aliases, native-only future connect/listen/pair, inheritance and adapted launch preservation");
 }
+static void failed_epoch_reset(const char *directory) {
+    struct md_ipc_credentials *owner=NULL;
+    int pair[2];
+    assert(!md_ipc_credentials_open(directory,MD_IPC_TRANSPORT_NATIVE,&owner));
+    assert(!socketpair(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0,pair));
+    assert(!request(owner,MD_IPC_PAIR,pair[0],pair[1],NULL,0).error);
+    md_ipc_credentials_close(owner);
+    owner=NULL;
+    int root=open(directory,O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(root>=0);
+    int dir=openat(root,"ipc",O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(dir>=0 && !close(root));
+    sqlite3 *db=NULL;
+    assert(!md_database_open(dir,"credentials.db",0,&db));
+    assert(sqlite3_exec(db,"DROP TABLE native_sockets; CREATE VIEW native_sockets AS SELECT 1",NULL,NULL,NULL)==SQLITE_OK);
+    assert(sqlite3_close(db)==SQLITE_OK);
+    assert(md_ipc_credentials_open(directory,MD_IPC_TRANSPORT_NATIVE,&owner)<0 && !owner);
+    assert(!md_database_open(dir,"credentials.db",0,&db));
+    sqlite3_stmt *q=NULL;
+    assert(sqlite3_prepare_v2(db,"SELECT 1 FROM connections LIMIT 1",-1,&q,NULL)==SQLITE_OK);
+    assert(sqlite3_step(q)==SQLITE_ROW && sqlite3_finalize(q)==SQLITE_OK);
+    assert(sqlite3_exec(db,"DROP VIEW native_sockets",NULL,NULL,NULL)==SQLITE_OK && sqlite3_close(db)==SQLITE_OK);
+    assert(!md_ipc_credentials_open(directory,MD_IPC_TRANSPORT_NATIVE,&owner));
+    unavailable(owner,pair[0],-ENODATA);
+    struct md_ipc_credentials *peer=NULL;
+    assert(!renameat(dir,"credentials.db",dir,"saved.db"));
+    assert(md_ipc_credentials_open(directory,MD_IPC_TRANSPORT_NATIVE,&peer)<0 && !peer);
+    assert(faccessat(dir,"credentials.db",F_OK,0)<0 && errno==ENOENT);
+    assert(!renameat(dir,"saved.db",dir,"credentials.db"));
+    assert(!md_ipc_credentials_open(directory,MD_IPC_TRANSPORT_NATIVE,&peer));
+    md_ipc_credentials_close(peer);
+    md_ipc_credentials_close(owner);
+    assert(!close(pair[0]) && !close(pair[1]) && !close(dir));
+    puts("PASS failed IPC epoch reset rolls back, releases the lease and permits a clean retry");
+}
 void test_ipc_connections(const char *directory) {
+    failed_epoch_reset(directory);
     char foreign_path[PATH_MAX];
     assert(snprintf(foreign_path,sizeof(foreign_path),"%s/foreign",directory)<(int)sizeof(foreign_path)
         && !mkdir(foreign_path,0700));

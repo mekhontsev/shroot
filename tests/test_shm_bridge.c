@@ -3,6 +3,7 @@
 #include "ipc_namespace.h"
 #include "task_registry.h"
 #include "fs_wire.h"
+#include "test_fd_accounting.h"
 #include "resource_protocol.h"
 #include "pid_namespace.h"
 #include <assert.h>
@@ -31,6 +32,7 @@ static struct lorie_resource_reply request(struct md_shm_bridge *bridge,int fd,u
     return reply;
 }
 void test_shm_bridge(const char *root) {
+    md_test_prepare_fd_transfer();
     unsigned before=descriptors();
     struct md_task_snapshot task={.tgid=getpid(),.identity=md_identity_new(1000,1000),
         .ipc=md_ipc_namespace_new(root,1)};

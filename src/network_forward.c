@@ -2,6 +2,7 @@
 #include "network_forward.h"
 #include "network_endpoint.h"
 #include "network_route.h"
+#include "network_route_ip.h"
 #include "network_raw4.h"
 #include "network_raw6.h"
 #include "network_link.h"
@@ -22,7 +23,6 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
-#include <time.h>
 #include <unistd.h>
 
 struct listener {
@@ -98,10 +98,6 @@ struct md_network_port_reservation {
     const void *previous;
     int created, reuse;
 };
-static int64_t now_ms(void) {
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
-    return (int64_t)ts.tv_sec*1000+ts.tv_nsec/1000000;
-}
 static int same(const struct md_inet_address *a,const struct md_inet_address *b) {
     return md_inet_equal(a,b);
 }
@@ -183,7 +179,7 @@ void md_network_forward_tracking_changed(struct md_network_namespace *n) {
 int md_network_forward_connections(struct md_network_namespace *n,
         int (*visit)(void *,const struct md_connection *),void *context) {
     struct md_network_forward *f=n->fabric->forward;
-    int64_t now=now_ms();
+    int64_t now=md_network_lifetime_now();
     for (struct flow *c=f ? f->connections : NULL;c;c=c->next) {
         if (c->group || c->forgotten || c->deadline<=now) continue;
         struct md_network_tracking_entry *tracked=c->type==SOCK_STREAM ? md_network_tracking_find(&c->tracking,n->inode) : NULL;
@@ -417,9 +413,9 @@ static struct flow *new_flow(struct md_network_forward *f,struct listener *l,int
     }
     if (c->type==SOCK_STREAM) {
         c->buffer=calloc(2,sizeof(*c->buffer)); if (!c->buffer) goto failed;
-        md_network_tracking_init(&c->tracking,f->fabric,path,&f->next_id,now_ms());
+        md_network_tracking_init(&c->tracking,f->fabric,path,&f->next_id,md_network_lifetime_now());
     }
-    c->deadline=c->type==SOCK_DGRAM || c->connecting ? now_ms()+30000 : INT64_MAX;
+    c->deadline=c->type==SOCK_DGRAM || c->connecting ? md_network_lifetime_now()+30000 : INT64_MAX;
     for (unsigned leg=0;leg<2;++leg) if (c->fd[leg]>=0 && (leg || !c->borrowed))
         if (watch(f,EPOLL_CTL_ADD,c->fd[leg],c->id,leg,0)) goto failed;
     c->next=f->connections; f->connections=c; ++f->flows;
@@ -575,7 +571,7 @@ static int reconnect_datagram(struct md_network_forward *f,struct flow *c) {
     if (datagram_reply_carrier(c) && !path.packet_space && receiver==c->receiver
             && same(&target,&c->target)) {
         c->path=path; c->receiver_generation=f->fabric->endpoint_generation; c->forgotten=0;
-        c->deadline=now_ms()+30000;
+        c->deadline=md_network_lifetime_now()+30000;
         return 0;
     }
     struct md_stack_channel *channel=NULL;
@@ -587,7 +583,7 @@ static int reconnect_datagram(struct md_network_forward *f,struct flow *c) {
     if (c->fd[1]>=0) { epoll_ctl(f->epoll,EPOLL_CTL_DEL,c->fd[1],NULL); close(c->fd[1]); }
     c->fd[1]=fd; c->packet_channel=channel; c->path=path; c->target=target; c->remote=remote;
     c->receiver=receiver; c->receiver_generation=f->fabric->endpoint_generation; c->forgotten=0;
-    c->deadline=now_ms()+30000;
+    c->deadline=md_network_lifetime_now()+30000;
     md_network_stack_set_policy(channel,c,1,packet_policy);
     return 0;
 }
@@ -617,7 +613,7 @@ static int datagram_submit(struct md_network_forward *f,struct flow *c,unsigned 
     struct datagram_queue *q=&c->datagrams[direction];
     if (!q->head) {
         int error=datagram_send(f,c,direction,data,size,&target);
-        if (!error) { c->deadline=now_ms()+30000; return 0; }
+        if (!error) { c->deadline=md_network_lifetime_now()+30000; return 0; }
         if (error!=-EAGAIN && error!=-EWOULDBLOCK && error!=-EINTR) { ++f->dropped_datagrams; return 0; }
     }
     struct datagram *d=q->count<64 && size<=262144-q->bytes ? malloc(sizeof(*d)+size) : NULL;
@@ -625,7 +621,7 @@ static int datagram_submit(struct md_network_forward *f,struct flow *c,unsigned 
     d->next=NULL; d->size=size; d->target=target; memcpy(d->data,data,size);
     if (q->tail) q->tail->next=d; else q->head=d;
     q->tail=d; q->bytes+=size; ++q->count;
-    c->deadline=now_ms()+30000;
+    c->deadline=md_network_lifetime_now()+30000;
     interests(f,c);
     if (c->borrowed && direction) listener_interests(f,c->listener);
     return 0;
@@ -737,7 +733,7 @@ static void group_send(struct md_network_forward *f,struct listener *l,const voi
     if (link->kind!=MD_LINK_LOOPBACK) group_visit(&d,n,link,0,NULL);
     if (md_network_link_walk(n,link,0,group_visit,&d,NULL)) ++f->dropped_datagrams;
     l->group_started=1;
-    l->deadline=now_ms()+30000;
+    l->deadline=md_network_lifetime_now()+30000;
 }
 static void udp_accept(struct md_network_forward *f,struct listener *l) {
     unsigned char data[65536];
@@ -820,7 +816,7 @@ static void *run(void *context) {
         pthread_mutex_lock(&f->fabric->lock);
         if (f->stopped) { pthread_mutex_unlock(&f->fabric->lock); return NULL; }
         if (count<0 && wait_error!=EINTR) { pthread_mutex_unlock(&f->fabric->lock); return NULL; }
-        f->now=now_ms();
+        f->now=md_network_lifetime_now();
         for (struct flow *c=f->connections,*next;c;c=next) {
             next=c->next;
             if (c->type==SOCK_DGRAM && c->deadline<=f->now) { retire_datagram(f,c); continue; }
@@ -873,7 +869,7 @@ static void *run(void *context) {
                 }
             }
         }
-        int64_t now=now_ms(),deadline=md_network_route_expire(f->fabric,now);
+        int64_t now=md_network_lifetime_now(),deadline=md_network_route_expire(f->fabric,now);
         struct flow *c=f->connections;
         while (c) {
             struct flow *next=c->next;
@@ -968,7 +964,7 @@ static struct listener *new_listener(struct md_network_forward *f,uint64_t space
         close(l->fd); if (l->reserved>=0) close(l->reserved);
         free(l); errno=-error; return NULL;
     }
-    l->deadline=external ? INT64_MAX : now_ms()+30000;
+    l->deadline=external ? INT64_MAX : md_network_lifetime_now()+30000;
     l->next=f->ports; f->ports=l; ++f->listeners; return l;
 }
 static int listener_reuse(struct listener *l,int reuse) {

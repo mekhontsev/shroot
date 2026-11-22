@@ -32,14 +32,24 @@ void md_fs_observe(void (*fn)(enum md_fs_checkpoint, const struct md_fs_packet *
 #define OBSERVE(stage, packet) ((void)0)
 #endif
 
-int md_fs_listen(const char *name) {
+int md_fs_listener_bind(const char *name) {
     struct sockaddr_un address;
     long length = md_fs_address(name, &address); if (length < 0) return (int)length;
     int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) return -errno;
-    if (bind(fd, (struct sockaddr *)&address, (socklen_t)length) || listen(fd, 32)) {
+    if (bind(fd, (struct sockaddr *)&address, (socklen_t)length)) {
         int r = -errno; close(fd); return r;
     }
+    return fd;
+}
+int md_fs_listener_activate(int fd) {
+    return listen(fd,32) ? -errno : 0;
+}
+int md_fs_listen(const char *name) {
+    int fd=md_fs_listener_bind(name);
+    if (fd<0) return fd;
+    int error=md_fs_listener_activate(fd);
+    if (error) { close(fd); return error; }
     return fd;
 }
 static int valid(const struct md_fs_packet *q, size_t size, const struct md_fs_rights *rights) {

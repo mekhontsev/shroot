@@ -15,15 +15,17 @@
 static int portable_nodes(struct md_filesystem *fs,struct md_provider_tree *dev,int parent,
         struct md_inode_store **out) {
     int error=md_inode_store_transient(parent,md_mount_namespace_owner(fs->mounts),out);
-    if (!error) md_inode_store_lifetime(*out)->filesystem_kind=MD_FILESYSTEM_TMPFS;
+    if (error) return error;
+    md_inode_store_lifetime(*out)->filesystem_kind=MD_FILESYSTEM_TMPFS;
+    error=md_inode_operation_window_begin(*out);
+    if (error) return error;
     const char *path; uint64_t device;
-    for (unsigned i=0;!error && md_open_device_node(i,&path,&device);++i) {
+    for (unsigned i=0;!error && md_open_device_node(i,&path,&device);++i)
         error=md_inode_mknod(*out,MD_INODE_ROOT,path+5,S_IFCHR|0666,device);
-        if (!error) {
-            int fd=openat(md_provider_tree_root(dev),path+5,O_CREAT|O_EXCL|O_RDONLY|O_CLOEXEC,0600);
-            if (fd<0) error=-errno; else close(fd);
-        }
-    }
+    int end=md_inode_operation_window_end(*out);
+    if (!error) error=end;
+    for (unsigned i=0;!error && md_open_device_node(i,&path,&device);++i)
+        error=md_provider_placeholder(md_provider_tree_root(dev),path+5,0600);
     return error;
 }
 static int attach_nodes(struct md_filesystem *fs,struct md_inode_store *store,
@@ -42,12 +44,17 @@ static int attach_nodes(struct md_filesystem *fs,struct md_inode_store *store,
         items[i]=(struct md_mount_attachment){&sources[i],&targets[i]};
     }
     sources[nodes]=*shm;
-    int error=0;
-    for (unsigned i=0;!error && md_open_device_node(i,&path,&device);++i) {
-        int fd=md_inode_open(store,MD_INODE_ROOT,path+5,O_PATH|O_CLOEXEC,0);
-        sources[i].fd=fd;
-        error=fd<0 ? fd : md_view_walk(fs,-1,NULL,path,1,0,MD_VIEW_MOUNT_TARGET,&targets[i]);
+    int error=md_inode_read_scope_begin(store);
+    if (!error) {
+        for (unsigned i=0;!error && md_open_device_node(i,&path,&device);++i) {
+            int fd=md_inode_open(store,MD_INODE_ROOT,path+5,O_PATH|O_CLOEXEC,0);
+            if (fd<0) error=fd; else sources[i].fd=fd;
+        }
+        int end=md_inode_read_scope_end(store);
+        if (!error) error=end;
     }
+    for (unsigned i=0;!error && md_open_device_node(i,&path,&device);++i)
+        error=md_view_walk(fs,-1,NULL,path,1,0,MD_VIEW_MOUNT_TARGET,&targets[i]);
     if (!error) error=md_view_walk(fs,-1,NULL,"/dev/shm",1,0,MD_VIEW_MOUNT_TARGET,&targets[nodes]);
     if (!error) error=md_view_attach_sources(fs,items,count,NULL);
     for (unsigned i=0;i<count;++i) {

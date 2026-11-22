@@ -657,6 +657,7 @@ static void faulty_reply(enum reply_fault fault) {
     pid_t child = fork(); CHECK(child >= 0);
     if (!child) {
         close(stop[1]); close(received[0]);
+        byte(received[1]);
         CHECK(md_event_wait_fd(listener, POLLIN, md_event_now() + 5000000000LL) == 0);
         int socket = accept4(listener, NULL, NULL, SOCK_CLOEXEC); CHECK(socket >= 0);
         CHECK(md_event_wait_fd(socket, POLLIN, md_event_now() + 5000000000LL) == 0);
@@ -706,6 +707,7 @@ static void faulty_reply(enum reply_fault fault) {
     if (fault >= CHUNK_EOF) q=(struct md_fs_request){.operation=MD_FS_IPC_PEER,.mode=1,.directory={stop[1],-1}};
     else if (fault >= IMAGE_SHORT) q.operation = MD_FS_OPEN_IMAGE;
     struct md_fs_response out; int before = fd_count(getpid());
+    event(received[0]); /* The timeout measures the transport, not fork startup. */
     CHECK(md_fs_call(endpoint, timeout ? 100 : 5000, &q, &out) == (timeout ? -ETIMEDOUT : -EPROTO));
     CHECK(out.delivery == MD_FS_UNCONFIRMED && out.result.fd == -1 && fd_count(getpid()) == before);
     event(received[0]); if (timeout) byte(stop[1]); close(stop[1]); close(received[0]); joined(child, 0);
@@ -714,8 +716,13 @@ static void deferred_reply(void) {
     for (unsigned fault=0;fault<4;++fault) {
         char endpoint[96]; snprintf(endpoint,sizeof(endpoint),"md-fs-deferred-rpc-%d-%u",getpid(),fault);
         int listener=md_fs_listen(endpoint); CHECK(listener>=0);
+        int ready[2]; CHECK(!pipe2(ready,O_CLOEXEC));
         pid_t child=fork(); CHECK(child>=0);
         if (!child) {
+            close(ready[0]);
+            int fd=fault==2 ? open("/dev/null",O_RDONLY|O_CLOEXEC) : -1;
+            CHECK(fault!=2 || fd>=0);
+            byte(ready[1]); close(ready[1]);
             CHECK(!md_event_wait_fd(listener,POLLIN,md_event_now()+5000000000LL));
             int socket=accept4(listener,NULL,NULL,SOCK_CLOEXEC); CHECK(socket>=0);
             struct md_fs_packet q; struct md_fs_rights rights={0};
@@ -724,7 +731,6 @@ static void deferred_reply(void) {
             CHECK(!md_event_wait_fd(socket,POLLIN,md_event_now()+5000000000LL));
             CHECK(md_fs_receive(socket,&q,sizeof(q),&rights)>0); md_fs_close_rights(&rights);
             struct md_fs_deferred admission={MD_FS_MAGIC,MD_FS_VERSION,MD_OPERATION_PENDING};
-            int fd=open("/dev/null",O_RDONLY|O_CLOEXEC); CHECK(fd>=0);
             if (fault==2) rights=(struct md_fs_rights){.count=1,.fd={fd}};
             if (fault==3) admission.error=0;
             CHECK(md_fs_send(socket,&admission,sizeof(admission),&rights)==sizeof(admission));
@@ -740,9 +746,11 @@ static void deferred_reply(void) {
                 struct md_fs_reply reply={.magic=MD_FS_MAGIC,.version=MD_FS_VERSION,.error=-ENOENT};
                 CHECK(md_fs_send(socket,&reply,offsetof(struct md_fs_reply,data),&rights)>0);
             }
-            close(fd); close(socket); close(listener); _exit(0);
+            if (fd>=0) close(fd);
+            close(socket); close(listener); _exit(0);
         }
         close(listener);
+        close(ready[1]); event(ready[0]); close(ready[0]);
         struct md_fs_request q={.operation=MD_FS_STAT,.directory={-1,-1},.path={"/",NULL}};
         struct md_fs_response out; int before=fd_count(getpid());
         CHECK(md_fs_call(endpoint,500,&q,&out)==(fault ? -EPROTO : 0));

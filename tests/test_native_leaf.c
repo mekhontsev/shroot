@@ -6,6 +6,7 @@
 #include "inode_xattr.h"
 #include "inode_leaf.h"
 #include "inode_watch.h"
+#include "watch_source.h"
 #include "inode_overlay.h"
 #include "inode_view.h"
 #include "landlock_policy.h"
@@ -20,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -30,6 +32,17 @@
 
 static int gets,sets,syncs,changes,kill_after,fail_at;
 static int mknod_error;
+static int delayed_epoll=-1;
+static int epoll_error;
+int __real_epoll_wait(int,struct epoll_event *,int,int);
+int __wrap_epoll_wait(int fd,struct epoll_event *events,int capacity,int timeout) {
+    if (fd==delayed_epoll && !timeout) {
+        delayed_epoll=-1;
+        if (epoll_error) { errno=epoll_error; epoll_error=0; return -1; }
+        return 0;
+    }
+    return __real_epoll_wait(fd,events,capacity,timeout);
+}
 int __real_mknodat(int,const char *,mode_t,dev_t);
 int __wrap_mknodat(int directory,const char *name,mode_t mode,dev_t device) {
     if (mknod_error) { errno=mknod_error; return -1; }
@@ -551,6 +564,41 @@ static void creation_events(struct md_inode_store *s,int dir) {
     close(sock); close(observer);
     puts("PASS creation events: open has CREATE/OPEN/CLOSE; mknod has only CREATE, for native and catalogue allocation");
 }
+static void delayed_readiness(struct md_inode_store *s,int dir) {
+    int w=md_inode_watch_create(s,IN_NONBLOCK); assert(w>=0);
+    int wd=md_inode_watch_add(s,w,dir,IN_CREATE); assert(wd>0);
+    union { struct inotify_event event; char data[256]; } out;
+    for (unsigned op=0;op<3;++op) {
+        assert(!md_inode_mknod(s,dir,"delayed",S_IFREG|0644,0));
+        delayed_epoll=md_inode_watch_pollfd(s); assert(delayed_epoll>=0);
+        if (op==1) epoll_error=EINTR;
+        ssize_t n;
+        if (!op) n=md_inode_watch_read(s,w,out.data,sizeof(out),NULL,NULL);
+        else if (op==1) {
+            ssize_t bytes=md_inode_watch_bytes(s,w); assert(bytes>0);
+            n=md_inode_watch_read(s,w,out.data,sizeof(out),NULL,NULL); assert(n==bytes);
+        } else {
+            n=md_inode_watch_reserve(s,w,out.data,sizeof(out)); assert(n>0);
+            assert(!md_inode_watch_complete(s,w,1));
+        }
+        assert(delayed_epoll==-1 && n>0 && (size_t)n==sizeof(out.event)+out.event.len);
+        assert(out.event.wd==wd && out.event.mask==IN_CREATE && out.event.len && !strcmp(out.event.name,"delayed"));
+        assert(md_inode_watch_read(s,w,out.data,sizeof(out),NULL,NULL)==-EAGAIN);
+        assert(!md_inode_unlink(s,dir,"delayed",0));
+    }
+    struct md_watch_source *provider=NULL;
+    assert(!md_watch_source_new(&provider));
+    int p=md_inode_watch_add_provider(s,w,provider,42,S_IFDIR|0755,IN_CREATE);
+    assert(p>0 && p!=wd);
+    md_watch_source_emit(provider,42,IN_CREATE,0,"provider",0);
+    delayed_epoll=md_inode_watch_pollfd(s);
+    ssize_t n=md_inode_watch_read(s,w,out.data,sizeof(out),NULL,NULL);
+    assert(delayed_epoll==-1 && n>0 && (size_t)n==sizeof(out.event)+out.event.len);
+    assert(out.event.wd==p && out.event.mask==IN_CREATE && out.event.len && !strcmp(out.event.name,"provider"));
+    assert(md_inode_watch_read(s,w,out.data,sizeof(out),NULL,NULL)==-EAGAIN);
+    md_watch_source_release(provider);
+    close(w);
+}
 static void birth_fallback(struct md_inode_store *s,int dir) {
     const struct md_identity *previous=s->identity;
     struct md_identity root=md_identity_new(0,0); s->identity=&root;
@@ -845,6 +893,7 @@ static void hybrid(const char *path) {
     assert(!mdi_finish(s,0));
     puts("PASS promotion preserves native identity, ACL and overlay attributes across virtual hardlinks");
     pinned_rule(s,dir);
+    delayed_readiness(s,dir);
     creation_events(s,dir);
     user_leaves(s);
     close(regular); close(observer); close(dir); md_inode_store_close(s); md_identity_release(&ids);
@@ -1092,6 +1141,7 @@ static void restored_hybrid(const char *path) {
     puts("PASS backup materializes unpromoted native names together with catalogue hardlinks");
 }
 int main(int argc,char **argv) {
+    setvbuf(stdout,NULL,_IOLBF,0);
     if (argc==3 && !strcmp(argv[1],"--check-backup")) { restored(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--check-hybrid-backup")) { restored_hybrid(argv[2]); return 0; }
     assert(argc==2 && argv[1][0]=='/' && !mkdir(argv[1],0700)); umask(0);

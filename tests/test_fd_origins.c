@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "fd_selector.h"
 #include "fs_mount_internal.h"
+#include "test_fd_accounting.h"
 #include "task_resources.h"
 #include "task_registry.h"
 #include "event_wait.h"
@@ -1229,6 +1230,7 @@ static void expect_export(struct md_fd_origins *table, struct md_fd_channel *exp
     md_fd_channel_release(actual);
 }
 static void export_messages(void) {
+    md_test_prepare_fd_transfer();
     unsigned before=descriptors();
     for (unsigned mode=0;mode<5;++mode) {
         struct md_fd_channel *channel=NULL; assert(!md_fd_channel_new(&channel));
@@ -1261,7 +1263,9 @@ static void export_messages(void) {
             assert(md_fd_channel_capture_finish(&capture,&received)==-EPROTO && !received.count);
         }
         md_fd_channel_release(channel);
-        assert(read(pipefd[0],&byte,1)==0 && !close(pipefd[0]) && descriptors()==before);
+        assert(read(pipefd[0],&byte,1)==0);
+        assert(!close(pipefd[0]));
+        assert(descriptors()==before);
     }
     puts("PASS export messages: kernel sender, exact payload, malformed/truncated rights and queued-owner release preserve EOF");
 }

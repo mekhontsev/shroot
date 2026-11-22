@@ -249,6 +249,10 @@ deadline primitive, including EINTR handling. Server
 waits observe listener, request/reply, client-close and stop-FD readiness, with peer expiry. These
 are event waits with failure bounds, not readiness polling or settling delays.
 
+Startup reserves the local socket address before touching the store. The socket
+accepts no connections until the namespace is ready. A failed startup releases
+the reservation and joins the worker before returning the service error.
+
 In namespace execution, the supervisor retains the worker until the complete
 guest tree has ended. Frontend lifetime and initial guest exit do not determine
 namespace lifetime. See [process ownership](process-lifetime.md).
