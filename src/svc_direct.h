@@ -23,6 +23,7 @@ struct md_svc_direct_context {
     uintptr_t checkpoint;
 };
 extern const unsigned char md_svc_signal_checkpoint[];
+extern const unsigned char md_svc_signal_checkpoint_entry[];
 typedef int (*md_svc_direct_memory)(void *,uintptr_t,void *,size_t,int write);
 /* Optional signal rendezvous after the dispatcher returns. No private TRAP. */
 #define MD_SVC_DIRECT_PENDING 392

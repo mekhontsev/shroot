@@ -492,8 +492,17 @@ static void guard_recovery(void) {
         uint32_t *tail=(void *)(code+md_svc_direct_size());
         uintptr_t checkpoint;
         memcpy(&checkpoint,tail+8,sizeof(checkpoint));
-        assert(checkpoint==c.checkpoint && tail[4]==(UINT32_C(0xd2800008)|(SYS_gettid<<5))
+        uint32_t pad,marker;
+        memcpy(&pad,md_svc_signal_checkpoint_entry,4);
+        memcpy(&marker,md_svc_signal_checkpoint,4);
+        assert((uintptr_t)md_svc_signal_checkpoint==(uintptr_t)md_svc_signal_checkpoint_entry+4);
+        assert(pad==UINT32_C(0xd503249f) && marker==UINT32_C(0xd4000001));
+        assert(checkpoint+4==c.checkpoint && tail[4]==(UINT32_C(0xd2800008)|(SYS_gettid<<5))
             && tail[5]==UINT32_C(0x5800007e) && tail[6]==UINT32_C(0xd61f03c0));
+        struct user_pt_regs landing={.pc=checkpoint,.sp=c.frames+MD_SVC_SLOT_SIZE,.pstate=0x800};
+        struct user_pt_regs before=landing;
+        assert(md_svc_direct_recover(&c,&landing,no_memory,NULL)==2);
+        assert(!memcmp(&landing,&before,sizeof(landing)));
         for (unsigned j=0;j<sizeof(callers)/sizeof(*callers);++j) for (unsigned k=0;k<5;++k) {
             struct user_pt_regs r={.pc=c.gate+4*k,.sp=0x600000,.pstate=0xa0001000};
             for (unsigned g=0;g<31;++g) r.regs[g]=0xcafe0000+g;

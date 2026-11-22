@@ -58,7 +58,7 @@ struct md_svc_registry *md_svc_machine_admit(pid_t pid,uintptr_t descriptor) {
     close(fd);
     for (unsigned i=0;i<runtime.count;++i)
         if (cursor[i]!=runtime.pools[i]+MD_SVC_CODE_BYTES) { md_svc_registry_free(r); return NULL; }
-    if (result<0 || !r->native_end || runtime.checkpoint<r->native_begin
+    if (result<0 || !r->native_end || runtime.checkpoint<r->native_begin+4
             || runtime.checkpoint>r->native_end-8 || runtime.native.begin<r->native_begin
             || runtime.native.call<runtime.native.begin || runtime.native.call>=runtime.native.end
             || runtime.native.end>=r->native_end) { md_svc_registry_free(r); return NULL; }

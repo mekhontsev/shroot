@@ -117,7 +117,7 @@ uintptr_t md_svc_direct_checkpoint(const struct md_svc_direct_context *c) {
 }
 int md_svc_direct_signal_plan(const struct md_svc_direct_context *c,uintptr_t dispatch,
         struct md_svc_direct_fallback exits,void *output,size_t capacity,uint32_t *replacement) {
-    if (!c || !c->checkpoint || (c->checkpoint&3) || capacity<md_svc_direct_signal_size()) return -EINVAL;
+    if (!c || c->checkpoint<4 || (c->checkpoint&3) || capacity<md_svc_direct_signal_size()) return -EINVAL;
     int error=md_svc_direct_plan(c->svc,c->number,c->gate,dispatch,c->frames,exits,output,capacity,replacement);
     if (error) return error;
     size_t returned=GUARD_BYTES+at(md_svc_single_returned),size=md_svc_direct_size();
@@ -135,7 +135,8 @@ int md_svc_direct_signal_plan(const struct md_svc_direct_context *c,uintptr_t di
     tail[5]=UINT32_C(0x5800007e); /* ldr x30, [pc, #12] */
     tail[6]=UINT32_C(0xd61f03c0); /* br x30 */
     tail[7]=UINT32_C(0xd503201f);
-    memcpy(tail+8,&c->checkpoint,sizeof(c->checkpoint));
+    uintptr_t landing=c->checkpoint-4;
+    memcpy(tail+8,&landing,sizeof(landing));
     error=md_svc_branch(c->gate+returned,c->gate+size,&jump);
     if (!error) memcpy((char *)output+returned,&jump,4);
     return error;
@@ -210,6 +211,9 @@ int md_svc_direct_recover(const struct md_svc_direct_context *c,struct user_pt_r
         return 1;
     }
     int private_sp=r->sp>c->frames && r->sp<=c->frames+MD_SVC_POOL_SIZE;
+    /* The indirect transfer has not consumed its landing instruction yet.
+     * The marker immediately after it owns the completed continuation. */
+    if (private_sp && pc==c->checkpoint-4) return 2;
     int tail=(pc>=c->gate+size && pc<=c->gate+size+24)
         || pc==c->checkpoint || pc==c->checkpoint+4;
     int post=pc>=body+at(md_svc_single_returned) && pc<body+at(md_svc_single_busy_replay);

@@ -118,6 +118,9 @@ single_origin_8:
     .quad 0
 md_svc_single_end:
 .balign 4
+.global md_svc_signal_checkpoint_entry
+md_svc_signal_checkpoint_entry:
+    hint #36 /* BTI j: the gate jumps here, never directly to the SVC. */
 .global md_svc_signal_checkpoint
 md_svc_signal_checkpoint:
     svc #0
