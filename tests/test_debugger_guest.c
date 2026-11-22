@@ -195,7 +195,7 @@ static void seccomp_install_trace(void) {
     }
     puts("PASS filter installation trace: one event and exit per call with live peers, both APIs and repeated site");
 }
-static void seccomp_trace_test(const char *group) {
+static void seccomp_trace_test(const char *group,int native_control) {
     if (!group || !strcmp(group,"install")) seccomp_install_trace();
     if (group && !strcmp(group,"install")) return;
     enum { UNCHANGED, SKIP, DENIED, TRACE_AGAIN, REGISTER_ONLY, NUMBER_ONLY,
@@ -243,6 +243,8 @@ static void seccomp_trace_test(const char *group) {
             assert(visible==(uint64_t)(variant==REGISTER_ONLY ? SYS_getppid : original));
             if (variant==SKIP) assert(value==617);
             else if (variant==DENIED) assert(value==-EACCES);
+            else if ((variant==ARGUMENT || variant==ARGUMENT_PC) && *completed==0)
+                assert(value==-ERANGE);
             else if (variant==NO_OPTION || variant==NO_TRACER) assert(value==-ENOSYS);
             else if (original==-1) assert(value==-ENOSYS);
             else {
@@ -295,6 +297,12 @@ static void seccomp_trace_test(const char *group) {
         assert(!ptrace(PTRACE_GETREGSET,child,NT_ARM_SYSTEM_CALL,&io));
         assert(number==(variant==SKIP ? -1 : variant==DENIED ? SYS_getppid
             : variant==TRACE_AGAIN || variant==NUMBER_ONLY ? SYS_getuid : original));
+        if (variant==ARGUMENT || variant==ARGUMENT_PC) {
+            assert(ptrace(PTRACE_GET_SYSCALL_INFO,child,sizeof(info),&info)>0);
+            assert(info.op==PTRACE_SYSCALL_INFO_SECCOMP && info.seccomp.nr==(unsigned)number);
+            *completed=(int)info.seccomp.args[0];
+            assert(*completed==0 || (native_control && *completed==AT_FDCWD));
+        }
         assert(!ptrace(variant==DETACH ? PTRACE_DETACH : variant==SYSEMU_AFTER_TRACE ? PTRACE_SYSEMU : variant==SYSCALL_EXIT ? PTRACE_SYSCALL
             : PTRACE_CONT,child,0,0));
         if (variant==SYSEMU_AFTER_TRACE) {
@@ -1693,6 +1701,8 @@ static void jit_target(void) {
     assert(!munmap(address,page));
 }
 int main(int argc, char **argv) {
+    int native_control=argc>1 && !strcmp(argv[1],"--native-control");
+    if (native_control) { --argc; ++argv; }
     assert(argc==2 || argc==3); alarm(20);
     const char *name=argv[1];
     if (!strncmp(name,"filtered-",9)) {
@@ -1705,7 +1715,7 @@ int main(int argc, char **argv) {
     assert(argc==2 || !strcmp(argv[1],"syscall") || !strcmp(argv[1],"syscall-signal")
         || !strcmp(argv[1],"seccomp-trace"));
     if (!strcmp(argv[1], "attach")) attach_test(0, 0);
-    else if (!strcmp(argv[1], "seccomp-trace")) seccomp_trace_test(argc>2 ? argv[2] : NULL);
+    else if (!strcmp(argv[1], "seccomp-trace")) seccomp_trace_test(argc>2 ? argv[2] : NULL,native_control);
     else if (!strcmp(argv[1], "seccomp-interrupt")) seccomp_interrupt_test();
     else if (!strcmp(argv[1], "pidfd-copy")) pidfd_copy_test();
     else if (!strcmp(argv[1], "proc-fd")) proc_fd_test();

@@ -264,7 +264,6 @@ void handle_notification(const struct seccomp_notif *request) {
     if (!buffer_admission && !trace_rechecked
             && guest_trace_begin(t,&q.data,NULL,&q,MD_TASK_CALL_USER)) return;
     if (!buffer_admission && guest_notification_begin(t,&q.data,NULL,&q,NULL)) return;
-    if (trace_rechecked) q.data.args[0]=t->seccomp.trace.visible_argument;
     if (q.data.nr==SYS_rt_sigprocmask) {
         CHECK(!q.data.args[1]);
         if (!t->signals.host || (!t->metadata_restart && !t->signals.host_blocked && !t->signals.delivery.active) || !q.data.args[2]

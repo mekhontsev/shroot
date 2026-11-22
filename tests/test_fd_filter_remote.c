@@ -110,7 +110,10 @@ static void install_at(pid_t pid,int fd,struct shared *shared,const struct user_
     int ready;
     do { ready=md_task_filter_event(&call,stop(pid)); } while (!ready);
     if (retry_thread) {
-        assert(ready==1 && call.task.result==-EPERM && !md_task_filter_retry_thread(&call));
+        assert(ready==1 && call.task.result==-EPERM);
+        int error=md_task_filter_retry_thread(&call);
+        if (error) fprintf(stderr,"thread retry at boundary %d: %s\n",boundary,strerror(-error));
+        assert(!error);
         do { ready=md_task_filter_event(&call,stop(pid)); } while (!ready);
     }
     if (expected==-ENOMEM) {
@@ -701,7 +704,13 @@ static void notification_injection(int protected,int interrupt,int retire,int co
     assert(!ioctl(listener,SECCOMP_IOCTL_NOTIF_RECV,&request));
     assert(request.pid==(unsigned)pid && request.data.nr==SYS_getppid
         && request.data.instruction_pointer==(uintptr_t)remote_return);
-    assert(request.data.args[0]==0x12345678 && md_task_call_notification(&call,&request));
+    assert(request.data.args[0]==call.seccomp_first_argument && md_task_call_notification(&call,&request));
+    request.data.arch^=1;
+    assert(!md_task_call_notification(&call,&request));
+    request.data.arch^=1;
+    request.data.args[0]=request.data.args[0]==0x12345678 ? args.value[0] : 0x12345678;
+    assert(!md_task_call_notification(&call,&request));
+    request.data.args[0]=call.seccomp_first_argument;
     for (unsigned i=0;i<6;++i) {
         request.data.args[i]^=1; assert(!md_task_call_notification(&call,&request)); request.data.args[i]^=1;
     }

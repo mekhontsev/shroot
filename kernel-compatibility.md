@@ -237,8 +237,11 @@ admit that carrier. RECV restores original call data; SEND retains an immutable
 input and publishes CONTINUE only after native acceptance. Kernel ownership
 retains IDs, cancellation, descriptor transfer and listener closure. TRACE uses
 the shared guest-debugger owner, including GET_SYSCALL_INFO, cancellation and
-post-debugger policy evaluation. ARM64 rechecks use hidden orig_x0 for the first
-argument. These primitives and ADDFD_FLAG_SEND fit the 5.15 baseline, but current
+post-debugger policy evaluation on the edited operands. ARM64 kernels differ in
+how register writes at syscall entry affect the first argument reported by the
+kernel. For a replaced entry, Shroot reads back the kernel syscall information
+when that argument changes and matches the notification to that exact value.
+These primitives and ADDFD_FLAG_SEND fit the 5.15 baseline, but current
 app-UID evidence is on 6.12 only. Production original-filter capture, lifecycle
 publication, signal waits and cold-denial/TSYNC admission ordering have focused
 app-UID coverage. `signal_pending`, `signal_fd` and task-affine epoll combine
@@ -1474,8 +1477,10 @@ aliases keep their resident return branch instead of another SETREGSET; filter
 barriers also reconcile a quiet return at the next ordinary guest boundary.
 Stock glibc/musl signal storms and real document-portal shutdown exercise
 the integrated owner. Device execution remains 6.12/4 KiB, not a 5.15 claim.
-Inherited no_new_privs conservatively selects restricted service checkpoints
-before bootstrap probes; `test_capabilities` verifies denied required syscalls
+Inherited no_new_privs is a credential restriction, not a seccomp filter. With
+that flag set, an active or unreadable seccomp mode selects restricted service
+checkpoints; mode zero retains normal admission. `test_native_suite.py` covers
+no_new_privs alone. `test_capabilities` verifies denied required syscalls
 produce admission errors instead of falling through a rejected marker.
 
 Bootstrap supplies both exact program/interpreter FDs in one admission before

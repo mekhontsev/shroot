@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/ptrace.h>
+#include <linux/audit.h>
 #include <linux/ptrace.h>
 #include <linux/seccomp.h>
 #include <sys/uio.h>
@@ -84,7 +85,6 @@ static int invoke(struct md_task_call *f) {
 }
 static int replace_entry(struct md_task_call *f) {
     f->replaced_entry=1;
-    /* ARM64 seccomp samples orig_x0, not the replaced x0 register. */
     f->seccomp_first_argument=f->original_first_argument;
     struct user_pt_regs call=f->saved;
     call.pc=f->returned;
@@ -93,6 +93,19 @@ static int replace_entry(struct md_task_call *f) {
     memcpy(call.regs,f->arguments.value,sizeof(f->arguments.value));
     int error=regs(f,PTRACE_SETREGSET,&call);
     if (!error) error=number(f,(int)f->arguments.number);
+    if (!error && f->arguments.value[0]!=f->original_first_argument) {
+        /* ARM64 kernels differ on whether SETREGSET synchronizes orig_x0.
+         * Authenticate the notification against exactly what the kernel saw. */
+        struct ptrace_syscall_info observed;
+        error=info(f,&observed);
+        if (!error && (observed.op!=PTRACE_SYSCALL_INFO_ENTRY && observed.op!=PTRACE_SYSCALL_INFO_SECCOMP))
+            error=-EPROTO;
+        if (!error && (observed.entry.nr!=(uint64_t)f->arguments.number
+                || observed.instruction_pointer!=f->returned
+                || (observed.entry.args[0]!=f->original_first_argument
+                    && observed.entry.args[0]!=f->arguments.value[0]))) error=-EPROTO;
+        if (!error) f->seccomp_first_argument=observed.entry.args[0];
+    }
     if (!error) error=calling(f);
     return error;
 }
@@ -232,7 +245,7 @@ int md_task_call_interrupt(struct md_task_call *f) {
     return error;
 }
 int md_task_call_notification(const struct md_task_call *f,const struct seccomp_notif *q) {
-    return f && q && f->stage==CALLING && q->pid==(unsigned)f->actor
+    return f && q && f->stage==CALLING && q->pid==(unsigned)f->actor && q->data.arch==AUDIT_ARCH_AARCH64
         && q->data.nr==f->active_number && q->data.instruction_pointer==f->returned
         && q->data.args[0]==f->seccomp_first_argument
         && !memcmp(q->data.args+1,f->arguments.value+1,5*sizeof(q->data.args[0]));
@@ -333,6 +346,9 @@ static int task_call_event(struct md_task_call *f,int status,int collect) {
         if (observed.op!=PTRACE_SYSCALL_INFO_ENTRY || observed.entry.nr!=(unsigned long)(int)f->entry.regs[8]
                 || observed.instruction_pointer!=f->returned
                 || memcmp(observed.entry.args,f->entry.regs,sizeof(observed.entry.args))) return -EPROTO;
+        /* A retry borrows this restored entry. Its latched argument can differ
+         * from the first stop, particularly when the original call was cancelled. */
+        f->original_first_argument=observed.entry.args[0];
         /* Replay through the stable gate, then restore the original PC before
          * seccomp evaluates the entry. The source instruction may have been
          * patched or unmapped while its syscall was stopped. */

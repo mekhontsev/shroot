@@ -52,8 +52,8 @@ and masks, continue, single step, syscall entry/exit information, interrupt,
 listen, detach, kill, event messages and fork/vfork/clone/exec/exit options.
 TRACESECCOMP exposes the original filter's cookie and syscall context, separately
 from runtime selectors. The ARM64 syscall-number regset is independent of x8;
-tracer changes are re-admitted through the common policy path. Kernel admission
-retains original x0 separately from the tracer-visible execution argument.
+after a guest seccomp trace stop, changes are re-admitted through the common
+policy path with the arguments the resumed syscall will use.
 Changed PCs replay through an owned SVC before restoring the selected guest PC
 for policy checks; they do not require executing that address again.
 SYSEMU suppresses the selected syscall before guest filtering. Switching to it

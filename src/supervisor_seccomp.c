@@ -180,8 +180,7 @@ int guest_trace_resume(struct thread *t,int signal) {
     }
     struct seccomp_data call=syscall_description(&regs);
     call.nr=number;
-    call.args[0]=t->seccomp.trace.call.args[0];
-    t->seccomp.trace.visible_argument=regs.regs[0];
+    /* Policy must check the operands that the resumed guest will execute. */
     if (t->seccomp.trace.boundary==MD_TASK_CALL_SECCOMP
             && !memcmp(&call,&t->seccomp.trace.call,sizeof(call))) {
         /* The original kernel admission is still intact. Resume its shared
@@ -192,7 +191,6 @@ int guest_trace_resume(struct thread *t,int signal) {
     }
     t->seccomp.trace.call=call;
     t->seccomp.trace.visible_number=regs.regs[8];
-    regs.regs[0]=call.args[0];
     regs.regs[8]=number;
     t->seccomp.trace.stage=GUEST_TRACE_REPLAY;
     regs.pc=abi.task_return-4;
@@ -262,20 +260,7 @@ int guest_trace_syscall(struct thread *t,const struct ptrace_syscall_info *info,
             /* The kernel latched the syscall number on entry. x8 remains an
              * independent application register, including tracer mutations. */
             regs->regs[8]=t->seccomp.trace.visible_number;
-            regs->regs[0]=t->seccomp.trace.visible_argument;
             regs->pc=call.instruction_pointer;
-            if (regs->regs[0]!=call.args[0]) {
-                uint32_t decision;
-                CHECK(!md_seccomp_policy_eval(admission_policy(t),&call,&decision));
-                unsigned action=decision&SECCOMP_RET_ACTION_FULL;
-                if (action==SECCOMP_RET_ALLOW || action==SECCOMP_RET_LOG || action==SECCOMP_RET_TRACE) {
-                    /* Policy retains orig_x0, but resource dispatch uses the
-                     * tracer's execution argument. Admit an owned stop so a
-                     * conditional selector cannot miss that changed operand. */
-                    if (guest_trace_execution_begin(t,&call,regs)) resume(t->pid,0);
-                    return 1;
-                }
-            }
             if (!set_registers(t->pid,regs)) return 1;
             t->debug.call_active=1;
             resume(t->pid,0); return 1;

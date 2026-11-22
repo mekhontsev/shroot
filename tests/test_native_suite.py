@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise shared runtime/application runners through the local executor."""
 import argparse
+import ctypes
 import json
 from pathlib import Path
 import subprocess
@@ -29,6 +30,12 @@ def main():
         layout = root / 'layout'
         write_layout([archive], layout)
         for profile in ('native', 'linux-5.15'):
+            if profile == 'linux-5.15':
+                # Exercise both entry modes under inherited no_new_privs alone
+                # when the host has no filter. Never replace the host's policy.
+                prctl = ctypes.CDLL(None, use_errno=True).prctl
+                if prctl(21, 0, 0, 0, 0) == 0:  # PR_GET_SECCOMP
+                    assert prctl(38, 1, 0, 0, 0) == 0, ctypes.get_errno()  # PR_SET_NO_NEW_PRIVS
             for entry in (False, True):
                 suite = Suite(root / 'reports', build, machine_entry=entry,
                               kernel_profile=profile, executor='local')

@@ -829,6 +829,9 @@ int main(int argc, char **argv) {
     int inherited_no_new_privs = prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
     CHECK(inherited_no_new_privs >= 0);
     launch_identity.no_new_privs = (unsigned)inherited_no_new_privs;
+    /* no_new_privs is a credential property, not evidence of an installed
+     * filter. An unavailable mode query must retain restricted admission. */
+    int inherited_restricted = inherited_no_new_privs && prctl(PR_GET_SECCOMP, 0, 0, 0, 0) != 0;
     CHECK(argument < argc);
     CHECK(!image_layout_prepare(argv[argument]));
     struct md_process_signals inherited;
@@ -868,10 +871,7 @@ int main(int argc, char **argv) {
 #endif
     thread(leader)->born = 1;
     thread(leader)->signals.pending=md_signal_pending_new(); CHECK(thread(leader)->signals.pending);
-    /* A caller can install filters before starting Shroot. Treat inherited
-     * no_new_privs conservatively: its ERRNO rules can outrank service TRACE
-     * markers, so use the same pre-filter protocol as guest-installed filters. */
-    thread(leader)->seccomp.application_filter=!!inherited_no_new_privs;
+    thread(leader)->seccomp.application_filter=inherited_restricted;
     close(channel[1]);
     int *keep = malloc((owners.count + 2) * sizeof(*keep)); CHECK(keep);
     keep[0] = signal_fd; keep[1] = channel[0];

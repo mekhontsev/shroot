@@ -511,14 +511,15 @@ static void syscall_registers_changed(struct inferior *p,uintptr_t note,const vo
         int number; memcpy(&number,bytes,sizeof(number));
         info->entry.nr=(uint64_t)(int64_t)number;
     } else if (note==NT_PRSTATUS && info->op!=PTRACE_SYSCALL_INFO_NONE) {
-        /* orig_x0 and the latched syscall number are independent of x0/x8.
-         * Other fields reflect successful regset writes, including prefixes. */
+        /* A guest policy stop rechecks the edited operands. A skipped syscall
+         * has a result in x0, and changing x8 alone never changes the number. */
         if (size>=offsetof(struct user_pt_regs,pc)+sizeof(uint64_t))
             memcpy(&info->instruction_pointer,(const char *)bytes+offsetof(struct user_pt_regs,pc),sizeof(uint64_t));
         if (size>=offsetof(struct user_pt_regs,sp)+sizeof(uint64_t))
             memcpy(&info->stack_pointer,(const char *)bytes+offsetof(struct user_pt_regs,sp),sizeof(uint64_t));
         if (entry) {
-            for (unsigned i=1;i<6;++i) if (size>=(i+1)*sizeof(uint64_t))
+            unsigned first=info->op==PTRACE_SYSCALL_INFO_SECCOMP && (int)info->entry.nr>=0 ? 0 : 1;
+            for (unsigned i=first;i<6;++i) if (size>=(i+1)*sizeof(uint64_t))
                 memcpy(&info->entry.args[i],(const char *)bytes+i*sizeof(uint64_t),sizeof(uint64_t));
         } else if (info->op==PTRACE_SYSCALL_INFO_EXIT && size>=sizeof(uint64_t)) {
             memcpy(&info->exit.rval,bytes,sizeof(uint64_t));

@@ -297,7 +297,7 @@ struct supervisor_seccomp_state {
         enum md_task_call_boundary boundary;
         struct seccomp_data call;
         int number;
-        uint64_t visible_number, visible_argument;
+        uint64_t visible_number;
         unsigned data;
     } trace;
     int preflight;

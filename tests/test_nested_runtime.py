@@ -62,7 +62,7 @@ def main():
             data.write(b'shroot syscall fixture\n')
             data.flush()
             for scenario in scenarios:
-                run([str(build / 'libshroot_guest_debugger_guest.so'), *scenario.split(':'),
+                run([str(build / 'libshroot_guest_debugger_guest.so'), '--native-control', *scenario.split(':'),
                      *([data.name] if scenario == 'syscall' else [])])
     binaries = [(build / 'libshroot_guest_debugger_guest.so', 'bin/debugger')] if args.case == 'debugger' else []
     if args.case == 'signals':
