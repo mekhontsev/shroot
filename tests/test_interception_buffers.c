@@ -768,8 +768,8 @@ static void memory_access_protected_child(enum mm_departure departure,const char
         assert(read(parent[0],&event,1)==1 && *memory==43);
         if (departure==CHILD_KILL) {
             assert(write(child[1],&event,1)==1);
-            (void)read(parent[0],&event,1);
-            _exit(1);
+            /* EVENT_WAIT: the parent terminates this child with SIGKILL. */
+            for (;;) pause();
         }
         if (departure==CHILD_EXEC || departure==THREAD_EXEC) {
             struct replacement replacement={self,parent[0],child[1]};
