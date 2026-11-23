@@ -58,7 +58,7 @@ static void handler(int number,siginfo_t *info,void *context) {
 }
 static int stop(pid_t pid) {
     int status;
-    /* EVENT_WAIT: exact ptraced child stop; the suite alarm bounds failure. */
+    /* EVENT_WAIT: exact ptraced child stop; the suite runner bounds failure. */
     assert(waitpid(pid,&status,0)==pid && WIFSTOPPED(status));
     return status;
 }
@@ -318,7 +318,6 @@ int main(int argc,char **argv) {
             if (!strcmp(argv[2],names[i])) selected_group=i+1;
         assert(selected_group);
     } else assert(argc==1);
-    alarm(30);
     if (selected_case<0 && (!selected_group || selected_group==GROUP_FRAME)) interrupted_native_frame();
     if (selected_group==GROUP_FRAME) return 0;
     shared=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_ANONYMOUS,-1,0);

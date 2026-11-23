@@ -256,7 +256,6 @@ static void child(unsigned round,int traced) {
     _exit(0);
 }
 int main(void) {
-    alarm(15);
     deferred_stop(0); deferred_stop(1);
     coalesced_kernel_signal(SIGALRM,SI_KERNEL);
     coalesced_kernel_signal(SIGCHLD,CLD_EXITED);

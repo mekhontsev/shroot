@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "event_wait.h"
+#include "test_fd_accounting.h"
 #include "fs_service.h"
 #include "fs_engine.h"
 #include "fs_mounts.h"
@@ -371,7 +372,7 @@ static void watch_delivery(void) {
             struct md_fs_rights rights = {.count = 1, .fd = {fd}};
             CHECK(md_fs_send(peer, &packet, offsetof(struct md_fs_packet, data) + 2, &rights) > 0);
             struct md_fs_reply reply;
-            CHECK(!md_event_wait_fd(peer, POLLIN, md_event_now() + 5000000000LL));
+            CHECK(!md_event_wait_fd(peer, POLLIN, INT64_MAX));
             CHECK(md_fs_receive(peer, &reply, sizeof(reply), &rights) > 0 && !rights.count && reply.size == 32);
             /* EVENT_WAIT: withheld acknowledgement expires this peer. Timeout
              * must retire its lease, never replay possibly delivered records. */
@@ -572,7 +573,7 @@ static void malformed(void) {
         int socket = connect_peer(s.endpoint);
         CHECK(md_fs_send(socket, &q, n, &rights) == (long)n);
         struct md_fs_reply reply; struct md_fs_rights output;
-        CHECK(md_event_wait_fd(socket, POLLIN, md_event_now() + 5000000000LL) == 0);
+        CHECK(md_event_wait_fd(socket, POLLIN, INT64_MAX) == 0);
         CHECK(md_fs_receive(socket, &reply, sizeof(reply), &output) >= (long)offsetof(struct md_fs_reply, data));
         CHECK(reply.error == -EPROTO && !output.count); close(socket); event(s.events);
     }
@@ -590,7 +591,7 @@ static void malformed(void) {
         int socket = connect_peer(s.endpoint);
         CHECK(sendmsg(socket, &message, MSG_NOSIGNAL) == (ssize_t)io.iov_len);
         struct md_fs_reply reply; struct md_fs_rights output;
-        CHECK(md_event_wait_fd(socket, POLLIN, md_event_now() + 5000000000LL) == 0);
+        CHECK(md_event_wait_fd(socket, POLLIN, INT64_MAX) == 0);
         CHECK(md_fs_receive(socket, &reply, sizeof(reply), &output) >= (long)offsetof(struct md_fs_reply, data));
         CHECK(reply.error == -EPROTO && !output.count); close(socket); event(s.events);
     }
@@ -648,9 +649,15 @@ static void lost_reply(void) {
 }
 enum reply_fault { UNEXPECTED_FD, REPLY_TIMEOUT, IMAGE_SHORT, IMAGE_ID, IMAGE_ID_END,
     IMAGE_RELATIVE, IMAGE_END, IMAGE_NUL, IMAGE_NO_FD,
-    CHUNK_EOF, CHUNK_SHORT, CHUNK_FD, CHUNK_TIMEOUT, REPLY_FAULT_COUNT };
+    CHUNK_EOF, CHUNK_SHORT, CHUNK_FD, REPLY_FAULT_COUNT };
+static size_t first_peer_chunk(struct md_fs_reply *reply) {
+    reply->size=MD_FS_REPLY_CHUNK+32; reply->descriptors=0;
+    struct md_ipc_identity id={.pid=getpid(),.group_count=(reply->size-sizeof(id))/sizeof(uint32_t)};
+    memcpy(reply->data,&id,sizeof(id));
+    return offsetof(struct md_fs_reply,data)+MD_FS_REPLY_CHUNK;
+}
 static void faulty_reply(enum reply_fault fault) {
-    int timeout = fault == REPLY_TIMEOUT || fault==CHUNK_TIMEOUT;
+    int timeout = fault == REPLY_TIMEOUT;
     char endpoint[96]; snprintf(endpoint, sizeof(endpoint), "md-fs-bad-%ld-%u", (long)getpid(), serial++);
     int listener = md_fs_listen(endpoint); CHECK(listener >= 0);
     int stop[2], received[2]; CHECK(pipe2(stop, O_CLOEXEC) == 0 && pipe2(received, O_CLOEXEC) == 0);
@@ -658,29 +665,32 @@ static void faulty_reply(enum reply_fault fault) {
     if (!child) {
         close(stop[1]); close(received[0]);
         byte(received[1]);
-        CHECK(md_event_wait_fd(listener, POLLIN, md_event_now() + 5000000000LL) == 0);
+        CHECK(md_event_wait_fd(listener, POLLIN, INT64_MAX) == 0);
         int socket = accept4(listener, NULL, NULL, SOCK_CLOEXEC); CHECK(socket >= 0);
-        CHECK(md_event_wait_fd(socket, POLLIN, md_event_now() + 5000000000LL) == 0);
+        CHECK(md_event_wait_fd(socket, POLLIN, INT64_MAX) == 0);
         struct md_fs_packet q; struct md_fs_rights input;
         CHECK(md_fs_receive(socket, &q, sizeof(q), &input) > 0); md_fs_close_rights(&input); byte(received[1]);
         if (fault==REPLY_TIMEOUT) event(stop[0]);
         else {
-            int fd = open("/dev/null", O_RDONLY); CHECK(fd >= 0);
+            int fd = -1;
+            if (fault < CHUNK_EOF || fault == CHUNK_FD) {
+                fd = open("/dev/null", O_RDONLY); CHECK(fd >= 0);
+            }
             struct md_fs_reply r = {.magic = MD_FS_MAGIC, .version = MD_FS_VERSION, .descriptors = 1};
             struct md_fs_rights output = {.count = 1, .fd = {fd}};
             if (fault >= CHUNK_EOF) {
-                r.size=MD_FS_REPLY_CHUNK+32; r.descriptors=output.count=0;
-                struct md_ipc_identity id={.pid=getpid(),.group_count=(r.size-sizeof(id))/sizeof(uint32_t)};
-                memcpy(r.data,&id,sizeof(id));
-                size_t first=offsetof(struct md_fs_reply,data)+MD_FS_REPLY_CHUNK;
-                CHECK(md_fs_send(socket,&r,first,&output)==(long)first);
-                if (fault==CHUNK_TIMEOUT) event(stop[0]);
-                else if (fault!=CHUNK_EOF) {
+                output.count=0;
+                size_t first=first_peer_chunk(&r);
+                long sent=md_fs_send(socket,&r,first,&output);
+                if (sent!=(long)first) fprintf(stderr,"chunk fault=%u first=%zu sent=%ld\n",fault,first,sent);
+                CHECK(sent==(long)first);
+                if (fault!=CHUNK_EOF) {
                     size_t bytes=fault==CHUNK_SHORT ? 31 : 32;
                     if (fault==CHUNK_FD) output.count=1;
                     CHECK(md_fs_send(socket,r.data+MD_FS_REPLY_CHUNK,bytes,&output)==(long)bytes);
                 }
-                close(fd); close(socket); close(listener); _exit(0);
+                if (fd>=0) close(fd);
+                close(socket); close(listener); _exit(0);
             }
             if (fault >= IMAGE_SHORT) {
                 struct md_image_identity *image = (void *)r.data;
@@ -712,6 +722,23 @@ static void faulty_reply(enum reply_fault fault) {
     CHECK(out.delivery == MD_FS_UNCONFIRMED && out.result.fd == -1 && fd_count(getpid()) == before);
     event(received[0]); if (timeout) byte(stop[1]); close(stop[1]); close(received[0]); joined(child, 0);
 }
+static void missing_reply_chunk(void) {
+    int pair[2], before=fd_count(getpid());
+    CHECK(!socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_NONBLOCK|SOCK_CLOEXEC,0,pair));
+    struct md_fs_reply reply={.magic=MD_FS_MAGIC,.version=MD_FS_VERSION};
+    struct md_fs_rights none={0};
+    size_t first=first_peer_chunk(&reply);
+    CHECK(md_fs_send(pair[1],&reply,first,&none)==(long)first);
+    struct md_fs_request q={.operation=MD_FS_IPC_PEER,.mode=1};
+    struct md_fs_response out={.delivery=MD_FS_UNCONFIRMED,.result.fd=-1};
+    /* Only the continuation is missing: no fork, connect or descriptor
+     * admission can spend this 100 ms before the first packet is readable. */
+    int64_t deadline=md_event_now()+100000000LL;
+    CHECK(md_fs_receive_reply(pair[0],&deadline,100,&q,&out,&reply,0,NULL,NULL)==-ETIMEDOUT);
+    CHECK(out.delivery==MD_FS_UNCONFIRMED && out.result.fd==-1);
+    CHECK(md_fs_receive(pair[0],&reply,sizeof(reply),&none)==-EAGAIN);
+    CHECK(!close(pair[0]) && !close(pair[1]) && fd_count(getpid())==before);
+}
 static void deferred_reply(void) {
     for (unsigned fault=0;fault<4;++fault) {
         char endpoint[96]; snprintf(endpoint,sizeof(endpoint),"md-fs-deferred-rpc-%d-%u",getpid(),fault);
@@ -723,12 +750,12 @@ static void deferred_reply(void) {
             int fd=fault==2 ? open("/dev/null",O_RDONLY|O_CLOEXEC) : -1;
             CHECK(fault!=2 || fd>=0);
             byte(ready[1]); close(ready[1]);
-            CHECK(!md_event_wait_fd(listener,POLLIN,md_event_now()+5000000000LL));
+            CHECK(!md_event_wait_fd(listener,POLLIN,INT64_MAX));
             int socket=accept4(listener,NULL,NULL,SOCK_CLOEXEC); CHECK(socket>=0);
             struct md_fs_packet q; struct md_fs_rights rights={0};
             /* EVENT_WAIT: connection acceptance does not imply request data;
              * the transport deliberately uses nonblocking receives. */
-            CHECK(!md_event_wait_fd(socket,POLLIN,md_event_now()+5000000000LL));
+            CHECK(!md_event_wait_fd(socket,POLLIN,INT64_MAX));
             CHECK(md_fs_receive(socket,&q,sizeof(q),&rights)>0); md_fs_close_rights(&rights);
             struct md_fs_deferred admission={MD_FS_MAGIC,MD_FS_VERSION,MD_OPERATION_PENDING};
             if (fault==2) rights=(struct md_fs_rights){.count=1,.fd={fd}};
@@ -753,7 +780,7 @@ static void deferred_reply(void) {
         close(ready[1]); event(ready[0]); close(ready[0]);
         struct md_fs_request q={.operation=MD_FS_STAT,.directory={-1,-1},.path={"/",NULL}};
         struct md_fs_response out; int before=fd_count(getpid());
-        CHECK(md_fs_call(endpoint,500,&q,&out)==(fault ? -EPROTO : 0));
+        CHECK(md_fs_call(endpoint,fault ? 5000 : 500,&q,&out)==(fault ? -EPROTO : 0));
         CHECK(out.result.fd<0 && fd_count(getpid())==before);
         CHECK(fault ? out.delivery==MD_FS_UNCONFIRMED : out.delivery==MD_FS_REPLIED && out.result.error==-ENOENT);
         joined(child,0);
@@ -1304,8 +1331,21 @@ static void service_lifecycle(void) {
     CHECK(fd_count(getpid())==before);
     puts("PASS filesystem loop lifecycle: readiness order, shared work, pause, stop priority and borrowed resources");
 }
+static void transport_contract(void) {
+    deferred_reply();
+    missing_reply_chunk();
+    for (enum reply_fault fault = UNEXPECTED_FD; fault < REPLY_FAULT_COUNT; fault++) faulty_reply(fault);
+    struct md_fs_request q = {.operation=MD_FS_STAT, .directory={-1,-1}, .path={"/",NULL}};
+    struct md_fs_response result;
+    CHECK(md_fs_call("md-fs-lab-not-listening", 100, &q, &result) == -ECONNREFUSED
+        && result.delivery == MD_FS_NOT_SENT);
+    puts("PASS transport failure/timeout classification and malformed-reply FD cleanup");
+}
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
+    if (argc==2 && !strcmp(argv[1],"--transport")) {
+        md_test_prepare_fd_transfer(); transport_contract(); return 0;
+    }
     if (argc == 3 && !strcmp(argv[1], "stress")) {
         CHECK(argv[2][0] == '/' && strlen(argv[2]) < sizeof(root)); strcpy(root, argv[2]);
         CHECK(mkdir(root, 0700) == 0);
@@ -1323,17 +1363,12 @@ int main(int argc, char **argv) {
     }
     CHECK(argc == 2 && argv[1][0] == '/' && strlen(argv[1]) < sizeof(root)); strcpy(root, argv[1]);
     CHECK(mkdir(root, 0700) == 0);
+    md_test_prepare_fd_transfer();
     service_lifecycle();
     request_contract(); result_contract(); engine_buffers(); value_transport(); peer_transport();
-    captured_authentication(); exchange_retirement(); deferred_reply();
+    captured_authentication(); exchange_retirement(); transport_contract();
     semantics(argv[0]); directories(argv[0]); lost_directory_reply(); concurrent(); contention(); reentrant(); malformed(); idle(); lost_reply();
     reply_lifetime(); watch_delivery(); descriptor_stress(10000);
-    for (enum reply_fault fault = UNEXPECTED_FD; fault < REPLY_FAULT_COUNT; fault++) faulty_reply(fault);
-    struct md_fs_request q = {.operation=MD_FS_STAT, .directory={-1,-1}, .path={"/",NULL}};
-    struct md_fs_response result;
-    CHECK(md_fs_call("md-fs-lab-not-listening", 100, &q, &result) == -ECONNREFUSED
-        && result.delivery == MD_FS_NOT_SENT);
-    puts("PASS transport failure/timeout classification and malformed-reply FD cleanup");
     puts("PASS filesystem service fixture (explicit RPC, not guest syscall integration)");
     return 0;
 }

@@ -34,7 +34,7 @@ static void prepare(struct delayed *d,int stages) {
 }
 static void event(struct md_fs_worker *w) {
     /* EVENT_WAIT: exact worker completion or pause acknowledgement; bounded failure. */
-    assert(md_event_wait_fd(md_fs_worker_fd(w),POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(md_fs_worker_fd(w),POLLIN,INT64_MAX)>=0);
     assert(!md_fs_worker_dispatch(w));
 }
 static void fence(struct md_fs_worker *w) {
@@ -87,7 +87,7 @@ static int boundary_ready(struct md_fs_work *work) {
     b->active=1;
     assert(write(b->started,&one,sizeof(one))==sizeof(one));
     /* EVENT_WAIT: owner requests pause during continuation admission. */
-    assert(md_event_wait_fd(b->release,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(b->release,POLLIN,INT64_MAX)>=0);
     assert(read(b->release,&one,sizeof(one))==sizeof(one));
     return 0;
 }
@@ -123,10 +123,10 @@ static void pause_boundary(const char *store) {
     assert(!md_fs_worker_submit(w,&second.work));
     /* The fence publishes both parked continuations before the wake pass. */
     fence(w); atomic_store(&b.armed,1); md_fs_worker_wake(w);
-    assert(md_event_wait_fd(b.started,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(b.started,POLLIN,INT64_MAX)>=0);
     assert(!md_fs_worker_pause_begin(w,&b.pause));
     uint64_t one=1; assert(write(b.release,&one,sizeof(one))==sizeof(one));
-    assert(md_event_wait_fd(b.notified,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(b.notified,POLLIN,INT64_MAX)>=0);
     while (!md_fs_worker_pause_state(&b.pause)) event(w);
     assert(!md_fs_worker_stop(w));
     close(notification); close(b.notified); close(b.release); close(b.started);

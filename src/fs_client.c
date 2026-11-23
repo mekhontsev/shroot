@@ -136,7 +136,7 @@ int md_fs_result_valid(const struct md_fs_request *request, const struct md_fs_r
     return 1;
 }
 #ifdef MD_USE_LIBC
-static long receive_reply(int socket, int64_t *delivery_deadline, unsigned timeout_ms,
+long md_fs_receive_reply(int socket, int64_t *delivery_deadline, unsigned timeout_ms,
                           const struct md_fs_request *request, struct md_fs_response *out,
                           struct md_fs_reply *reply, uint64_t exchange,
                           int (*deliver)(void *, const void *, size_t), void *context) {
@@ -332,7 +332,7 @@ long md_fs_call_deliver(const char *name, unsigned timeout_ms,
             r = md_event_wait_fd((int)socket, POLLOUT, deadline); continue;
         }
         if (r >= 0) {
-            r = (size_t)r == length ? receive_reply((int)socket, &deadline, timeout_ms,
+            r = (size_t)r == length ? md_fs_receive_reply((int)socket, &deadline, timeout_ms,
                 request, out, &wire.reply, exchange,deliver,context) : -EIO;
         }
         break;

@@ -7,6 +7,11 @@ from host_integration import adapter
 MAX_DEADLINE_SECONDS = 7200
 
 
+def add_external_watchdog(parser):
+    parser.add_argument('--external-watchdog', action='store_true',
+                        help='The enclosing runner monitors the process tree instead of a wall timeout')
+
+
 def deadline_seconds(value):
     seconds = int(value)
     if not 1 <= seconds <= MAX_DEADLINE_SECONDS:
@@ -15,6 +20,10 @@ def deadline_seconds(value):
 
 
 def bounded_shell(executor, command, timeout, *, kill_after=None):
+    if timeout is None:
+        if executor.mode != 'local':
+            raise ValueError('An external watchdog requires local custody of the process tree')
+        return command
     seconds = deadline_seconds(timeout)
     grace = [] if kill_after is None else ['-k', str(deadline_seconds(kill_after))]
     # The native executor owns the deadline and process group. GNU timeout

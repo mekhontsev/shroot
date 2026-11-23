@@ -74,6 +74,10 @@ unsupported operations to make a test pass. Record runtime identity, host kernel
 page size and capabilities. Test in disposable stores and clean their owned
 processes and files. Never reboot a device without immediate user confirmation.
 
+Nesting depth belongs to the test runner. Do not pass it to a fixture to
+select code paths, expected results, iteration counts or protocol timeouts.
+Distinguish a timeout being tested from the watchdog observing the test.
+
 Maintain documentation about current behavior, limitations, ownership and usage;
 keep experiment chronology in artifacts and Git. Release notes own versioned
 changes. Keep host-independent probes and engine contracts here. The integrating

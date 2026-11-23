@@ -115,15 +115,14 @@ these scenarios directly on the host. `--case signals` reuses the signal-deliver
 and machine-context fixtures under Base and lazy entry, including ignored signals
 and interrupts during native signal-frame construction. Machine-context groups
 (`frame`, `alias`, `native`, `kernel`) retain all 77 alias cases and the native
-frame controls, with the same per-invocation alarm. CTest registers
+frame controls. CTest registers
 `nested_debugger_*`, `nested_signals_*` and `nested_nested`; these supplement, not
 replace, ordinary runtime and ELF tests. Debugger and signal names separate Base
 (`0`) from lazy (`1`) so a failed variant can be repeated independently.
 Debugger TRACE cases also accept `--scenario seccomp-trace:openat` (or
 `install`, `getpid`, `getuid`, `getpgid`, `sigmask`, `skip`); signal interruption
 accepts `syscall-signal:stat`, `:poll` and `:epoll`. The recursive driver runs
-all groups with the same assertions, variants, 32 signal iterations per syscall
-and per-process alarm, instead of accumulating unrelated children under one alarm.
+all groups with the same assertions, variants and 32 signal iterations per syscall.
 CTest discovers these scenario names from the runner and registers each separately,
 so one failure neither prevents later scenarios nor requires replaying earlier ones.
 
@@ -133,6 +132,14 @@ Alpine, `--depth 1` exercises level three; the default adds levels three and fou
 `ctest --test-dir build -LE 'benchmark|recursive'` separates ordinary contracts from this extra
 recursion, then `test_nested_runtime.py BUILD --case nested --depth N` checks the
 chosen additional levels. This is a test-plan choice, not a runtime depth limit.
+
+For deep qualification under an outer process-tree observer, the local component,
+signal-checkpoint and nested runners accept `--external-watchdog`. This replaces
+their command wall timeout, not protocol deadlines or expected results. It does
+not pass a depth, option or environment variable to the program under test.
+The outer runner records elapsed time, checks progress across the owned process
+tree, and handles cancellation; lack of output alone is not evidence of a hang.
+Ordinary runs keep their runner timeouts.
 
 ## Fixture Transports
 

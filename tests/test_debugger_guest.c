@@ -784,7 +784,7 @@ static void untraced_clone_test(void) {
                 int flags=CLONE_UNTRACED|(shared ? CLONE_FS|CLONE_FILES : 0)|(signal ? SIGCHLD : 0);
                 pid_t child=clone(untraced_child,stack+size,flags,NULL); assert(child>0);
                 int status;
-                /* EVENT_WAIT: child completion; fixture alarm bounds a missing birth/exit. */
+                /* EVENT_WAIT: child completion; fixture runner bounds a missing birth/exit. */
                 assert(waitpid(child,&status,signal ? 0 : __WCLONE)==child);
                 assert(WIFEXITED(status) && WEXITSTATUS(status)==42);
             }
@@ -1159,7 +1159,7 @@ static void syscall_exec_test(void) {
     for (;;) {
         assert(!ptrace(PTRACE_SYSCALL,child,0,0));
         int status;
-        /* EVENT_WAIT: matching syscall/exec/exit event; fixture alarm bounds failure. */
+        /* EVENT_WAIT: matching syscall/exec/exit event; fixture runner bounds failure. */
         assert(waitpid(child,&status,__WALL)==child);
         if (WIFEXITED(status)) { assert(!WEXITSTATUS(status)); break; }
         assert(WIFSTOPPED(status));
@@ -1226,7 +1226,7 @@ static void syscall_signal_test(const char *group) {
     for (;;) {
         assert(!ptrace(PTRACE_SYSCALL,child,0,deliver)); deliver=0;
         int status;
-        /* EVENT_WAIT: exact syscall/signal stop; the fixture alarm bounds it. */
+        /* EVENT_WAIT: exact syscall/signal stop; the fixture runner bounds it. */
         assert(waitpid(child,&status,__WALL)==child);
         if (WIFEXITED(status)) { assert(!WEXITSTATUS(status)); break; }
         assert(WIFSTOPPED(status));
@@ -1292,7 +1292,7 @@ static void wait_signal_test(void) {
         struct itimerspec when={.it_value={.tv_nsec=20000000}};
         assert(!timer_settime(timer,0,&when,NULL));
         /* EVENT_WAIT: SIGUSR1 interrupts the wait; SA_RESTART's handler
-         * releases the child. The outer fixture alarm bounds either failure. */
+         * releases the child. The outer fixture runner bounds either failure. */
         long result=wait_signal_call(child,id,0);
         if (!restart) {
             assert(result==-1 && errno==EINTR && wait_signal_seen==1);
@@ -1417,7 +1417,7 @@ static void *gdb_worker(void *unused) {
     (void)unused;
     pthread_barrier_wait(&ready_barrier);
     assert(!pthread_mutex_lock(&workers_lock));
-    // EVENT_WAIT: explicit target release; the fixture alarm bounds debugger failures.
+    // EVENT_WAIT: explicit target release; the fixture runner bounds debugger failures.
     while (!workers_exit) assert(!pthread_cond_wait(&workers_done, &workers_lock));
     assert(!pthread_mutex_unlock(&workers_lock));
     return NULL;
@@ -1465,7 +1465,7 @@ static int dump_collector(void *unused) {
     for (unsigned i=0;i<41;++i) {
         assert(!ptrace(PTRACE_ATTACH,dump_threads[i],NULL,NULL));
         /* EVENT_WAIT: each attach publishes its own stop, including a parent
-         * waiting for this collector. The fixture alarm bounds missing events. */
+         * waiting for this collector. The fixture runner bounds missing events. */
         assert(waitpid(dump_threads[i],NULL,__WALL)==dump_threads[i]);
     }
     for (unsigned i=0;i<41;++i) {
@@ -1652,7 +1652,7 @@ static void gdb_io_target(int waiting) {
     pthread_barrier_wait(&ready_barrier);
     puts("READY"); fflush(stdout);
     char c;
-    /* EVENT_WAIT: debugger attachment permits each breakpoint; alarm bounds failure. */
+    /* EVENT_WAIT: debugger attachment permits each breakpoint; the runner bounds failure. */
     for (unsigned i=0;i<16;++i) { assert(read(0,&c,1)==1); io_marker(i); }
     atomic_store(&io_exit,1);
     if (waiting) for (unsigned i=0;i<8;++i) assert(write(debugger_wait_fds[i][1],"x",1)==1);
@@ -1703,7 +1703,7 @@ static void jit_target(void) {
 int main(int argc, char **argv) {
     int native_control=argc>1 && !strcmp(argv[1],"--native-control");
     if (native_control) { --argc; ++argv; }
-    assert(argc==2 || argc==3); alarm(20);
+    assert(argc==2 || argc==3);
     const char *name=argv[1];
     if (!strncmp(name,"filtered-",9)) {
         struct sock_filter code[]={BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};

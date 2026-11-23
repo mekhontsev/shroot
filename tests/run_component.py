@@ -3,11 +3,12 @@
 import argparse
 from pathlib import Path
 from executors.local import LocalExecutor
-from fixture_executor import deadline_seconds
+from fixture_executor import add_external_watchdog, deadline_seconds
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    add_external_watchdog(parser)
     parser.add_argument('--timeout', type=deadline_seconds, default=90)
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -20,7 +21,8 @@ def main():
     executor = LocalExecutor(Path.cwd(), 'component')
     try:
         command = [item.replace('@WORK@', executor.root) for item in command]
-        result = executor.run(command, args.timeout, on_line=lambda line: print(line, end='', flush=True))
+        result = executor.run(command, None if args.external_watchdog else args.timeout,
+                              on_line=lambda line: print(line, end='', flush=True))
         return result['exitCode']
     finally:
         executor.close()

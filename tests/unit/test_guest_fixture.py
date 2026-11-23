@@ -4,12 +4,14 @@ import shlex
 import sys
 import tarfile
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
 lab = Path(__file__).resolve().parents[1]
 with patch.object(sys, 'path', [str(lab), *sys.path]):
     from client_fixture import archive_fixture
+    from executors.local import LocalExecutor
     from kernel_profile import KernelProfile
     from test_oci_services import Suite
     from test_debugger_runtime import outcome
@@ -123,6 +125,50 @@ class GuestFixtureTest(unittest.TestCase):
         with patch.object(unittest.TestCase, 'run', side_effect=AssertionError('discovery ran a test')):
             self.assertEqual(['Fixture.test_first', 'Fixture.test_second'], list(unittest_cases(suite)))
         self.assertEqual(2, suite.countTestCases())
+
+    def test_external_watchdog_does_not_reach_the_guest(self):
+        runs = []
+        for options, timeout in (([], 60), (['--external-watchdog'], None)):
+            with patch.object(sys, 'argv', ['nested', '/build', '--entry', '0', '--scenario',
+                              'syscall-info', *options]), patch('test_nested_runtime.archive_fixture'), \
+                    patch('test_nested_runtime.tempfile.TemporaryDirectory') as tmp, \
+                    patch('test_nested_runtime.subprocess.run', return_value=Mock(returncode=0)) as run, \
+                    patch('builtins.print'):
+                tmp.return_value.__enter__.return_value = '/work'
+                test_nested_runtime.main()
+                runs.append([call.args for call in run.call_args_list])
+                self.assertTrue(all(call.kwargs == {'timeout': timeout} for call in run.call_args_list))
+        self.assertEqual(runs[0], runs[1])
+        with self.assertRaises(AssertionError):
+            self.suite('local', code=23).command(['/fixture/test'], timeout=None, quiet=True)
+        for mode in ('app', 'shell'):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                self.suite(mode).command(['/fixture/test'], timeout=None)
+
+    def test_external_watchdog_can_cancel_silent_local_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executor = LocalExecutor(directory)
+            try:
+                ready = threading.Event()
+                outcome = []
+                command = [sys.executable, '-c', "import signal; print('ready', flush=True); signal.pause()"]
+                def run():
+                    outcome.append(executor.run(command, None, on_line=lambda line: ready.set()))
+                worker = threading.Thread(target=run)
+                worker.start()
+                try:
+                    self.assertTrue(ready.wait(5))
+                    executor.cancel()
+                    worker.join(5)
+                    self.assertFalse(worker.is_alive())
+                    self.assertEqual(137, outcome[0]['exitCode'])
+                finally:
+                    executor.cancel()
+                    worker.join(5)
+                with self.assertRaises(TimeoutError):
+                    executor.run(command, 1)
+            finally:
+                executor.close()
 
     def test_ipc_custody_matrix_is_shared_and_complete(self):
         native, guest = ['/native', '--custody-native'], ['/runner', '--', '/guest', '--custody']

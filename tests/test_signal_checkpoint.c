@@ -95,7 +95,7 @@ static void set_mask(pid_t pid,uint64_t mask) {
 }
 static int stopped(pid_t pid) {
     int status;
-    /* EVENT_WAIT: the exact tracee stop; the fixture alarm bounds failure. */
+    /* EVENT_WAIT: the exact tracee stop; the fixture runner bounds failure. */
     assert(waitpid(pid,&status,0)==pid);
     if (!WIFSTOPPED(status)) fprintf(stderr,"unexpected tracee status=%#x mode=%d flags=%u\n",
         status,control_mode,control_flags);
@@ -962,7 +962,7 @@ static void kernel_copy_faults(int protected,int disposition) {
         _exit(0);
     }
     int status;
-    /* EVENT_WAIT: exact copy-control child exit; the fixture alarm bounds failure. */
+    /* EVENT_WAIT: exact copy-control child exit; the fixture runner bounds failure. */
     assert(waitpid(pid,&status,0)==pid && WIFEXITED(status) && !WEXITSTATUS(status));
 }
 extern long md_read_memory(void *,const void *,size_t);
@@ -1913,7 +1913,7 @@ static void birth_terminal_race(int kind,int protected,int code) {
     else assert(held==(pid_t)newborn);
     assert(write(channel[1],"x",1)==1);
     /* EVENT_WAIT: group exit replaces the collected birth stop; no child is
-     * resumed after group exit. The alarm bounds all three terminal events. */
+     * resumed after group exit. The runner bounds all three terminal events. */
     unsigned exits=0;
     while (exits<(kind ? 2U : 3U)) {
         pid_t pid=waitpid(-1,&status,__WALL);
@@ -1994,7 +1994,7 @@ static void terminal_race(int protected,int entry) {
     }
     assert(write(channel[1],"x",1)==1);
     /* EVENT_WAIT: exit_group replaces the sibling's already-collected entry;
-     * the process alarm bounds this exact terminal observation. */
+     * the process runner bounds this exact terminal observation. */
     assert(waitpid(child,&status,__WALL)==child && (unsigned)status>>16==PTRACE_EVENT_EXIT);
     assert(waitpid(actor,&status,__WALL)==actor && (unsigned)status>>16==PTRACE_EVENT_EXIT);
     unsigned long cookie=1;
@@ -2025,7 +2025,6 @@ static void checkpoint_costs(int native_skip) {
 }
 int main(int argc,char **argv) {
     if (argc==4 && !strcmp(argv[1],"--control")) {
-        alarm(30);
         int mode=atoi(argv[2]); unsigned flags=(unsigned)strtoul(argv[3],NULL,0);
         assert(mode>=BREAKPOINT && mode<=SYSEMU_CONTEXT);
         run(mode,flags,1);
@@ -2033,7 +2032,6 @@ int main(int argc,char **argv) {
         return 0;
     }
     if (argc==2 && !strcmp(argv[1],"--syscall-stop-restore")) {
-        alarm(30);
         run(SYSCALL,0,1);
         run(SYSCALL,PROTECTED,1);
         run(SYSCALL,BLOCK|REPLAY,1);
@@ -2044,13 +2042,11 @@ int main(int argc,char **argv) {
         return 0;
     }
     if (argc==2 && !strcmp(argv[1],"--interrupted-native")) {
-        alarm(60);
         for (int protected=0;protected<2;++protected)
             for (int restart=0;restart<2;++restart) interrupted_native_call(protected,restart);
         return 0;
     }
     setvbuf(stdout,NULL,_IOLBF,0);
-    alarm(60);
     md_test_native_probe(argc,argv);
     int controls=1,costs=1;
     for (int i=1;i<argc;) {

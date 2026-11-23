@@ -40,6 +40,11 @@ struct md_fs_reply {
 struct md_fs_rights { unsigned count; int fd[MD_FS_MAX_FDS]; };
 long md_fs_send(int socket, const void *, size_t, const struct md_fs_rights *);
 long md_fs_receive(int socket, void *, size_t, struct md_fs_rights *);
+/* Connected native client after request submission. Pending admission can
+ * replace the delivery deadline; the caller retains socket and exchange. */
+long md_fs_receive_reply(int socket, int64_t *deadline, unsigned timeout_ms,
+        const struct md_fs_request *, struct md_fs_response *, struct md_fs_reply *,
+        uint64_t exchange, int (*deliver)(void *, const void *, size_t), void *context);
 /* Bounded private seqpacket vectors. Receive closes every installed right on
  * truncation/malformed control and publishes count only on success. */
 long md_fs_send_fds(int socket, const void *, size_t, const int *, unsigned count);

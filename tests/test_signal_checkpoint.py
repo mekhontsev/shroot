@@ -7,17 +7,20 @@ import re
 import statistics
 from test_oci_services import Suite
 from benchmark_cpu import observe_suite_cpu
-from fixture_executor import FixtureExecutor, probe_native_capability
+from fixture_executor import FixtureExecutor, add_external_watchdog, probe_native_capability
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('build', type=Path)
     FixtureExecutor.add_argument(parser)
+    add_external_watchdog(parser)
     parser.add_argument('--copy-fault', action='store_true',
                         help='Run invalid-pointer controls and isolated copy costs only')
     parser.add_argument('--mode', choices=('all', 'controls', 'benchmark'), default='all')
     args = parser.parse_args()
+    if args.external_watchdog and args.executor != 'local':
+        parser.error('--external-watchdog requires the local executor')
     if args.copy_fault and args.mode != 'all':
         parser.error('--copy-fault cannot be combined with --mode')
     mode = 'copy-fault' if args.copy_fault else args.mode
@@ -38,7 +41,7 @@ def main():
             options.append('--' + args.mode + '-only')
         with observe_suite_cpu(suite) as cpu:
             suite.report['cpu'] = cpu
-            output = suite.command([binary, *options], timeout=80)
+            output = suite.command([binary, *options], timeout=None if args.external_watchdog else 80)
         if args.copy_fault:
             assert f'PASS copy fault controls: uid={suite.executor.uid}' in output
             assert 'PASS kernel copy: 72 controls;' in output

@@ -196,7 +196,7 @@ static void *hold_thread(void *argument) {
     state->tid=(pid_t)syscall(SYS_gettid);
     assert(!pthread_cond_signal(&state->condition));
     /* EVENT_WAIT: the fixture releases the owner after root/copy validation;
-     * the fixture alarm bounds missing progress. */
+     * the fixture runner bounds missing progress. */
     while (!state->release) assert(!pthread_cond_wait(&state->condition,&state->mutex));
     assert(!pthread_mutex_unlock(&state->mutex));
     return NULL;
@@ -703,7 +703,6 @@ int main(int argc,char **argv) {
     /* Model the service's descriptor budget, including simultaneous native
      * clients in the publication tests. Never raise the host hard limit. */
     assert(!md_process_service_nofile());
-    alarm(60);
     const char *selected=NULL;
     if (argc==3 && !strcmp(argv[1],"--case")) selected=argv[2];
     else if (argc==2 && (!strcmp(argv[1],"--tun") || !strcmp(argv[1],"--nft"))) selected=argv[1]+2;
@@ -724,6 +723,5 @@ int main(int argc,char **argv) {
         cases[i].run(); ++executed;
     }
     assert(executed && (!selected || executed==1));
-    alarm(0);
     return 0;
 }

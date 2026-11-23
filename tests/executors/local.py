@@ -74,8 +74,7 @@ class LocalExecutor:
         return self.run([self.shell, '-c', command], timeout, on_line=on_line)
 
     def run(self, argv, timeout=120, *, on_line=None):
-        timeout = deadline_seconds(timeout)
-        deadline = time.monotonic() + timeout
+        deadline = None if timeout is None else time.monotonic() + deadline_seconds(timeout)
         with self.lock:
             if self.closed:
                 raise RuntimeError('Fixture executor is closed')
@@ -114,10 +113,10 @@ class LocalExecutor:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 selector.register(completed[0], selectors.EVENT_READ)
                 while True:
-                    remaining = deadline - time.monotonic()
-                    # EVENT_WAIT: child exit or output, bounded by the command deadline.
-                    events = selector.select(max(0, remaining))
-                    if remaining <= 0 or not events:
+                    remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                    # EVENT_WAIT: child exit or output; external cancellation also wakes this wait.
+                    events = selector.select(remaining)
+                    if not events and deadline is not None and time.monotonic() >= deadline:
                         raise TimeoutError('Fixture command timed out: ' + shlex.join(argv)
                                            + '\n' + ''.join(output)[-8192:])
                     eof = False
@@ -131,7 +130,7 @@ class LocalExecutor:
                             eof = not chunk
                     if eof:
                         break
-            status = process.wait(timeout=max(0, deadline - time.monotonic()))
+            status = process.wait(timeout=None if deadline is None else max(0, deadline - time.monotonic()))
             # Match the shell/app receipt contract, including native SIGSYS probes.
             return dict(exitCode=status if status >= 0 else 128 - status, output=''.join(output))
         finally:

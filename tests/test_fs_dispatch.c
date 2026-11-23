@@ -78,7 +78,7 @@ static void object_path(char *path) {
 }
 
 static int wait_child(pid_t pid) {
-    /* EVENT_WAIT: exact child stop/exit; the fixture alarm bounds failure. */
+    /* EVENT_WAIT: exact child stop/exit; the fixture runner bounds failure. */
     int status; pid_t result;
     do { result=waitpid(pid,&status,__WALL); } while (result<0 && errno==EINTR);
     assert(result==pid); return status;
@@ -140,11 +140,10 @@ static unsigned all_fds(void) {
 }
 static int shared_peer(void *context) {
     struct payload *data=context;
-    alarm(30);
     sigset_t set; sigemptyset(&set); sigaddset(&set,SIGUSR1);
     int signal;
     /* EVENT_WAIT: supervisor releases the surviving CLONE_FILES peer only
-     * after receiver death/exit; alarm bounds an abandoned fixture. */
+     * after receiver death/exit; the runner bounds an abandoned fixture. */
     assert(!sigwait(&set,&signal) && signal==SIGUSR1);
     if (data->survivor_fd>=0) {
         struct stat st;
@@ -240,7 +239,7 @@ static void read_frame(pid_t child, struct user_pt_regs *r, union frame *f,
         assert(bootstrap && !ptrace(PTRACE_CONT,child,0,0));
         /* EVENT_WAIT: the new image requests its mapping descriptor; timeout
          * fails setup, never authorizes an unobserved receiver. */
-        assert(md_event_wait_fd(setup_listener,POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(setup_listener,POLLIN,INT64_MAX)>=0);
         struct seccomp_notif request={0};
         assert(!ioctl(setup_listener,SECCOMP_IOCTL_NOTIF_RECV,&request));
         assert(request.pid==(unsigned)child && request.data.nr==SYS_prctl
@@ -337,7 +336,7 @@ static void execute(struct md_fs_work *work, struct md_filesystem *fs, int error
         uint64_t one=1; assert(write(q->started,&one,sizeof(one))==sizeof(one));
         /* EVENT_WAIT: caller death while this exact request owns its context;
          * only the fixture gate admits execution, expiry fails the test. */
-        assert(md_event_wait_fd(q->gate,POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(q->gate,POLLIN,INT64_MAX)>=0);
         assert(read(q->gate,&one,sizeof(one))==sizeof(one));
     }
     struct md_fs_output output={.origin=&q->origin};
@@ -369,9 +368,8 @@ static int complete(struct md_fs_work *work) {
 }
 static void wait_request(struct md_fs_worker *w, struct request *q) {
     /* EVENT_WAIT: worker publishes this exact request; expiry fails the fixture. */
-    int64_t deadline=md_event_now()+5000000000LL;
     while (!q->completed) {
-        assert(md_event_wait_fd(md_fs_worker_fd(w),POLLIN,deadline)>=0);
+        assert(md_event_wait_fd(md_fs_worker_fd(w),POLLIN,INT64_MAX)>=0);
         assert(!md_fs_worker_dispatch(w));
     }
 }
@@ -461,7 +459,7 @@ static void path_request(const char *store, unsigned kind, int protected, int sl
     if (cancelled==3) {
         /* EVENT_WAIT: worker owns the context before the caller is killed;
          * expiry fails the fixture instead of assuming worker progress. */
-        assert(md_event_wait_fd(q.started,POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(q.started,POLLIN,INT64_MAX)>=0);
         assert(!kill(child,SIGKILL)); status=wait_child(child);
         assert(WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL);
         md_task_registry_forget(tasks,child);
@@ -559,7 +557,7 @@ static void queued_run(struct md_fs_work *work, struct md_filesystem *fs, int er
         uint64_t one=1; assert(write(q->started,&one,sizeof(one))==sizeof(one));
         /* EVENT_WAIT: fixture-controlled worker stall, released by the test;
          * timeout fails the test, never represents completed filesystem IO. */
-        assert(md_event_wait_fd(q->gate,POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(q->gate,POLLIN,INT64_MAX)>=0);
         assert(read(q->gate,&one,sizeof(one))==sizeof(one));
     }
 }
@@ -592,7 +590,7 @@ static void queue_gate_started(int fd) {
     uint64_t one=0;
     /* EVENT_WAIT: the worker has taken the gate, and cannot take the next
      * item until the test releases it. No scheduler delay or spin assumed. */
-    assert(md_event_wait_fd(fd,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(fd,POLLIN,INT64_MAX)>=0);
     assert(read(fd,&one,sizeof(one))==sizeof(one) && one==1);
 }
 static void queue_handoff(struct md_fs_worker *w) {
@@ -619,7 +617,7 @@ static void queue_handoff(struct md_fs_worker *w) {
     /* The blocked completion is still queued. Publishing behind it must wake
      * the supervisor; no release, time-based polling or unrelated IO helps. */
     assert(write(gate,&one,sizeof(one))==sizeof(one));
-    assert(md_event_wait_fd(fd.fd,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(fd.fd,POLLIN,INT64_MAX)>=0);
     assert(!md_fs_worker_dispatch(w) && jobs[BURST].completed && !jobs[1].completed);
     jobs[1].held=0;
     md_fs_worker_notify(w);
@@ -650,16 +648,15 @@ static void queue_failure(const char *store) {
         jobs[i]=(struct queued){.work={.run=queued_run,.complete=queued_complete},
             .gate=i ? -1 : gate,.started=started,.callback_error=i==2 ? -ENOMSG : 0};
         assert(!md_fs_worker_submit(w,&jobs[i].work));
-        if (!i) assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+        if (!i) assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
     }
     uint64_t one=1; assert(write(failed,&one,sizeof(one))==sizeof(one));
     assert(write(gate,&one,sizeof(one))==sizeof(one));
     unsigned count=0; int callback_error=0;
-    int64_t deadline=md_event_now()+5000000000LL;
     /* EVENT_WAIT: all accepted work is completed or cancelled by worker failure;
      * a callback failure must not strand the remaining completion batch. */
     while (count<96 || !md_fs_worker_error(w)) {
-        assert(md_event_wait_fd(md_fs_worker_fd(w),POLLIN,deadline)>=0);
+        assert(md_event_wait_fd(md_fs_worker_fd(w),POLLIN,INT64_MAX)>=0);
         int error=md_fs_worker_dispatch(w);
         assert(!error || error==-EIO || error==-ENOMSG);
         callback_error|=error==-ENOMSG;
@@ -692,11 +689,10 @@ static int pause_job_complete(struct md_fs_work *work) {
     assert(atomic_load(&job->called)==1 && !job->completed++); return 0;
 }
 static void pause_wait(struct md_fs_worker *worker, struct md_fs_worker_pause *pause) {
-    int64_t deadline=md_event_now()+5000000000LL;
     /* EVENT_WAIT: this token's worker acknowledgement, not a settling interval.
      * Shutdown or expiry fails the requested quiescence. */
     while (!md_fs_worker_pause_state(pause)) {
-        assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,deadline)>=0);
+        assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,INT64_MAX)>=0);
         assert(!md_fs_worker_dispatch(worker));
     }
     assert(md_fs_worker_pause_state(pause)==1);
@@ -754,7 +750,7 @@ static void copy_job_run(struct md_fs_work *work,struct md_filesystem *fs,int er
         uint64_t one=1;
         assert(write(job->started,&one,sizeof(one))==sizeof(one));
         /* EVENT_WAIT: the fixture releases this exact copy interval. */
-        assert(md_event_wait_fd(job->gate,POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(job->gate,POLLIN,INT64_MAX)>=0);
         assert(read(job->gate,&one,sizeof(one))==sizeof(one));
         md_fs_worker_copy_end(job->worker);
     }
@@ -776,7 +772,7 @@ static void worker_copy_fence(struct md_fs_worker *worker) {
     assert(!md_fs_worker_submit(worker,&job.work));
     struct md_fs_worker_copy_fence fence={0},other={0};
     for (unsigned i=0;i<2;++i) {
-        assert(md_event_wait_fd(job.started,POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(job.started,POLLIN,INT64_MAX)>=0);
         uint64_t one; assert(read(job.started,&one,sizeof(one))==sizeof(one));
         if (i) {
             /* A later in-flight copy cannot prolong the old fence. */
@@ -795,7 +791,7 @@ static void worker_copy_fence(struct md_fs_worker *worker) {
         one=1; assert(write(job.gate,&one,sizeof(one))==sizeof(one));
     }
     while (!job.completed) {
-        assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,INT64_MAX)>=0);
         assert(!md_fs_worker_dispatch(worker));
     }
     assert(md_fs_worker_copy_fence_ready(&fence));
@@ -835,9 +831,8 @@ static void worker_pause(const char *store) {
             atomic_int second_allowed=1;
             struct pause_job independent={.work={.run=pause_job_run,.complete=pause_job_complete},.allowed=&second_allowed};
             assert(!md_fs_worker_submit(second,&independent.work));
-            int64_t deadline=md_event_now()+5000000000LL;
             while (!independent.completed) {
-                assert(md_event_wait_fd(md_fs_worker_fd(second),POLLIN,deadline)>=0);
+                assert(md_event_wait_fd(md_fs_worker_fd(second),POLLIN,INT64_MAX)>=0);
                 assert(!md_fs_worker_dispatch(second));
             }
             assert(!md_fs_worker_stop(second));
@@ -847,7 +842,7 @@ static void worker_pause(const char *store) {
             assert(md_fs_worker_pause_state(&pause)==-EINVAL);
             unsigned complete=0;
             while (complete<8) {
-                assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,deadline)>=0);
+                assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,INT64_MAX)>=0);
                 assert(!md_fs_worker_dispatch(worker));
                 complete=0; for (unsigned i=0;i<8;++i) { complete+=jobs[i].completed; assert(!jobs[i].error); }
             }
@@ -860,11 +855,10 @@ static void worker_pause(const char *store) {
             struct pause_job free_job={.work={.run=pause_job_run,.complete=pause_job_complete},.allowed=&allowed};
             assert(!md_fs_worker_submit(worker,&held.work));
             assert(!md_fs_worker_submit(worker,&free_job.work));
-            deadline=md_event_now()+5000000000LL;
             /* EVENT_WAIT: the second completion proves that the held first
              * completion does not block unrelated work on this same worker. */
             while (!free_job.completed) {
-                assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,deadline)>=0);
+                assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,INT64_MAX)>=0);
                 assert(!md_fs_worker_dispatch(worker));
             }
             assert(atomic_load(&held.called)==1 && !held.completed);
@@ -876,7 +870,7 @@ static void worker_pause(const char *store) {
             assert(gate>=0 && started>=0);
             struct queued blocked={.work={.run=queued_run,.complete=queued_complete},.gate=gate,.started=started};
             assert(!md_fs_worker_submit(worker,&blocked.work));
-            assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+            assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
             assert(!md_fs_worker_pause_begin(worker,&pause));
             assert(!md_fs_worker_pause_state(&pause));
             struct md_fs_worker_copy_fence copies={0};
@@ -885,9 +879,8 @@ static void worker_pause(const char *store) {
             md_fs_worker_copy_fence_end(&copies);
             assert(!md_fs_worker_pause_end(&pause));
             uint64_t one=1; assert(write(gate,&one,sizeof(one))==sizeof(one));
-            deadline=md_event_now()+5000000000LL;
             while (!blocked.completed) {
-                assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,deadline)>=0);
+                assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,INT64_MAX)>=0);
                 assert(!md_fs_worker_dispatch(worker));
             }
             assert(!blocked.error);
@@ -930,7 +923,7 @@ static void buffer_completed(struct md_fs_buffer_request *request, pid_t actor, 
 }
 static void worker_event(struct md_fs_worker *w) {
     /* EVENT_WAIT: exact completion on the retained worker; timeout fails. */
-    assert(md_event_wait_fd(md_fs_worker_fd(w),POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(md_fs_worker_fd(w),POLLIN,INT64_MAX)>=0);
     assert(!md_fs_worker_dispatch(w));
 }
 static long status_call(struct md_fs_buffer_service *service,struct md_fs_worker *worker,
@@ -982,7 +975,7 @@ static void status_delivery(struct md_fs_buffer_service *service,struct md_fs_wo
     struct queued blocked={.work={.run=queued_run,.complete=queued_complete},.gate=gate,.started=started};
     assert(!md_fs_worker_submit(worker,&blocked.work));
     /* EVENT_WAIT: worker acknowledges the gate before accepted mutation cancellation. */
-    assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
     int callbacks=buffer_callbacks;
     assert(!md_fs_buffer_invoke_status(service,getpid(),resources->fs,&q,&r));
     assert(!md_fs_buffer_progress(service)); md_fs_buffer_cancel(&r);
@@ -1100,7 +1093,7 @@ static void buffer_channel_check(struct md_fs_buffer_service *service, struct md
         assert(!prctl(PR_SET_DUMPABLE,0) && !prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
         char action=0; assert(write(ack[1],&action,1)==1);
         /* EVENT_WAIT: parent issues one exact observer/export action at a time;
-         * the fixture alarm and parent-owned cancellation bound failure. */
+         * the fixture runner and parent-owned cancellation bound failure. */
         while (read(command[0],&action,1)==1 && action!='q') {
             if (action=='o' || action=='d') {
                 if (action=='d') {
@@ -1193,7 +1186,7 @@ static void buffer_snapshot_delivery(struct md_fs_buffer_service *service,
                 blocked.gate=gate; blocked.started=started;
                 assert(!md_fs_worker_submit(worker,&blocked.work));
                 /* EVENT_WAIT: worker is occupied before snapshot submission. */
-                assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+                assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
             }
             if (!step) {
                 assert(!md_fs_buffer_snapshot_begin(service,getpid(),fs,buffer,flags,&request));
@@ -1318,7 +1311,7 @@ static void buffer_reopen_delivery(struct md_fs_buffer_service *service,
         struct queued blocked={.work={.run=queued_run,.complete=queued_complete},.gate=gate,.started=started};
         assert(!md_fs_worker_submit(worker,&blocked.work));
         /* EVENT_WAIT: worker reaches the controlled gate; timeout fails. */
-        assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
         *frame=(struct md_fs_buffer_frame){.input={.base={-1,-1}}};
         memcpy(frame->input.object[0],object,sizeof(object));
         int callbacks=buffer_callbacks;
@@ -1607,7 +1600,7 @@ static void buffer_seek_delivery(struct md_fs_buffer_service *service,
     struct queued blocked={.work={.run=queued_run,.complete=queued_complete},.gate=gate,.started=started};
     assert(!md_fs_worker_submit(worker,&blocked.work));
     /* EVENT_WAIT: worker has entered the controlled gate; timeout fails. */
-    assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
     *frame=(struct md_fs_buffer_frame){.input={.base={fd,-1},.flags=SEEK_CUR,.offset=2}};
     int callbacks=buffer_callbacks;
     struct md_fs_buffer_request *request=NULL;
@@ -1699,7 +1692,7 @@ static void buffer_watch_delivery(struct md_fs_buffer_service *service,
             assert(gate>=0 && started>=0);
             struct queued blocked={.work={.run=queued_run,.complete=queued_complete},.gate=gate,.started=started};
             assert(!md_fs_worker_submit(worker,&blocked.work));
-            assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+            assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
             assert(!md_fs_buffer_begin(service,getpid(),fs,MD_FS_WATCH_READ,buffer,&request));
             assert(!md_fs_buffer_progress(service));
             md_fs_buffer_cancel(&request);
@@ -1787,7 +1780,7 @@ static void buffer_received_inspection(struct md_fs_buffer_service *service,
         assert(!md_fs_worker_submit(worker,&blocked.work));
         /* EVENT_WAIT: hold the worker until captured indices and ownership are
          * deliberately changed; timeout fails the fixture. */
-        assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
         frame->rights.count=253;
         for (unsigned i=0;i<253;++i) frame->rights.index[i]=1+i%3;
         int callbacks=buffer_callbacks;
@@ -2027,7 +2020,7 @@ static void buffer_service_lifetime(const char *store, unsigned cancelled_operat
         assert(gate>=0 && started>=0);
         struct queued blocked={.work={.run=queued_run,.complete=queued_complete},.gate=gate,.started=started};
         assert(!md_fs_worker_submit(worker,&blocked.work));
-        assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
         *frame=(struct md_fs_buffer_frame){.input={.base={fd,-1},.flags=O_PATH,.length={2,0},.path={"."}}};
         assert(!md_fs_buffer_begin(service,getpid(),resources.fs,MD_FS_OPEN,&task,&request));
         assert(!md_fs_buffer_progress(service));
@@ -2089,7 +2082,7 @@ static void buffer_service_lifetime(const char *store, unsigned cancelled_operat
     assert(gate>=0 && started>=0);
     struct queued blocked={.work={.run=queued_run,.complete=queued_complete},.gate=gate,.started=started};
     assert(!md_fs_worker_submit(worker,&blocked.work));
-    assert(md_event_wait_fd(started,POLLIN,md_event_now()+5000000000LL)>=0);
+    assert(md_event_wait_fd(started,POLLIN,INT64_MAX)>=0);
     *frame=(struct md_fs_buffer_frame){.input={.base={-1,-1}}};
     if (cancelled_operation==MD_FS_OPEN) {
         frame->input.flags=O_PATH|O_CLOEXEC; frame->input.length[0]=2;
@@ -2163,7 +2156,7 @@ static void buffer_export_lifetime(const char *store) {
         assert(!close(send) && !close(command[1]));
         char ready;
         /* EVENT_WAIT: nondumpable child readiness before capture admission. */
-        assert(md_event_wait_fd(command[0],POLLIN,md_event_now()+5000000000LL)>=0);
+        assert(md_event_wait_fd(command[0],POLLIN,INT64_MAX)>=0);
         assert(read(command[0],&ready,1)==1 && ready=='r');
         struct md_task_registry *tasks=md_task_registry_create(); assert(tasks);
         char endpoint[80]; snprintf(endpoint,sizeof(endpoint),"md-buffer-export-%d-%u",getpid(),scenario);
@@ -2302,7 +2295,7 @@ int main(int argc, char **argv) {
     if (argc==3 && !strcmp(argv[1],"--input")) { md_test_input_session(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--fuse-device")) { md_test_fuse_device(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--worker-pause")) {
-        alarm(30); setbuf(stdout,NULL);
+        setbuf(stdout,NULL);
         struct md_inode_store *store=NULL; assert(!md_inode_store_open(argv[2],1,&store));
         md_inode_store_close(store); worker_start_failure(argv[2]); worker_pause(argv[2]); md_test_mount_copy_service(argv[2]);
         md_test_fs_deferred(argv[2]); return 0;
@@ -2315,7 +2308,7 @@ int main(int argc, char **argv) {
     if (argc==4 && !strcmp(argv[1],"--ipc-origin-guest")) { md_test_ipc_origin_guest(argv[2],argv[3]); return 0; }
     if (argc==9 && !strcmp(argv[1],"--receiver")) { map_receiver(argv); return 99; }
     assert(argc==2 && !mkdir(argv[1],0700));
-    setbuf(stdout,NULL); alarm(60);
+    setbuf(stdout,NULL);
     assert(!prctl(PR_SET_CHILD_SUBREAPER,1));
     setup_listener=mapping_listener();
     char store[4096]; snprintf(store,sizeof(store),"%s/store",argv[1]);

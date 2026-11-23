@@ -27,11 +27,10 @@ void md_test_mount_copy_service(const char *store) {
         assert(!md_fs_worker_start(store,endpoint,NULL,NULL,NULL,NULL,&worker));
         struct md_fs_worker_pause pause={0};
         assert(!md_fs_worker_pause_begin(worker,&pause));
-        int64_t deadline=md_event_now()+5000000000LL;
         /* EVENT_WAIT: acknowledged worker pause makes pending cancellation
          * deterministic; expiry fails before any namespace request is sent. */
         while (!md_fs_worker_pause_state(&pause)) {
-            assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,deadline)>=0);
+            assert(md_event_wait_fd(md_fs_worker_fd(worker),POLLIN,INT64_MAX)>=0);
             assert(!md_fs_worker_dispatch(worker));
         }
         assert(md_fs_worker_pause_state(&pause)==1);

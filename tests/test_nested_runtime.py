@@ -9,10 +9,12 @@ import tempfile
 import time
 
 from client_fixture import archive_fixture
+from fixture_executor import add_external_watchdog
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    add_external_watchdog(parser)
     parser.add_argument('build', type=Path)
     parser.add_argument('--case', choices=('debugger', 'signals', 'nested'), default='debugger')
     parser.add_argument('--diagnostics', action='store_true')
@@ -45,7 +47,7 @@ def main():
     def run(argv, expected=0):
         print('RUN', *map(str, argv), flush=True)
         started = time.monotonic()
-        result = subprocess.run(argv, timeout=60)
+        result = subprocess.run(argv, timeout=None if args.external_watchdog else 60)
         assert result.returncode == expected, result
         print(f'PASS exit={result.returncode} elapsed={time.monotonic() - started:.3f}s', flush=True)
         return result

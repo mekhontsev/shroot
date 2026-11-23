@@ -209,7 +209,7 @@ class Suite:
         text = shell + ' -c ' + shlex.quote(shlex.join(list(map(str, argv))))
         text = bounded_shell(self.executor, text, timeout, kill_after=15)
         text = self.kernel_profile.shell(text)
-        result = self.executor.execute(text, timeout + 15)
+        result = self.executor.execute(text, None if timeout is None else timeout + 15)
         self.report['commands'].append({'command': text, **result})
         self.record_entry(result['output'])
         if self.kernel_profile.options and not raw and '--test-kernel-profile' not in argv:
