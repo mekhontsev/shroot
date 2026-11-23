@@ -23,10 +23,12 @@ separate from successful namespace package-lifecycle checks.
   `fs_worker.c` owns the store and image catalogue on one thread; `fs_service.c`
   multiplexes RPC, notification and stop readiness. A client cannot
   shut down the service or acquire a different execution identity.
-- `md_fs_service_open/prepare/dispatch/close` separate service state from the
-  thread driving it. `md_fs_serve` retains the existing dedicated-worker loop,
-  wait mechanisms, dispatch order and batch limits. A prepared poll snapshot is
-  borrowed until dispatch or the next preparation; only readiness fields are
+- `md_fs_service_open` activates the bound listener after allocating the service
+  resources. The worker and standalone service report startup success only then.
+  `md_fs_service_run` drives the prepare/dispatch loop; the owner closes the
+  service after stop or error. A prepared poll snapshot is
+  borrowed until dispatch or the next preparation. Its monotonic deadline stays
+  absolute across preparation and interrupted waits; only readiness fields are
   filled by the caller's wait. A confirmed pause exposes only control and stop
   readiness. Preparation can advance deferred filesystem work and is not a
   nonblocking-IO guarantee. The supervisor and filesystem worker remain separate
@@ -208,13 +210,17 @@ offset fields are validated, as are returned record boundaries, cookies and name
 The native directory open-file-description offset supplies shared position across
 dup/fork/exec/SCM_RIGHTS and service restart. Read/seek are serialized by this
 owner; raw kernel directory reads or another service must not operate on that
-same description. Independent opens have independent positions. Import is an
-offline store operation, not a blocking request on this event loop.
+same description. Independent opens have independent positions. A provider may
+skip hidden entries even when it returns no bytes: commit its exact next cookie
+on successful delivery, and restore the original position on read or copy failure.
+Import is an offline store operation, not a blocking request on this event loop.
 
 The wire contains fixed-width metadata rather than a libc-specific stat layout.
 Descriptor masks, lengths, terminating NULs, operation arguments and packet
 versions are validated before dispatch. Truncated packets or ancillary data are
-protocol errors. Every received descriptor is either transferred to the caller
+protocol errors. The first reply packet is bounded by both the operation's payload
+limit and the wire chunk size; an impossible length does not start a continuation
+wait. Every received descriptor is either transferred to the caller
 or closed, including error and malformed-message paths.
 
 The service accepts a bounded batch into at most 32 active connections. An idle

@@ -166,10 +166,18 @@ Guest proc/debugger inventories exclude private actors. The common
 would match an application's wait. The kernel remains authoritative for real
 children, wait classes, thread-specific waits and WNOWAIT.
 
+An open guest proc-memory descriptor follows its original address space across
+exit and exec. When its last guest member leaves, a retained actor must drop
+that memory before the exit or new image is observable. The wait owner can
+observe the actor's native terminal status with `WNOWAIT` without publishing
+it to its real parent. Ordinary memory reads remain native.
+
 After the final mm member detaches, `task_child_reap` retires the exact private
 PID and preserves real or directed SIGCHLD. Retirement acquires its memory turn
 and waits for existing helper and exit owners before stopping the real parent
 group and its direct children; unrelated processes remain runnable.
+Debugger notifications for that parent group are coalesced separately while
+the private SIGCHLD is being removed, then published before releasing the group.
 Each retirement pass checks each blocked parent group once before searching for a
 borrowable continuation. Ready groups try their indexed leader first, then other
 members. Many adopted private children therefore do not multiply the same blocked

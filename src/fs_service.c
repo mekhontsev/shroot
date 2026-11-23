@@ -2,6 +2,7 @@
 #include "fd_exchange.h"
 #include "event_wait.h"
 #include "fs_service.h"
+#include "directory_cursor.h"
 #include "mount_propagation.h"
 #include "fs_engine.h"
 #include "fs_continuation.h"
@@ -102,8 +103,7 @@ static int dispatch(struct md_fs_context *context, const struct md_fs_packet *q,
     }
     struct md_fs_result result;
     struct md_fs_output buffer = {.data = out->data,
-        .capacity = md_fs_operation_value(q->operation) ? sizeof(out->data)
-            : q->operation==MD_FS_OPEN_IMAGE ? sizeof(struct md_image_identity) : PATH_MAX,
+        .capacity = md_fs_reply_capacity(q->operation),
         .reserve_watch=q->operation==MD_FS_WATCH_READ,
         .origin=exchange && md_fs_operation_has_origin(q->operation) ? origin : NULL,
         .continuation=continuation};
@@ -132,9 +132,8 @@ struct peer {
 };
 static int directory_finish(struct peer *peer, int copied) {
     int error=0;
-    if (peer->directory_reserved && copied
-            && lseek(peer->directory_fd,peer->directory_position,SEEK_SET)!=peer->directory_position)
-        error=-errno;
+    if (peer->directory_reserved && copied)
+        error=md_directory_seek_exact(peer->directory_fd,peer->directory_position);
     peer->directory_reserved=0;
     if (peer->cursor.owner) {
         int ended=md_ofd_order_cancel(&peer->cursor);
@@ -151,7 +150,7 @@ static int directory_progress(struct peer *peer) {
         peer->reply.error=md_ofd_order_start(&peer->cursor);
     }
     if (!peer->reply.error) {
-        struct md_fs_output output={.data=peer->reply.data,.capacity=PATH_MAX,
+        struct md_fs_output output={.data=peer->reply.data,.capacity=md_fs_reply_capacity(peer->directory.operation),
             .directory_position=peer->directory.operation==MD_FS_GETDENTS ? &peer->directory_position : NULL,
             .continuation=&peer->continuation};
         struct md_fs_result result;
@@ -187,8 +186,7 @@ static int continuation_progress(struct peer *peer) {
     unsigned operation=previous->request.operation;
     struct md_fs_anchor *origin=NULL;
     struct md_fs_output output={.data=peer->reply.data,
-        .capacity=md_fs_operation_value(operation) ? sizeof(peer->reply.data)
-            : operation==MD_FS_OPEN_IMAGE ? sizeof(struct md_image_identity) : PATH_MAX,
+        .capacity=md_fs_reply_capacity(operation),
         .origin=peer->exchange && md_fs_operation_has_origin(operation) ? &origin : NULL,
         .directory_position=operation==MD_FS_GETDENTS ? &peer->directory_position : NULL,
         .continuation=&peer->continuation};
@@ -313,7 +311,7 @@ static int service_peer(struct md_filesystem *fs,
             long now=md_event_now(); if (now<0) return 1;
             peer->admitted_wait=0; peer->deadline=now+peer->timeout_ns;
         }
-        size_t bytes=peer->reply.size<MD_FS_REPLY_CHUNK ? peer->reply.size : MD_FS_REPLY_CHUNK;
+        size_t bytes=md_fs_reply_chunk(peer->reply.size);
         size_t size=offsetof(struct md_fs_reply,data)+bytes;
         struct md_fs_rights receipt={.count=1,.fd={md_fd_exchange_receipt(peer->exchange)}};
         long sent=md_fs_send(fd->fd,&peer->reply,size,peer->reply.receipt ? &receipt : &peer->output);
@@ -324,7 +322,7 @@ static int service_peer(struct md_filesystem *fs,
         if (peer->reply.receipt) peer->phase=RIGHTS;
     } else if (peer->phase==VALUE) {
         size_t left=peer->reply.size-peer->reply_position;
-        size_t size=left<MD_FS_REPLY_CHUNK ? left : MD_FS_REPLY_CHUNK;
+        size_t size=md_fs_reply_chunk(left);
         const struct md_fs_rights none={0};
         long sent=md_fs_send(fd->fd,peer->reply.data+peer->reply_position,size,&none);
         if (sent==-EAGAIN || sent==-EINTR) { fd->events=POLLOUT; return 0; }
@@ -369,7 +367,6 @@ struct md_fs_service {
     struct md_fs_statistics *previous_statistics;
     unsigned timeout_ms;
     int paused, shared_ready;
-    struct timespec timeout;
     struct pollfd control[2], fds[BASE+SLOTS];
     struct peer peers[SLOTS];
 };
@@ -400,7 +397,9 @@ int md_fs_service_open(struct md_filesystem *fs, int listener, int stop_fd,
         cursor_wake=md_resource_wakeup_retain(work->wakeup);
         if (!cursor_wake) error=-EINVAL;
     } else if (!error) error=md_resource_wakeup_create(fds[6].fd,&cursor_wake);
+    if (!error) error=md_fs_listener_activate(listener);
     if (error) {
+        md_resource_wakeup_release(cursor_wake);
         if (fds[6].fd>=0) close(fds[6].fd);
         if (owned) { fs->cursors=NULL; md_ofd_orders_release(owned); }
         free(service); return error;
@@ -425,15 +424,18 @@ int md_fs_service_prepare(struct md_fs_service *service,struct md_fs_service_pol
         if (work->prepare_wait) work->prepare_wait(work->context);
         service->control[0]=(struct pollfd){fds[1].fd,POLLIN,0};
         service->control[1]=(struct pollfd){work->fd,POLLIN,0};
-        *wait=(struct md_fs_service_poll){service->control,2,NULL};
+        *wait=(struct md_fs_service_poll){service->control,2,INT64_MAX};
         return 0;
     }
     int error=md_mount_family_collect(fs);
     if (error) return error;
-    long now=md_event_now(); if (now<0) return (int)now;
+    long now=-1;
     int64_t nearest=INT64_MAX;
     int expired_watch=0;
     for (unsigned i=0;i<SLOTS;++i) if (fds[BASE+i].fd>=0) {
+        if (now<0 && peers[i].deadline!=INT64_MAX) {
+            now=md_event_now(); if (now<0) return (int)now;
+        }
         if (md_fd_exchange_closed(peers[i].exchange) || peers[i].deadline<=now) {
             expired_watch|=peers[i].watch_reader>=0;
             close_peer(s,&fds[BASE+i],&peers[i]);
@@ -450,19 +452,12 @@ int md_fs_service_prepare(struct md_fs_service *service,struct md_fs_service_pol
         error=work->notification(work->context,fs,0);
         if (error) return error;
     }
-    service->timeout=(struct timespec){0};
-    if (nearest!=INT64_MAX) {
-        int64_t left=nearest-now;
-        service->timeout.tv_sec=left/1000000000LL; service->timeout.tv_nsec=left%1000000000LL;
-    }
     fds[3].fd=work && work->notification_fd ? work->notification_fd(work->context) : -1;
     fds[4]=(struct pollfd){.fd=md_inode_watch_pollfd(s),.events=POLLIN};
     fds[7].fd=md_ipc_credentials_pollfd(fs->ipc);
     fds[8].fd=md_shm_bridge_pollfd(fs->shm_bridge);
     service->shared_ready=work && work->prepare_wait && work->prepare_wait(work->context);
-    if (service->shared_ready) service->timeout=(struct timespec){0};
-    *wait=(struct md_fs_service_poll){fds,BASE+SLOTS,
-        !service->shared_ready && nearest==INT64_MAX ? NULL : &service->timeout};
+    *wait=(struct md_fs_service_poll){fds,BASE+SLOTS,service->shared_ready ? 0 : nearest};
     return 0;
 }
 int md_fs_service_dispatch(struct md_fs_service *service) {
@@ -514,17 +509,15 @@ int md_fs_service_dispatch(struct md_fs_service *service) {
         for (unsigned n=0;n<SLOTS;++n) {
             int fd=accept4(fds[0].fd,NULL,NULL,SOCK_CLOEXEC|SOCK_NONBLOCK);
             if (fd<0) { if (errno==EAGAIN || errno==EINTR) break; return -errno; }
-            if (md_fs_peer(fd)) { close(fd); continue; }
-            struct ucred identity; socklen_t identity_size=sizeof(identity);
-            if (getsockopt(fd,SOL_SOCKET,SO_PEERCRED,&identity,&identity_size)
-                    || identity_size!=sizeof(identity)) { close(fd); continue; }
+            pid_t peer;
+            if (md_fs_peer(fd,&peer)) { close(fd); continue; }
             unsigned slot=0; while (slot<SLOTS && fds[BASE+slot].fd>=0) ++slot;
             if (slot==SLOTS) { close(fd); continue; }
             long now=md_event_now();
             if (now<0) { close(fd); return (int)now; }
             fds[BASE+slot]=(struct pollfd){.fd=fd,.events=POLLIN};
             peers[slot].phase=REQUEST;
-            peers[slot].process=identity.pid;
+            peers[slot].process=peer;
             peers[slot].watch_reader=-1;
             peers[slot].directory_fd=-1;
             peers[slot].admitted_wait=0;
@@ -555,30 +548,20 @@ void md_fs_service_close(struct md_fs_service *service) {
     fs->wakeup=service->previous_wakeup;
     free(service);
 }
-int md_fs_serve(struct md_filesystem *fs,int listener,int stop_fd,
-        unsigned timeout_ms,struct md_fs_statistics *statistics,const struct md_fs_work_source *work) {
-    struct md_fs_service *service=NULL;
-    int error=md_fs_service_open(fs,listener,stop_fd,timeout_ms,statistics,work,&service);
-    if (error) return error;
+int md_fs_service_run(struct md_fs_service *service) {
+    int error;
     for (;;) {
         struct md_fs_service_poll wait;
         error=md_fs_service_prepare(service,&wait);
         if (error) break;
-        if (service->paused) {
-            /* EVENT_WAIT: explicit worker-pause release or shutdown; the
-             * supervisor's operation deadline owns cancellation. No namespace
-             * transaction or queue lock crosses this wait. */
-            long ready=md_event_wait(wait.fds,wait.count,INT64_MAX);
-            if (ready<0) { error=(int)ready; break; }
-        } else {
-            /* EVENT_WAIT: request/reply/exchange-close/client-close/stop readiness;
-             * peer expiry drops only that connection, without replaying work. */
-            int ready=ppoll(wait.fds,wait.count,wait.timeout,NULL);
-            if (ready<0) { if (errno==EINTR) continue; error=-errno; break; }
-        }
+        /* EVENT_WAIT: peer, work or stop readiness. An expired deadline
+         * returns to the owner; never dispatch a previous readiness snapshot. */
+        long ready=wait.deadline ? md_event_wait(wait.fds,wait.count,wait.deadline)
+            : md_event_poll(wait.fds,wait.count);
+        if (ready==-ETIMEDOUT) continue;
+        if (ready<0) { error=(int)ready; break; }
         error=md_fs_service_dispatch(service);
         if (error) break;
     }
-    md_fs_service_close(service);
     return error==1 ? 0 : error;
 }

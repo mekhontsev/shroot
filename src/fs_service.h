@@ -4,7 +4,7 @@
 #include "fs_engine.h"
 #include "fs_wire.h"
 #include <poll.h>
-#include <time.h>
+#include <stdint.h>
 struct md_image_catalogue;
 struct md_fs_service;
 /* Bind reserves the abstract address. No peer may connect until activation;
@@ -33,8 +33,10 @@ struct md_fs_work_source {
 struct md_fs_service_poll {
     struct pollfd *fds;
     unsigned count;
-    const struct timespec *timeout;
+    /* Monotonic absolute deadline; zero polls, INT64_MAX waits for readiness. */
+    int64_t deadline;
 };
+/* Activates the bound listener only after all fallible setup succeeds. */
 int md_fs_service_open(struct md_filesystem *, int listener, int stop_fd,
         unsigned timeout_ms, struct md_fs_statistics *, const struct md_fs_work_source *, struct md_fs_service **);
 /* Borrowed snapshot until the next prepare/dispatch/close. A wait writes only
@@ -43,10 +45,8 @@ int md_fs_service_prepare(struct md_fs_service *, struct md_fs_service_poll *);
 /* Zero continues, one acknowledges stop readiness, negative is a failure. */
 int md_fs_service_dispatch(struct md_fs_service *);
 void md_fs_service_close(struct md_fs_service *);
-/* Standalone loop over the same lifecycle. Calling thread exclusively owns
- * store. Peer requests never own the service lifetime. */
-int md_fs_serve(struct md_filesystem *, int listener, int stop_fd,
-        unsigned timeout_ms, struct md_fs_statistics *, const struct md_fs_work_source *);
+/* Drive the open service until stop or error; the owner still closes it. */
+int md_fs_service_run(struct md_fs_service *);
 #ifdef MD_FS_TESTING
 enum md_fs_checkpoint { MD_FS_BEFORE_DISPATCH, MD_FS_AFTER_DISPATCH, MD_FS_REPLY_SENT, MD_FS_CONNECTION_CLOSED };
 void md_fs_observe(void (*)(enum md_fs_checkpoint, const struct md_fs_packet *, void *), void *);

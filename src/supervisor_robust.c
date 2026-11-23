@@ -50,11 +50,12 @@ static void retained_retirement_finish(int completed);
 static int retained_retirement_member(const struct thread *t,pid_t parent);
 static int retained_retirement_group_ready(pid_t parent,uint64_t pass);
 static void retained_retirement_progress(void);
+static void retained_retire_child(struct retained_memory *m);
 
 int retained_task_held(const struct thread *t) {
     /* Registration and terminal cleanup own the exact stopped continuation,
      * including the interval before their deferred event is replayed. */
-    return t->robust.registering || t->robust.terminal || t->robust.replay;
+    return t->robust.registering || t->robust.terminal || t->robust.replay || t->robust.mm_departure;
 }
 
 int retained_cleanup_pending(const struct thread *t) {
@@ -114,15 +115,42 @@ struct retained_memory *retained_memory_get(struct thread *t) {
     return m;
 }
 
-void retained_detach(struct thread *t) {
-    for (struct retained_memory *m=retained_memories;m;m=m->next)
-        if (m->parent==t) m->parent=NULL;
+static void retained_drop_member(struct thread *t) {
     struct retained_memory *m=t->memory_actor;
     t->memory_actor=NULL; t->robust.head=0; t->robust.tid=0; t->robust.registering=0;
     t->robust.registering_head=0;
     if (!m) return;
     CHECK(m->members && m->terminal!=t && m->creator!=t);
     if (!--m->members) { m->memory=NULL; m->retiring=1; retained_schedule(m); }
+}
+
+void retained_detach(struct thread *t) {
+    for (struct retained_memory *m=retained_memories;m;m=m->next) {
+        if (m->parent==t) m->parent=NULL;
+        if (m->departing==t) m->departing=NULL;
+    }
+    t->robust.mm_departure=0;
+    retained_drop_member(t);
+}
+
+int retained_depart(struct thread *t,enum retained_departure departure) {
+    struct retained_memory *m=t->memory_actor;
+    int exposed=md_memory_exposed(t->memory);
+    /* A proc memory open reserves exposure before the FD can escape. An
+     * unexposed mm needs no extra wait at exit; exec still drops membership. */
+    if (departure==RETAINED_EXEC) retained_detach(t);
+    else if (m && (m->members>1 || exposed)) retained_drop_member(t);
+    if (!m || !exposed) return 0;
+    if (m->members || !m->ready || m->dead) return 0;
+    /* The actor is infrastructure, not a surviving CLONE_VM guest. Its
+     * final native status proves exit_mm has finished, but consuming that
+     * status belongs to retirement under the actual parent's signal barrier. */
+    CHECK(!m->departing && !m->cleaning && !m->pending && m->wait.pid);
+    m->departing=t; t->robust.mm_departure=departure;
+    SUPERVISOR_TRACE("PROBE mm-departure pid=%d actor=%d kind=%d\n",t->pid,m->wait.pid,departure);
+    md_task_wait_guard_exit(&task_wait,&m->wait);
+    retained_retire_child(m);
+    return 1;
 }
 
 static void robust_register(struct thread *t,uintptr_t head) {
@@ -281,6 +309,17 @@ static pid_t retained_terminal_reader(const struct thread *t) {
 
 void retained_progress(void) {
     if (!retained_work) return;
+    if (task_wait.guarded) {
+        for (struct retained_memory *m=retained_work;m;m=m->work_next) {
+            struct thread *t=m->departing;
+            if (!t || (m->wait.exit_state!=MD_EXIT_OBSERVED && !m->dead)) continue;
+            int departure=t->robust.mm_departure;
+            m->departing=NULL; t->robust.mm_departure=0;
+            SUPERVISOR_TRACE("PROBE mm-released pid=%d actor=%d kind=%d\n",t->pid,m->wait.pid,departure);
+            if (departure==RETAINED_EXEC) task_exec_layout(t);
+            else { CHECK(departure==RETAINED_EXIT); resume(t->pid,0); }
+        }
+    }
     retained_retirement_progress();
     for (struct retained_memory *m=retained_work,*next;m;m=next) {
         next=m->work_next;
@@ -318,7 +357,7 @@ void retained_progress(void) {
 }
 
 static void retained_memory_release(struct retained_memory *m) {
-    CHECK(!m->members && !m->creator && !m->cleaning && !m->previous && !m->replacement);
+    CHECK(!m->members && !m->creator && !m->cleaning && !m->previous && !m->replacement && !m->departing);
     struct retained_memory **link=&retained_memories;
     while (*link && *link!=m) link=&(*link)->next;
     CHECK(*link==m); *link=m->next;
@@ -332,6 +371,19 @@ static void retained_memory_release(struct retained_memory *m) {
     free(m);
 }
 
+void retained_publish_child_notice(pid_t recipient) {
+    struct retained_retirement *r=retained_retirement;
+    if (r && r->stage) {
+        struct thread *target=find_thread(recipient);
+        if (target && target->tgid==r->actor->tgid) {
+            /* The private child's native SIGCHLD may be the one the kernel
+             * kept. Coalesce real notices separately until its exact reap. */
+            r->child_notice=1; return;
+        }
+    }
+    kill(recipient,SIGCHLD);
+}
+
 static void retained_retirement_finish(int completed) {
     struct retained_retirement *r=retained_retirement;
     struct thread *t=r->actor;
@@ -341,6 +393,7 @@ static void retained_retirement_finish(int completed) {
     CHECK(!md_buffer_release(&r->buffer));
     if (r->order.queue && md_resource_order_cancel(&r->order)==1)
         CHECK(!md_resource_order_complete(&r->order));
+    if (r->child_notice) kill(t->tgid,SIGCHLD);
     CHECK(!md_task_quiesce_release(retained_barrier));
     if (r->synthetic) t->kernel_stopped=0;
     if (completed) retained_memory_release(r->memory);
@@ -408,6 +461,7 @@ static void retained_retirement_progress(void) {
             CHECK(md_resource_order_state(&r->order)==MD_RESOURCE_ORDER_RUNNING);
             CHECK(!md_buffers_take_reserved(md_memory_buffers(t->memory),&r->buffer));
             r->peer=md_memory_buffer_address(t->memory,&r->buffer);
+            md_task_wait_release_exit(&task_wait,&m->wait);
             retained_retire_child(m);
             r->stage=1;
         }
@@ -443,7 +497,7 @@ static void retained_retirement_progress(void) {
     }
     for (struct retained_memory *m=retained_work,*next;m;m=next) {
         next=m->work_next;
-        if (!m->retiring || m->members || m->cleaning || m->creator || m->replacement) continue;
+        if (!m->retiring || m->members || m->cleaning || m->creator || m->replacement || m->departing) continue;
         if (!m->retained.actor) { retained_memory_release(m); continue; }
         pid_t stable_parent,group; int signal;
         long parent=retained_child_identity(m,&stable_parent,&group,&signal)
@@ -458,6 +512,7 @@ static void retained_retirement_progress(void) {
         }
         if (parent==getpid() || (m->dead && parent==-ENOENT)) {
             if (m->dead) { retained_memory_release(m); continue; }
+            md_task_wait_release_exit(&task_wait,&m->wait);
             if (!m->killed) retained_retire_child(m);
             continue;
         }
@@ -631,6 +686,13 @@ int retained_event(pid_t pid,int status,const struct rusage *usage) {
         unsigned long old;
         if (native_trace(PTRACE_GETEVENTMSG,pid,NULL,&old)<0) { CHECK(errno==ESRCH); return 1; }
         if (old && old!=(unsigned)pid) subject=find_thread((pid_t)old);
+        /* A nonleader exec inherits the leader's PID after the old leader
+         * passed its exit stop. Its old-mm membership still belongs to the
+         * executing thread until robust cleanup and exec rekey complete. */
+        if (subject && subject!=t && subject->memory_actor && !t->memory_actor) {
+            CHECK(subject->memory==t->memory);
+            t->memory_actor=subject->memory_actor; ++t->memory_actor->members;
+        }
     }
     if (!subject || !subject->robust.head) return 0;
     CHECK(subject->memory_actor && subject->memory_actor->ready && t->memory_actor==subject->memory_actor);

@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -730,7 +731,27 @@ static void memory_access_capture(void) {
     assert(!munmap(memory,4096)); md_memory_release(m);
     puts("PASS private-memory capture: exact self mm, allocation-free admission and rollback at every FD exhaustion point");
 }
-static void memory_access_protected_child(void) {
+enum mm_departure { CHILD_EXIT, CHILD_KILL, CHILD_EXEC, THREAD_EXEC };
+
+struct replacement { const char *self; int input,output; };
+static void *replace_image(void *opaque) {
+    const struct replacement *r=opaque;
+    char input[24],output[24];
+    snprintf(input,sizeof(input),"%d",r->input); snprintf(output,sizeof(output),"%d",r->output);
+    assert(!fcntl(r->input,F_SETFD,0) && !fcntl(r->output,F_SETFD,0));
+    execl(r->self,r->self,"--mm-replaced",input,output,(char *)NULL);
+    _exit(1);
+}
+
+static void expect_old_mm_eof(int fd,pid_t pid,off_t offset) {
+    unsigned char value=0;
+    ssize_t count=pread(fd,&value,1,offset);
+    if (count) fprintf(stderr,"old mm of %d: read=%zd errno=%d value=%u\n",
+        pid,count,count<0 ? errno : 0,value);
+    assert(count==0);
+}
+
+static void memory_access_protected_child(enum mm_departure departure,const char *self) {
     unsigned char *memory=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
     assert(memory!=MAP_FAILED); *memory=19;
     int parent[2], child[2]; assert(!pipe2(parent,O_CLOEXEC) && !pipe2(child,O_CLOEXEC));
@@ -745,6 +766,19 @@ static void memory_access_protected_child(void) {
         assert(!prctl(PR_SET_DUMPABLE,0));
         *memory=37; assert(write(child[1],&event,1)==1);
         assert(read(parent[0],&event,1)==1 && *memory==43);
+        if (departure==CHILD_KILL) {
+            assert(write(child[1],&event,1)==1);
+            (void)read(parent[0],&event,1);
+            _exit(1);
+        }
+        if (departure==CHILD_EXEC || departure==THREAD_EXEC) {
+            struct replacement replacement={self,parent[0],child[1]};
+            if (departure==CHILD_EXEC) replace_image(&replacement);
+            pthread_t thread;
+            assert(!pthread_create(&thread,NULL,replace_image,&replacement));
+            assert(!pthread_join(thread,NULL));
+            _exit(1);
+        }
         _exit(0);
     }
     close(parent[0]); close(child[1]);
@@ -756,18 +790,33 @@ static void memory_access_protected_child(void) {
     assert(pread(access->memory,&value,1,(off_t)memory)==1 && value==37);
     value=43; assert(pwrite(access->memory,&value,1,(off_t)memory)==1 && *memory==19);
     assert(write(parent[1],&event,1)==1);
+    if (departure!=CHILD_EXIT) {
+        assert(read(child[0],&event,1)==1);
+        if (departure==CHILD_KILL) assert(!kill(pid,SIGKILL));
+        else {
+            expect_old_mm_eof(access->memory,pid,(off_t)memory);
+            assert(write(parent[1],&event,1)==1);
+        }
+    }
     int status;
     while (waitpid(pid,&status,0)<0) assert(errno==EINTR);
-    assert(WIFEXITED(status) && !WEXITSTATUS(status));
-    assert(pread(access->memory,&value,1,(off_t)memory)==0);
+    if (departure==CHILD_KILL) assert(WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL);
+    else assert(WIFEXITED(status) && !WEXITSTATUS(status));
+    expect_old_mm_eof(access->memory,pid,(off_t)memory);
     md_memory_release(m); close(parent[1]); close(child[0]); assert(!munmap(memory,4096));
-    puts("PASS private-memory capture: protected child retains exact mm, parent COW stays independent, exited mm cannot target a reused PID");
 }
-int main(void) {
+int main(int argc,char **argv) {
     alarm(30);
+    if (argc==4 && !strcmp(argv[1],"--mm-replaced")) {
+        char byte=1;
+        /* EVENT_WAIT: keep the new image alive until the old mm has been read. */
+        return !(write(atoi(argv[3]),&byte,1)==1 && read(atoi(argv[2]),&byte,1)==1);
+    }
     unsigned before=descriptors();
     execution_windows(); slots(); spans(); channels(); filter_payload(); owner_lifetime(); failures(); address_spaces(); payload_reuse(); mapping_policy(); native_memory_admission(); file_views(); file_view_failures();
-    file_backing_lifetime(); image_backings(); memory_access_lifetime(); memory_access_capture(); memory_access_protected_child();
+    file_backing_lifetime(); image_backings(); memory_access_lifetime(); memory_access_capture();
+    for (enum mm_departure d=CHILD_EXIT;d<=THREAD_EXEC;++d) memory_access_protected_child(d,argv[0]);
+    puts("PASS private-memory capture: independent parent COW and exact old-mm EOF after exit, SIGKILL and exec");
     assert(descriptors()==before);
     puts("PASS shared request buffer ownership");
     return 0;

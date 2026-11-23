@@ -2,6 +2,7 @@
 #include "linux_abi.h"
 #include "file_permissions.h"
 #include "procfs_view.h"
+#include "directory_cursor.h"
 #include "fs_mount_internal.h"
 #include "fs_continuation.h"
 #include "inode_internal.h"
@@ -749,7 +750,7 @@ ssize_t md_procfs_getdents(struct md_filesystem *fs,const struct md_view_mount *
         int64_t position=lseek(fd,0,SEEK_CUR);
         if (position<0) return -errno;
         ssize_t size=md_proc_file_namespace_entries(st.st_ino,&position,data,capacity);
-        if (size>=0 && lseek(fd,position,SEEK_SET)<0) return -errno;
+        if (size>=0 && (error=md_directory_seek_exact(fd,position))) return error;
         return size;
     }
     const struct md_procfs_policy *p=policy(mount);
@@ -827,7 +828,7 @@ ssize_t md_procfs_getdents(struct md_filesystem *fs,const struct md_view_mount *
                 size_t record=md_directory_record_write((char *)data+written,capacity-written,
                     name,strlen(name),inode ? (uint64_t)inode : entry.inode,entry.next,entry.type);
                 if (!record) {
-                    if (lseek(fd,cursor,SEEK_SET)<0) return -errno;
+                    if ((error=md_directory_seek_exact(fd,cursor))) return error;
                     return written ? (ssize_t)written : -EINVAL;
                 }
                 written+=record;

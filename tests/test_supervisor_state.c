@@ -26,6 +26,7 @@
 #include "fs_mount_internal.h"
 #include "seccomp_notify.h"
 #include "task_pending.h"
+#include "private_tree.h"
 #include "full_device.h"
 
 static void stopped_call_context(void) {
@@ -207,11 +208,12 @@ static void terminal_cleanup_custody(void) {
 }
 static void terminal_cleanup_broker(void) {
     assert(!threads && !filesystem && !broker && !tasks);
-    pid_t owner=fork(); assert(owner>=0);
+    char temporary[]="cleanup-broker-XXXXXX";
+    assert(mkdtemp(temporary));
+    pid_t owner=fork();
     if (!owner) {
         alarm(15);
-        char temporary[]="./cleanup-broker-XXXXXX",store[PATH_MAX];
-        assert(mkdtemp(temporary) && realpath(temporary,store));
+        char store[PATH_MAX]; assert(realpath(temporary,store));
         assert(strlcat(store,"/store",sizeof(store))<sizeof(store));
         struct md_inode_store *inodes=NULL;
         assert(!md_inode_store_open(store,1,&inodes)); md_inode_store_close(inodes);
@@ -260,8 +262,11 @@ static void terminal_cleanup_broker(void) {
         assert(!md_fd_order_complete(&held));
         _exit(0);
     }
-    int status;
-    assert(waitpid(owner,&status,0)==owner);
+    int status=0;
+    pid_t reaped;
+    do reaped=owner<0 ? -1 : waitpid(owner,&status,0); while (owner>0 && reaped<0 && errno==EINTR);
+    assert(!md_private_tree_discard(AT_FDCWD,temporary));
+    assert(owner>0 && reaped==owner);
     if (!WIFEXITED(status) || WEXITSTATUS(status))
         fprintf(stderr,"cleanup broker child status=%#x\n",status);
     assert(WIFEXITED(status) && !WEXITSTATUS(status));
@@ -469,6 +474,28 @@ static void retained_retirement_shared_parent(void) {
     thread_index[parent.pid%THREAD_BUCKETS]=NULL;
     threads=saved; retained_work=NULL; statistics=previous;
     puts("PASS private-child retirement: one blocked-group scan per pass, no repeated actor search for adopted siblings");
+}
+static void retained_retirement_notice(void) {
+    pid_t self=getpid();
+    struct thread parent={.pid=self,.tgid=self},other={.tgid=self+1};
+    struct retained_retirement turn={.actor=&parent};
+    struct thread **slot=&thread_index[(unsigned)self%THREAD_BUCKETS];
+    assert(!*slot && !retained_retirement);
+    sigset_t mask,original; sigemptyset(&mask); sigaddset(&mask,SIGCHLD);
+    assert(!sigprocmask(SIG_BLOCK,&mask,&original));
+    *slot=&parent; retained_retirement=&turn;
+    const struct timespec immediate={0};
+    retained_publish_child_notice(self);
+    assert(sigtimedwait(&mask,NULL,&immediate)==SIGCHLD && !turn.child_notice);
+    turn.stage=1;
+    retained_publish_child_notice(self); retained_publish_child_notice(self);
+    assert(turn.child_notice && sigtimedwait(&mask,NULL,&immediate)<0 && errno==EAGAIN);
+    turn.child_notice=0; turn.stage=2; turn.actor=&other;
+    retained_publish_child_notice(self);
+    assert(sigtimedwait(&mask,NULL,&immediate)==SIGCHLD && !turn.child_notice);
+    retained_retirement=NULL; *slot=NULL;
+    assert(!sigprocmask(SIG_SETMASK,&original,NULL));
+    puts("PASS private-child retirement: only the actual parent's debugger notices wait for private SIGCHLD cleanup");
 }
 static int wait_test_hidden,wait_test_done,wait_test_admitted=1;
 static pid_t wait_test_last;
@@ -1062,6 +1089,33 @@ static void debug_host_exit(void) {
     md_signal_actions_release(t.signals.actions);
     checkpoints.trace=NULL;
     puts("PASS debugger host exit: deferred adapter results, guest policy precedence and native signal ordering");
+}
+static void reported_trace_exit(const struct seccomp_data *call,const struct user_pt_regs *visible) {
+    struct thread t={.pid=123,.entered=1,.signals.host=1,.debug.call_active=1};
+    assert(!thread_index[t.pid%THREAD_BUCKETS]);
+    thread_index[t.pid%THREAD_BUCKETS]=&t;
+    debug_host_registers=*visible;
+    debug_host_signal=(siginfo_t){.si_signo=SIGSYS,.si_code=SYS_SECCOMP};
+    debug_host_signal.si_arch=call->arch;
+    debug_host_signal.si_syscall=call->nr;
+    debug_host_signal.si_call_addr=(void *)(uintptr_t)call->instruction_pointer;
+    long (*previous)(int,pid_t,void *,void *)=checkpoints.trace;
+    checkpoints.trace=debug_host_trace;
+    const uint32_t actions[]={SECCOMP_RET_TRACE|23,SECCOMP_RET_ERRNO|EACCES};
+    for (unsigned i=0;i<2;++i) {
+        struct sock_filter code[]={BPF_STMT(BPF_RET|BPF_K,actions[i])};
+        struct sock_fprog policy={1,code};
+        assert(!md_seccomp_policy_capture(NULL,&policy,&t.seccomp.policy));
+        t.seccomp.trace.stage=GUEST_TRACE_DRAIN; t.seccomp.trace.call=*call;
+        struct ptrace_syscall_info exit={.op=PTRACE_SYSCALL_INFO_EXIT,.arch=call->arch,
+            .instruction_pointer=call->instruction_pointer,.exit={.rval=-ENOSYS,.is_error=1}};
+        assert(!debug_host_policy_pending(&t,&exit) && t.seccomp.trace.stage==GUEST_TRACE_NONE);
+        assert(exit.exit.rval==(i ? -EACCES : -ENOSYS) && exit.exit.is_error);
+        assert(debug_host_policy_completed(&t,&debug_host_signal));
+        assert(!debug_host_policy_completed(&t,&debug_host_signal));
+        md_seccomp_policy_release(t.seccomp.policy); t.seccomp.policy=NULL;
+    }
+    checkpoints.trace=previous; thread_index[t.pid%THREAD_BUCKETS]=NULL;
 }
 static void signalfd_information(void) {
     sigset_t set,previous; sigemptyset(&set); sigaddset(&set,SIGSYS); sigaddset(&set,SIGUSR1);
@@ -6924,7 +6978,8 @@ static void debugger_quiescence(void) {
         assert(debugger_continuations==1 && t.kernel_resume==PTRACE_SYSCALL);
         assert(t.seccomp.trace.stage==GUEST_TRACE_DRAIN && t.debug.call_active==active && t.debug.adapter==active);
         struct ptrace_syscall_info exit={.op=PTRACE_SYSCALL_INFO_EXIT};
-        assert(!guest_trace_syscall(&t,&exit,NULL) && t.seccomp.trace.stage==GUEST_TRACE_NONE);
+        assert(!guest_trace_syscall(&t,&exit,NULL));
+        assert(!debug_host_policy_pending(&t,&exit) && t.seccomp.trace.stage==GUEST_TRACE_NONE);
         assert(debugger_at_boundary(&t)==!carrier);
         thread_index[t.pid%THREAD_BUCKETS]=NULL;
     }
@@ -6977,6 +7032,7 @@ static void debugger_quiescence(void) {
             assert(md_debugger_seccomp(debugger,123,&call,original.sp,0x321));
             assert(md_debugger_syscall_entry(debugger,123,&retained)
                 && !memcmp(&retained,&call,sizeof(call)));
+            reported_trace_exit(&retained,&original);
             siginfo_t event={0};
             struct { uint64_t data[18], guard[16]; } usage;
             memset(&usage,0x5a,sizeof(usage));
@@ -9000,6 +9056,7 @@ int main(void) {
     native_child_membership();
     retained_replacement();
     retained_retirement_shared_parent();
+    retained_retirement_notice();
     private_wait_selection();
     private_wait_buffer_cancel();
     parked_checkpoint_ownership();

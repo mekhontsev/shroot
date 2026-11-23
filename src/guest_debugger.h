@@ -43,6 +43,8 @@ struct md_debugger_host {
     int (*wait_admit)(pid_t);
     void (*wait)(pid_t,const struct seccomp_data *,enum md_debugger_wait_action);
     void (*wait_wake)(pid_t);
+    /* Publish a process-directed SIGCHLD for an observable debugger event. */
+    void (*child_notice)(pid_t);
     /* Optional child snapshot when private executors share parentage. Returns
      * one with an owned array of visible candidates, zero for native waiting,
      * or a negative error. The kernel still decides exact wait eligibility

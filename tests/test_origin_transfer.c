@@ -680,14 +680,14 @@ static void typed_capsules(const char *base, int mode) {
     struct source source_state={0};
     if (private_view || placed) {
         source_state=source(base,1);
-        assert(md_fs_anchor_portable(source_state.anchor[5]));
+        assert(md_mount_graph_portable(md_fs_anchor_view(source_state.anchor[5])));
     }
     if (private_view) {
         int parent=open(base,O_PATH|O_DIRECTORY|O_CLOEXEC); assert(parent>=0);
         struct md_view_mount *mount=&source_state.fs.mounts->tree->mounts[0];
         mount->provider=md_provider_tree_new(parent,mount->source,NULL,0,NULL,NULL);
         close(parent); assert(mount->provider);
-        assert(!md_fs_anchor_portable(source_state.anchor[5]));
+        assert(!md_mount_graph_portable(md_fs_anchor_view(source_state.anchor[5])));
         struct md_fs_origin_parcel parcel={0};
         assert(md_fs_origin_export(source_state.message,&parcel)==-EOPNOTSUPP && !parcel.count);
     }

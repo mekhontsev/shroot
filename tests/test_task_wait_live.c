@@ -16,6 +16,8 @@
 
 enum wait_result { READY, EMPTY, ERROR };
 static unsigned calls, counts[2][3];
+/* Bound missing child events, not the throughput of a progressing trace. */
+static void progress(void) { alarm(30); }
 pid_t __real_wait4(pid_t, int *, int, struct rusage *);
 pid_t __wrap_wait4(pid_t pid, int *status, int options, struct rusage *usage) {
     calls++;
@@ -51,6 +53,7 @@ static void cancel_collected(void) {
          * The fixture alarm bounds a missing terminal event. */
         assert(!waitid(P_PID,pid,&info,WSTOPPED|WNOWAIT|__WALL));
         assert(info.si_code==CLD_TRAPPED && info.si_status==(SIGTRAP|(PTRACE_EVENT_EXIT<<8)));
+        progress();
         md_task_wait_track(&state,&members[i],pid);
     }
     state.directed=64;
@@ -69,7 +72,7 @@ static void cancel_collected(void) {
         /* SIGKILL may invalidate an already collected EXIT stop. Only
          * the final wait status counts as reaping that exact child. */
         if (WIFSTOPPED(status)) assert(!ptrace(PTRACE_CONT,pid,0,0) || errno==ESRCH);
-        else { assert(WIFEXITED(status) || WIFSIGNALED(status)); children[i]=0; ++reaped; }
+        else { assert(WIFEXITED(status) || WIFSIGNALED(status)); children[i]=0; ++reaped; progress(); }
     }
     assert(reaped==CHILDREN && !state.pending_count);
     puts("PASS collected cancellation: terminal batch drained before blocking reap");
@@ -93,7 +96,7 @@ int main(int argc,char **argv) {
     pid_t parent=getpid();
     struct timespec started,ended;
     assert(!clock_gettime(CLOCK_MONOTONIC,&started));
-    alarm(30);
+    progress();
     if (cancel) {
         cancel_collected(); alarm(0); close(fd); return 0;
     }
@@ -108,6 +111,7 @@ int main(int argc,char **argv) {
             for (unsigned j=0;j<requests;j++) syscall(SYS_getpid);
             _exit(20+i);
         }
+        progress();
     }
     struct md_task_wait state={0};
     struct md_task_wait_member members[CAPACITY]={0};
@@ -121,7 +125,7 @@ int main(int argc,char **argv) {
         assert((bytes<0 && errno==EAGAIN) || (bytes>0 && bytes%(ssize_t)sizeof(*info)==0));
         for (ssize_t i=0;i<bytes/(ssize_t)sizeof(*info);i++) {
             assert(info[i].ssi_signo==SIGCHLD);
-            md_task_wait_hint(&state,(pid_t)info[i].ssi_pid);
+            md_task_wait_sigchld(&state,(pid_t)info[i].ssi_pid);
         }
         int status;
         pid_t pid=md_task_wait_ready(&state,&status,NULL,1);
@@ -157,6 +161,7 @@ int main(int argc,char **argv) {
         }
         seen[i]++; stops++;
         if (!(stops%2048)) {
+            progress();
             printf("READY wait progress: stops=%u",stops);
             print_queries(); putchar('\n');
         }
@@ -170,6 +175,7 @@ int main(int argc,char **argv) {
             int status; assert(waitpid(children[i],&status,__WALL)==children[i]
                 && WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL);
             md_task_wait_untrack(&state,&members[i]);
+            progress();
         }
     }
     close(gate[0]); close(gate[1]);

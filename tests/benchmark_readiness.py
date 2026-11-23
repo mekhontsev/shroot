@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--reference', type=Path,
                         help='Optional second runtime; it must be executable by the selected identity')
     parser.add_argument('--store', required=True)
+    parser.add_argument('--fixture', type=Path, help='Prebuilt readiness-benchmark for the guest libc')
     parser.add_argument('--rounds', type=int, default=5)
     parser.add_argument('--iterations', type=int, default=10000)
     parser.add_argument('--entry-mode', choices=('both', 'base', 'lazy'), default='both',
@@ -52,10 +53,13 @@ def main():
             '--deadline-seconds', '60']
     try:
         suite.command([suite.runner, '--store', args.store, '--user', '0:0', '--', '/bin/mkdir', target])
-        suite.upload(Path(__file__).with_name('fixtures') / 'readiness-benchmark.c',
-                               suite.base + '/benchmark.c')
-        suite.command([suite.runner, *base, '--', '/usr/bin/cc', '-O2', '-Wall', '-Wextra',
-                       target + '/benchmark.c', '-o', target + '/benchmark'])
+        if args.fixture:
+            suite.upload(args.fixture, suite.base + '/benchmark')
+            suite.chmod('700', suite.base + '/benchmark')
+        else:
+            suite.upload(Path(__file__).with_name('fixtures') / 'readiness-benchmark.c', suite.base + '/benchmark.c')
+            suite.command([suite.runner, *base, '--', '/usr/bin/cc', '-O2', '-Wall', '-Wextra',
+                           target + '/benchmark.c', '-o', target + '/benchmark'])
         candidates = [('current', suite.runner)]
         if args.reference:
             reference = suite.base + '/reference'

@@ -2,6 +2,7 @@
 #include "linux_abi.h"
 #include "fd_native_pin.h"
 #include "fs_buffer_service.h"
+#include "directory_cursor.h"
 #include "fs_buffer.h"
 #include "fs_worker.h"
 #include "fs_engine.h"
@@ -702,8 +703,7 @@ static void run(struct md_fs_work *work, struct md_filesystem *fs, int error) {
     }
     if (r->finishing) {
         if (r->request.operation==MD_FS_GETDENTS) {
-            if (r->delivered && lseek(r->captured[0],r->position,SEEK_SET)!=r->position)
-                r->error=-errno;
+            if (r->delivered) r->error=md_directory_seek_exact(r->captured[0],r->position);
         } else r->error=md_inode_watch_complete(fs->store,r->captured[0],r->delivered);
         r->reserved=0;
         return;

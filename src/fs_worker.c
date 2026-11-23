@@ -173,6 +173,7 @@ static int prepare_wait(void *context) {
 /* Resource lifetime is independent of the thread entry and queue transport.
  * Only the worker thread enters this runtime; close also accepts partial open. */
 struct worker_runtime {
+    struct md_fs_service *service;
     struct md_fs_storage_cache storage;
     struct md_filesystem fs;
     struct md_input_session *input;
@@ -189,7 +190,7 @@ static void startup_stage(struct md_fs_worker *w,const char **stage,int64_t *sta
     *stage=next;
 }
 static int runtime_open(struct md_fs_worker *w,struct worker_runtime *runtime,
-        struct md_inode_statistics *stats,struct md_fs_statistics *rpc) {
+        struct md_inode_statistics *stats,struct md_fs_statistics *rpc,const struct md_fs_work_source *source) {
     *runtime=(struct worker_runtime){.listener=-1};
     struct md_filesystem *fs=&runtime->fs;
     fs->statistics=rpc;
@@ -236,7 +237,7 @@ static int runtime_open(struct md_fs_worker *w,struct worker_runtime *runtime,
     w->inherited=NULL;
     if (!error) {
         startup_stage(w,&stage,&started,"filesystem listener");
-        error=md_fs_listener_activate(runtime->listener);
+        error=md_fs_service_open(fs,runtime->listener,w->stop,5000,rpc,source,&runtime->service);
     }
     if (error) fprintf(stderr,"Shroot filesystem startup (%s): %s\n",stage,strerror(-error));
     startup_stage(w,&stage,&started,error ? "failed" : "ready");
@@ -279,16 +280,15 @@ static void *run(void *context) {
     struct worker_runtime runtime;
     struct md_inode_statistics stats={0};
     struct md_fs_statistics rpc={0};
-    int error=runtime_open(w,&runtime,w->statistics ? &stats : NULL,w->statistics ? &rpc : NULL);
+    struct md_fs_work_source source={.fd=w->wake.reader,.wakeup=w->wakeup,.context=w,.ready=run_ready,
+        .notification_fd=notification_fd,.notification=notification,.prepare_wait=prepare_wait,.paused=paused};
+    int error=runtime_open(w,&runtime,w->statistics ? &stats : NULL,w->statistics ? &rpc : NULL,&source);
     pthread_mutex_lock(&w->lock);
     w->mounts=md_mount_namespace_retain(runtime.fs.mounts); w->error=error;
     pthread_mutex_unlock(&w->lock);
     md_event_signal(w->ready);
-    if (!error) {
-        struct md_fs_work_source source={.fd=w->wake.reader,.wakeup=w->wakeup,.context=w,.ready=run_ready,
-            .notification_fd=notification_fd,.notification=notification,.prepare_wait=prepare_wait,.paused=paused};
-        error=md_fs_serve(&runtime.fs,runtime.listener,w->stop,5000,w->statistics ? &rpc : NULL,&source);
-    }
+    if (!error) error=md_fs_service_run(runtime.service);
+    md_fs_service_close(runtime.service);
     retire_work(w,error);
     runtime_close(&runtime);
     if (w->statistics) {

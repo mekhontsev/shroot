@@ -489,6 +489,12 @@ static void models(const char *base) {
         assert(imported.mounts==saved && saved->tree->mounts[1].id==id
             && saved->tree->objects==objects && descriptors()==current);
     }
+    /* Recognizing a live view does not authenticate its incoming attachment FDs. */
+    assert(!md_mount_graph_export(source.mounts,source.store->lifetime->root,&p));
+    int target=p.fd[4]; p.fd[4]=p.fd[7]; p.fd[7]=target;
+    assert(md_mount_graph_import(&p,&imported.mounts)==-EPROTO && !p.count);
+    assert(imported.mounts==saved && saved->tree->mounts[1].id==id
+        && saved->tree->objects==objects && descriptors()==current);
     assert(!md_mount_graph_export(source.mounts,source.store->lifetime->root,&p));
     saved->tree->mounts[2].parent=&saved->tree->mounts[0];
     assert(md_mount_graph_import(&p,&imported.mounts)==-ESTALE && imported.mounts==saved);

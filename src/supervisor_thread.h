@@ -83,6 +83,7 @@ struct supervisor_robust_state {
     int registering;
     int terminal;
     int replay;
+    int mm_departure;
     int status;
     struct rusage usage;
     struct user_pt_regs registers;

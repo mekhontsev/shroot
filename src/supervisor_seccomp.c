@@ -247,8 +247,6 @@ int guest_trace_syscall(struct thread *t,const struct ptrace_syscall_info *info,
     if (t->seccomp.trace.stage)
         SUPERVISOR_TRACE("PROBE guest-trace-syscall pid=%d stage=%d op=%d pc=%llx\n",
             t->pid,t->seccomp.trace.stage,info->op,(unsigned long long)info->instruction_pointer);
-    if (t->seccomp.trace.stage==GUEST_TRACE_DRAIN && info->op==PTRACE_SYSCALL_INFO_EXIT)
-        t->seccomp.trace.stage=GUEST_TRACE_NONE;
     if (t->seccomp.trace.stage==GUEST_TRACE_REPLAY && info->op==PTRACE_SYSCALL_INFO_ENTRY) {
         struct seccomp_data call={.nr=info->entry.nr,.arch=info->arch,
             .instruction_pointer=t->seccomp.trace.call.instruction_pointer};
@@ -274,6 +272,12 @@ int guest_trace_syscall(struct thread *t,const struct ptrace_syscall_info *info,
         if (pending) { resume(t->pid,0); return 1; }
     }
     return 0;
+}
+
+const struct seccomp_data *guest_trace_drain_exit(struct thread *t) {
+    if (t->seccomp.trace.stage!=GUEST_TRACE_DRAIN) return NULL;
+    t->seccomp.trace.stage=GUEST_TRACE_NONE;
+    return &t->seccomp.trace.call;
 }
 
 void guest_notification_discard(struct thread *t) {
@@ -375,7 +379,7 @@ int guest_notification_event(struct thread *t,int status) {
     int continuing=replied>0 && (response.flags&SECCOMP_USER_NOTIF_FLAG_CONTINUE);
     if (replied>0 && (!continuing || n->continuing_native)) CHECK(!md_task_call_retire_entry(&n->call));
     else if (continuing && !n->host_signal.si_signo)
-        CHECK(!md_task_call_preserve_admission(&n->call));
+        CHECK(!md_task_call_preserve_admission(&n->call,&n->original));
     int ready=md_task_call_event(&n->call,status);
     if (ready<0) {
         if (ready!=-ESRCH) {

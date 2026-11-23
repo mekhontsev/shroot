@@ -271,12 +271,10 @@ static int mount_slot(const struct md_mount_namespace *view, const struct md_vie
 static int mount_portable(const struct md_view_mount *m) {
     if (m->local_custody || m->devpts || m->cgroup || m->sysfs || m->ipc_namespace || m->file.ops) return 0;
     if (!m->provider) return 1;
-    struct stat root;
     return (md_host_fs_kind(m->provider) || (m->backing==MD_MOUNT_PROC && md_procfs_export(m->provider,NULL)))
-        && !fstat(md_provider_tree_root(m->provider),&root)
-        && md_view_same(&m->native,&root);
+        && md_provider_tree_root_matches(m->provider,&m->native);
 }
-static int layout_portable(const struct md_mount_namespace *view,const struct md_mount_layout *l) {
+static int layout_supported(const struct md_mount_namespace *view,const struct md_mount_layout *l,int exporting) {
     for (unsigned i=0;i<=l->count;++i) {
         const struct md_view_mount *m=i ? &l->entries[i-1] : l->base;
         if (!m->id) continue;
@@ -287,7 +285,7 @@ static int layout_portable(const struct md_mount_namespace *view,const struct md
         const struct md_view_mount *parent=slot ? &l->entries[slot-1] : l->base;
         /* Host projection carriers may open locally yet be rejected by
          * SCM_RIGHTS. Only guest-owned attachment points are portable. */
-        if (parent->provider && md_provider_tree_private(parent->provider,m->target)!=1) return 0;
+        if (exporting && parent->provider && md_provider_tree_private(parent->provider,m->target)!=1) return 0;
     }
     return 1;
 }
@@ -295,12 +293,15 @@ int md_mount_graph_portable(const struct md_mount_namespace *view) {
     if (!view) return 1;
     struct md_mount_layout l={.base=&view->base,.root=view->root,
         .entries=view->tree ? view->tree->mounts : NULL,.count=view->tree ? view->tree->count : 0};
-    return layout_portable(view,&l);
+    return layout_supported(view,&l,1);
 }
 static int describe(struct md_mount_namespace *view, const struct md_mount_layout *l, struct manifest *out,
         int fds[MD_MOUNT_GRAPH_PLACEMENT_FDS], struct md_inode_lifetime **owners) {
     if (l->count>MD_FS_MOUNTS_MAX) return -EINVAL;
-    if (!layout_portable(view,l)) return -EOPNOTSUPP;
+    /* A comparison describes the live topology, but sends none of its FDs.
+     * Source and target identities were captured with the owned descriptions.
+     * Fresh incoming rights and every actual export are validated separately. */
+    if (!layout_supported(view,l,fds!=NULL)) return -EOPNOTSUPP;
     const struct md_view_mount *entries=l->entries;
     unsigned count=l->count;
     *out=(struct manifest){.magic=MAGIC,.version=VERSION,
@@ -313,9 +314,10 @@ static int describe(struct md_mount_namespace *view, const struct md_mount_layou
     if (root<0) return root;
     struct stat root_stat;
     if (fstat(root,&root_stat)) return -errno;
-    out->root_policy=md_fd_identity(&root_stat); fds[1]=root;
+    out->root_policy=md_fd_identity(&root_stat);
     if (fstat(view->graph->pin,&root_stat)) return -errno;
-    out->pin=md_fd_identity(&root_stat); fds[2]=view->graph->pin;
+    out->pin=md_fd_identity(&root_stat);
+    if (fds) { fds[1]=root; fds[2]=view->graph->pin; }
     out->count=count;
     if (out->count>MD_FS_MOUNTS_MAX) return -EINVAL;
     int root_slot=mount_slot(view,l->root,count), base_parent=mount_slot(view,l->base->parent,count);
@@ -327,12 +329,14 @@ static int describe(struct md_mount_namespace *view, const struct md_mount_layou
     out->base_flags=(l->base->detached ? DETACHED : 0) | (l->base->locked ? LOCKED : 0);
     if (l->base->root_providers) out->base_flags|=ROOT_PROVIDERS;
     if (l->base->source>=0) {
-        int r=path_object(l->base->source,md_fd_identity(&l->base->native),&(struct stat){0},1);
-        if (!r) r=path_object(l->base->target,md_fd_identity(&l->base->guest),&(struct stat){0},1);
-        if (r) return r;
+        if (fds) {
+            int r=path_object(l->base->source,md_fd_identity(&l->base->native),&(struct stat){0},1);
+            if (!r) r=path_object(l->base->target,md_fd_identity(&l->base->guest),&(struct stat){0},1);
+            if (r) return r;
+            fds[3]=l->base->source; fds[4]=l->base->target;
+        }
         out->base_descriptor=3;
         out->base_source=md_fd_identity(&l->base->native); out->base_target=md_fd_identity(&l->base->guest);
-        fds[3]=l->base->source; fds[4]=l->base->target;
     }
     out->storages=stores(entries,count,owners);
     unsigned next=out->base_descriptor ? 5 : 3;
@@ -351,8 +355,6 @@ static int describe(struct md_mount_namespace *view, const struct md_mount_layou
         e->shared=md_mount_group_id(m->links.shared);
         e->master=md_mount_group_id(m->links.master);
         e->unbindable=m->links.unbindable;
-        /* A private device view cannot be flattened into a native attachment. */
-        if (!mount_portable(m)) return -EOPNOTSUPP;
         e->descriptor=next; next+=3+!!m->provider;
         if (m->storage) {
             if (!md_view_inode(m)) return -EINVAL;
@@ -377,10 +379,13 @@ static int describe(struct md_mount_namespace *view, const struct md_mount_layou
             if (j==count || !entries[j].id) return -EINVAL;
             e->parent=j+1;
         }
-        int source=m->provider ? md_provider_tree_root(m->provider) : m->source;
-        int r=source_object(source,md_fd_identity(&m->native),&(struct stat){0},e->flags);
-        if (!r) r=path_object(m->target,md_fd_identity(&m->guest),&(struct stat){0},0);
-        if (r) return r;
+        if (fds) {
+            int source=m->provider ? md_provider_tree_root(m->provider) : m->source;
+            int r=source_object(source,md_fd_identity(&m->native),&(struct stat){0},e->flags);
+            if (!r) r=path_object(m->target,md_fd_identity(&m->guest),&(struct stat){0},0);
+            if (r) return r;
+            fds[e->descriptor]=source; fds[e->descriptor+1]=m->target;
+        }
         e->source=md_fd_identity(&m->native); e->target=md_fd_identity(&m->guest);
         for (unsigned j=0;j<i;++j) if (!(e->flags&DETACHED) && !(out->entries[j].flags&DETACHED)
                 && out->root!=i+1 && out->root!=j+1
@@ -390,12 +395,13 @@ static int describe(struct md_mount_namespace *view, const struct md_mount_layou
         if (policy<0) return policy;
         struct stat st; if (fstat(policy,&st)) return -errno;
         e->policy=md_fd_identity(&st);
-        fds[e->descriptor]=source; fds[e->descriptor+1]=m->target; fds[e->descriptor+2]=policy;
+        if (fds) fds[e->descriptor+2]=policy;
         if (m->provider) {
             int super=md_mount_policy_share(md_provider_tree_super_policy(m->provider));
             if (super<0) return super;
             if (fstat(super,&st)) return -errno;
-            e->super_policy=md_fd_identity(&st); fds[e->descriptor+3]=super;
+            e->super_policy=md_fd_identity(&st);
+            if (fds) fds[e->descriptor+3]=super;
         }
     }
     return topology(out);
@@ -503,8 +509,8 @@ int md_mount_graph_export(struct md_mount_namespace *view, int root, struct md_m
     if (!view || !out || out->count || out->fd) return -EINVAL;
     int r=md_mount_graph_sync(view);
     if (r) return r;
-    if (!md_mount_graph_portable(view)) return -EOPNOTSUPP;
     if (!view->graph) {
+        if (!md_mount_graph_portable(view)) return -EOPNOTSUPP;
         struct md_mount_graph *g=create();
         if (!g) return -ENOMEM;
         int pin=md_mount_pin_create(root);
@@ -685,8 +691,8 @@ static int import_known(struct md_mount_graph_parcel *p,struct md_mount_namespac
     if (!r && *out) {
         struct manifest known={0};
         struct md_mount_layout l=layout(*out);
-        int borrowed[6+4*l.count]; struct md_inode_lifetime *existing[l.count+1];
-        r=describe(*out,&l,&known,borrowed,existing);
+        struct md_inode_lifetime *existing[l.count+1];
+        r=describe(*out,&l,&known,NULL,existing);
         if (!r && known.revision==data.revision && !manifest_same(&known,&data)) r=-ESTALE;
         if (!r) r=same_objects(&known,&data);
         if (!r && known.revision<data.revision && (*out)->graph->writer>=0) r=-ESTALE;

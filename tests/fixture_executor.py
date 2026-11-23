@@ -42,8 +42,8 @@ def diagnostic_options(mode):
     return ['--diagnostics' if mode == 'all' else '--diagnostics=signals'] if mode else []
 
 
-def probe_native_capability(observe, report, fixture, name):
-    result = observe([fixture, '--probe-' + name], quiet=True, timeout=30)
+def probe_native_capability(observe, report, fixture, name, *, timeout=30):
+    result = observe([fixture, '--probe-' + name], quiet=True, timeout=timeout)
     assert result['exitCode'] in (0, 77, 159), result
     available = result['exitCode'] == 0
     report.setdefault('nativeCapabilities', []).append(

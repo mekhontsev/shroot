@@ -460,6 +460,10 @@ static void task_context(int protected,int interrupted,int boundary,int collecte
         assert(!ptrace(PTRACE_SYSCALL,pid,0,0));
         assert(WSTOPSIG(stop(pid))==(SIGTRAP|0x80));
         saved=get(pid);
+        /* The call is already getpid. Editing only the general register must
+         * survive a loan without changing the operation that will complete. */
+        saved.regs[8]=SYS_getppid;
+        assert(!ptrace(PTRACE_SETREGSET,pid,(void *)NT_PRSTATUS,&io));
     }
     struct md_task_call call={0};
     struct md_task_call_arguments args={.number=SYS_epoll_pwait,.value=
@@ -509,6 +513,7 @@ static void task_context(int protected,int interrupted,int boundary,int collecte
     if (boundary!=MD_TASK_CALL_USER) {
         assert(!ptrace(PTRACE_SYSCALL,pid,0,0));
         assert(WSTOPSIG(stop(pid))==(SIGTRAP|0x80));
+        assert((long)get(pid).regs[0]==pid);
         assert(!ptrace(PTRACE_INTERRUPT,pid,0,0));
         assert(!ptrace(PTRACE_CONT,pid,0,0));
         assert((unsigned)stop(pid)>>16==PTRACE_EVENT_STOP);

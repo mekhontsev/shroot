@@ -7,6 +7,8 @@
  * connection; the kernel owns data IO and locks. Process-local pointers never
  * cross RPC; private peers use the explicit origin-transfer contract. */
 struct md_fs_anchor;
+struct md_mount_namespace;
+const struct md_mount_namespace *md_fs_anchor_view(const struct md_fs_anchor *);
 struct md_fd_object *md_fs_anchor_object(struct md_fs_anchor *);
 struct md_fs_anchor *md_fs_anchor_from_object(struct md_fd_object *);
 struct md_fs_anchor *md_fs_anchor_retain(struct md_fs_anchor *);

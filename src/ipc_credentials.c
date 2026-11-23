@@ -110,16 +110,21 @@ int md_ipc_credentials_open(const char *store, enum md_ipc_ancillary_transport o
     if (r) md_ipc_credentials_close(s); else *out=s;
     return r;
 }
-static int socket_key(int fd, uint64_t *cookie) {
+static int socket_key(int fd, uint64_t *cookie, int *socket_type) {
     int domain = 0, type = 0;
     socklen_t n = sizeof(domain);
     if (getsockopt(fd, SOL_SOCKET, SO_DOMAIN, &domain, &n)) return -errno;
+    if (n!=sizeof(domain)) return -EPROTO;
     if (domain != AF_UNIX) return -EAFNOSUPPORT;
     n = sizeof(type);
     if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &n)) return -errno;
+    if (n!=sizeof(type)) return -EPROTO;
     if (type != SOCK_STREAM && type != SOCK_SEQPACKET && type != SOCK_DGRAM) return -EPROTOTYPE;
     n = sizeof(*cookie);
-    return getsockopt(fd, SOL_SOCKET, SO_COOKIE, cookie, &n) ? -errno : 0;
+    if (getsockopt(fd, SOL_SOCKET, SO_COOKIE, cookie, &n)) return -errno;
+    if (n!=sizeof(*cookie)) return -EPROTO;
+    if (socket_type) *socket_type=type;
+    return 0;
 }
 static int private_path_endpoint(const char *name) {
     static const char prefix[]="md-guest-inode-";
@@ -168,7 +173,7 @@ static int optional_socket_key(int fd, uint64_t *cookie) {
     int flags=fcntl(fd,F_GETFL);
     if (flags<0) return -errno;
     if (flags&O_PATH) return 0;
-    int r=socket_key(fd,cookie);
+    int r=socket_key(fd,cookie,NULL);
     return r==-EAFNOSUPPORT || r==-EPROTOTYPE ? 0 : r ? r : 1;
 }
 static int native_socket(struct md_ipc_credentials *s, uint64_t cookie) {
@@ -379,9 +384,6 @@ static int connect_begin(struct md_ipc_credentials *s, const struct md_fs_reques
     int native=native_socket(s,key);
     if (native) return native<0 ? native : 0;
     struct sockaddr_un endpoint, local; int size, local_size;
-    int type; socklen_t type_size = sizeof(type);
-    if (getsockopt(req->directory[0], SOL_SOCKET, SO_TYPE, &type, &type_size)) return -errno;
-    if (type == SOCK_DGRAM) return 0;
     if (!address(req->directory[0], 1, &endpoint, &size)) return 0;
     int r = decode_name(req->path[0], &endpoint, &size);
     sqlite3_stmt *q = NULL;
@@ -590,7 +592,7 @@ static int connection_snapshot(struct md_ipc_credentials *s, int fd, struct md_i
     if (!s) return -ENOTSUP;
     if (!out) return -EINVAL;
     uint64_t key;
-    int r=socket_key(fd,&key);
+    int r=socket_key(fd,&key,NULL);
     /* EVENT_WAIT: metadata gate release; interruption returns an error without
      * publishing a connection or running any application IO. */
     if (!r && flock(s->gate,LOCK_EX)) r=-errno;
@@ -616,9 +618,6 @@ int md_ipc_credentials_bind(struct md_ipc_credentials *s, int fd, struct md_ipc_
     return r;
 }
 static int datagram_bind(struct md_ipc_credentials *s,int fd,uint64_t key) {
-    int type=0; socklen_t size=sizeof(type);
-    if (getsockopt(fd,SOL_SOCKET,SO_TYPE,&type,&size)) return -errno;
-    if (type!=SOCK_DGRAM) return 0;
     int native=native_socket(s,key);
     if (native) return native<0 ? native : 0;
     struct md_ipc_connection existing;
@@ -810,7 +809,12 @@ int md_ipc_credentials_message(struct md_ipc_credentials *s,const struct md_ipc_
         const struct md_fs_request *request,struct md_fs_result *out) {
     *out=(struct md_fs_result){.fd=-1};
     if (!s || !binding || binding->scope!=s->scope
-            || (request->flags!=MD_IPC_MESSAGE_CREATE && request->flags!=MD_IPC_MESSAGE_SENDER)) return -EINVAL;
+            || (request->flags!=MD_IPC_MESSAGE_CREATE && request->flags!=MD_IPC_MESSAGE_SENDER
+                && request->flags!=MD_IPC_MESSAGE_READ)) return -EINVAL;
+    /* A retained binding pins the epoch. Message rows are insert-only in
+     * that epoch; one SQLite snapshot authenticates a read without a writer turn. */
+    if (request->flags==MD_IPC_MESSAGE_READ)
+        return message_identity(s,id,process,request,binding->connection,out);
     /* EVENT_WAIT: credential metadata gate; no message publication on interruption. */
     if (flock(s->gate,LOCK_EX)) return -errno;
     int error=message_identity(s,id,process,request,binding->connection,out);
@@ -821,7 +825,12 @@ void md_ipc_credentials_execute(struct md_ipc_credentials *s, const struct md_id
     *out = (struct md_fs_result){.fd=-1};
     if (!s) { out->error = -ENOTSUP; return; }
     uint64_t key;
-    int r = socket_key(q->directory[0], &key);
+    int type;
+    int r = socket_key(q->directory[0], &key, &type);
+    /* Datagram peers are registered at bind; connection-oriented endpoints
+     * at listen/connect. The other half has no credential state to update. */
+    if (!r && q->operation==MD_FS_IPC && ((q->flags==MD_IPC_BIND && type!=SOCK_DGRAM)
+            || (q->flags==MD_IPC_CONNECT_BEGIN && type==SOCK_DGRAM))) return;
     if (!r && flock(s->gate, LOCK_EX)) r = -errno;
     if (r) { out->error = r; return; }
     if (q->operation==MD_FS_IPC_PEER) {
@@ -845,7 +854,7 @@ void md_ipc_credentials_execute(struct md_ipc_credentials *s, const struct md_id
     case MD_IPC_PAIR: {
         uint64_t other;
         struct md_ipc_connection connection={0};
-        r = socket_key(q->directory[1], &other);
+        r = socket_key(q->directory[1], &other,NULL);
         if (!r) {
             int native=native_socket(s,key);
             if (!native) native=native_socket(s,other);

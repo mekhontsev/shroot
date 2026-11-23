@@ -111,6 +111,7 @@ int md_ipc_capsules_publish(struct md_ipc_capsules *s, const struct md_ipc_bindi
     int error=binding(s,b);
     int local=0, anonymous=0, published=0, lifetime[2]={-1,-1};
     struct md_fd_object *const *origins=md_fd_message_origins(message);
+    const struct md_mount_namespace *views[MD_FD_RECEIPT_MAX]; unsigned checked=0;
     for (unsigned i=0;!error && i<count;++i) {
         if (fds[i]<0) error=-EBADF;
         else if (origins[i]) {
@@ -124,7 +125,11 @@ int md_ipc_capsules_publish(struct md_ipc_capsules *s, const struct md_ipc_bindi
                     && !origins[i]->type->portable_origin) local=1;
             else if (anchor) {
                 error=md_fs_anchor_check_fd(anchor,fds[i]);
-                if (!md_fs_anchor_portable(anchor)) local=1;
+                const struct md_mount_namespace *view=md_fs_anchor_view(anchor);
+                if (!error && !local && view) {
+                    unsigned v=0; while (v<checked && views[v]!=view) ++v;
+                    if (v==checked) views[checked++]=view;
+                }
             }
             else if (md_descriptor_inode_is(origins[i])) anonymous=1;
             else if (!md_fd_message_exports_native(message,i)) local=1;
@@ -135,17 +140,21 @@ int md_ipc_capsules_publish(struct md_ipc_capsules *s, const struct md_ipc_bindi
     struct capsule p={.magic=MAGIC,.version=VERSION};
     if (!error && socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_NONBLOCK|SOCK_CLOEXEC,0,pair)) error=-errno;
     if (!error) error=md_fd_message_bind(message,b,launch);
-    if (!error && local) {
-        if (!b->scope->local_messages) error=md_fd_messages_new(&b->scope->local_messages);
-        if (!error && pipe2(lifetime,O_CLOEXEC|O_NONBLOCK)) error=-errno;
-        struct md_ipc_connection destination=b->connection; destination.side^=1;
-        if (!error) error=md_fd_messages_publish(b->scope->local_messages,message,&destination,pair[1],lifetime[0]);
-        if (!error) { lifetime[0]=-1; published=1; p.kind=LOCAL; }
-    } else if (!error) error=md_fd_message_issue(message,pair[1]);
+    if (!error) error=md_fd_message_issue(message,pair[1]);
     if (!error) error=md_fd_message_route(message,&p.route);
     if (!error && !local) {
         p.kind=anonymous ? PORTABLE_TYPED : PORTABLE;
         error=anonymous ? md_descriptor_parcel_export(message,fds,&parcel) : md_fs_origin_export(message,&parcel);
+        /* A successful export already validated each live graph. Only on
+         * failure distinguish a local-only layout from an export error. */
+        for (unsigned i=0;error==-EOPNOTSUPP && i<checked;++i)
+            if (!md_mount_graph_portable(views[i])) { local=1; error=0; }
+    }
+    if (!error && local) {
+        if (!b->scope->local_messages) error=md_fd_messages_new(&b->scope->local_messages);
+        if (!error && pipe2(lifetime,O_CLOEXEC|O_NONBLOCK)) error=-errno;
+        if (!error) error=md_fd_messages_hold_issued(b->scope->local_messages,message,lifetime[0]);
+        if (!error) { lifetime[0]=-1; published=1; p.kind=LOCAL; }
     }
     if (!error) error=md_fd_bundle_pack(fds,count,&rights[0]);
     if (!error && !local) error=md_fd_bundle_pack(parcel.fd,parcel.count,&rights[1]);
@@ -195,16 +204,14 @@ int md_ipc_capsules_receive(struct md_ipc_capsules *s, const struct md_ipc_bindi
     int error=binding(s,b);
     if (error) return error;
     struct capsule p={0}, observed={0};
-    struct iovec io={&p,sizeof(p)};
-    struct msghdr msg={.msg_iov=&io,.msg_iovlen=1};
-    /* No FD installation before authenticating the outer kernel identity. */
-    ssize_t n=recvmsg(carrier,&msg,MSG_PEEK|MSG_DONTWAIT);
+    /* Inspect packet bytes and full length without receiving ancillary rights. */
+    ssize_t n=recv(carrier,&p,sizeof(p),MSG_PEEK|MSG_DONTWAIT|MSG_TRUNC);
     /* Named datagram endpoints also accept independent native senders. Only
      * a recognized capsule enters authentication; arbitrary rights stay data. */
     if (b->receive_only && ((n<0 && (errno==ENOTSOCK || errno==EAGAIN || errno==EINVAL))
             || (n>=0 && (n<(ssize_t)sizeof(p.magic) || p.magic!=MAGIC)))) return -ENODATA;
     if (n<0) return -errno;
-    if (n!=sizeof(p) || (msg.msg_flags&MSG_TRUNC)) return -EPROTO;
+    if (n!=sizeof(p)) return -EPROTO;
     error=verify(s,b,carrier,&p);
     if (error) return error;
     int rights[CUSTODY_FDS]; unsigned installed=0;

@@ -93,6 +93,7 @@ struct md_inode_store {
     int write_transaction;
     int sync_requested;
     unsigned directory_sync_batch;
+    unsigned reserve_batch;
     struct mdi_read_cache *read_cache;
     struct mdi_path_cache *path_cache;
     int cache_checked;
@@ -200,7 +201,7 @@ int mdi_checkpoint(struct md_inode_store *);
  * directory is deferred; end must succeed before the caller commits. */
 int mdi_sync_batch_begin(struct md_inode_store *);
 int mdi_sync_batch_end(struct md_inode_store *,int result);
-enum { MDI_RESERVE_BATCH = 32 };
+enum { MDI_RESERVE_INITIAL = 2, MDI_RESERVE_BATCH = 32 };
 /* Claims one durable, previously unpublished physical file in this transaction.
  * No live backing is recycled. The caller still syncs its final attributes. */
 int mdi_reserve_file(struct md_inode_store *, char id[33], int flags, mode_t mode);

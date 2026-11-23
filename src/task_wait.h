@@ -8,9 +8,12 @@
 struct md_task_wait_member {
     struct md_task_wait_member *next, *previous;
     pid_t pid;
+    struct md_task_wait_member *guard_next;
+    enum { MD_EXIT_DELIVER, MD_EXIT_GUARDED, MD_EXIT_OBSERVED } exit_state;
 };
 struct md_task_wait {
     struct md_task_wait_member *cursor;
+    struct md_task_wait_member *guarded;
     struct md_task_wait_exit *exit_first, *exit_last;
     pid_t hints[8];
     pid_t recent[4];
@@ -26,7 +29,16 @@ struct md_task_wait {
 };
 void md_task_wait_track(struct md_task_wait *, struct md_task_wait_member *, pid_t);
 void md_task_wait_untrack(struct md_task_wait *, struct md_task_wait_member *);
+/* A private child's final status proves it has dropped its mm. Leave it in
+ * the kernel until its signal/reaping owner admits publication to the parent.
+ * Stops remain consumable. First observation invalidates the event loop's
+ * empty observation (EINTR); release makes the original status collectible. */
+void md_task_wait_guard_exit(struct md_task_wait *,struct md_task_wait_member *);
+void md_task_wait_release_exit(struct md_task_wait *,struct md_task_wait_member *);
 void md_task_wait_hint(struct md_task_wait *, pid_t);
+/* An observed SIGCHLD invalidates a drained queue even without a visible
+ * sender. An empty directed hint alone is not a wake. */
+void md_task_wait_sigchld(struct md_task_wait *,pid_t);
 /* Make an already terminal tracee waitable by its real parent. Its separate
  * tracer status still passes through the normal event and accounting owner. */
 int md_task_wait_handoff_exit(struct md_task_wait *, pid_t);

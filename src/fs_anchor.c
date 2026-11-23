@@ -66,6 +66,9 @@ int md_fs_anchor_same(const struct md_fs_anchor *a, const struct md_fs_anchor *b
         && (a->child && b->child ? !strcmp(a->child,b->child) : a->child==b->child)
         && md_inode_lifetime_same(a->lifetime,b->lifetime);
 }
+const struct md_mount_namespace *md_fs_anchor_view(const struct md_fs_anchor *p) {
+    return p ? p->view : NULL;
+}
 int md_fs_anchor_check_fd(const struct md_fs_anchor *p, int fd) {
     if (!p || fd<0) return -EINVAL;
     /* The retained anchor owns this descriptor until its final release. Only

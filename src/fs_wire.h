@@ -38,6 +38,13 @@ struct md_fs_reply {
     char data[MD_FS_OUTPUT_MAX];
 };
 struct md_fs_rights { unsigned count; int fd[MD_FS_MAX_FDS]; };
+static inline size_t md_fs_reply_capacity(unsigned operation) {
+    return md_fs_operation_value(operation) ? MD_FS_OUTPUT_MAX
+        : operation==MD_FS_OPEN_IMAGE ? sizeof(struct md_image_identity) : PATH_MAX;
+}
+static inline size_t md_fs_reply_chunk(size_t remaining) {
+    return remaining<MD_FS_REPLY_CHUNK ? remaining : MD_FS_REPLY_CHUNK;
+}
 long md_fs_send(int socket, const void *, size_t, const struct md_fs_rights *);
 long md_fs_receive(int socket, void *, size_t, struct md_fs_rights *);
 /* Connected native client after request submission. Pending admission can
@@ -59,7 +66,8 @@ long md_fs_receive_receipt(int socket, struct md_fd_receipt *, unsigned capacity
         struct md_fs_rights *, uint64_t exchange);
 void md_fs_close_rights(struct md_fs_rights *);
 long md_fs_address(const char *, struct sockaddr_un *);
-long md_fs_peer(int socket);
+/* Check the peer UID; optionally return the PID from the same credentials. */
+long md_fs_peer(int socket, pid_t *pid);
 /* Private runtime transport only: connected Unix seqpacket, nonblocking,
  * CLOEXEC, same real executor identity. Returns the kernel peer PID or error. */
 long md_fs_private_peer(int socket);

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "inode_internal.h"
+#include "directory_cursor.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -58,13 +59,13 @@ static int directory(struct md_inode_store *s, int fd, struct mdi_node *node, in
     return r ? r : node->kind != S_IFDIR ? -ENOTDIR : attached ? 0 : -ENOENT;
 }
 static int native_entries(struct md_inode_store *s,const struct mdi_node *node,void *out,
-        size_t capacity,size_t *used,int64_t *offset) {
+        size_t capacity,size_t *used,int64_t start,int64_t *offset) {
     if (node->mode<0) return 0;
     int64_t position;
-    int r=cookie(s,node->id,*offset,0,&position);
+    int r=cookie(s,node->id,start,0,&position);
     int fd=r ? -1 : mdi_backing_open(s,node,O_RDONLY|O_DIRECTORY);
     if (!r && fd<0) r=fd;
-    if (!r && lseek(fd,position,SEEK_SET)!=position) r=-errno;
+    if (!r) r=md_directory_seek_exact(fd,position);
     unsigned char buffer[16384] __attribute__((aligned(8)));
     while (!r) {
         ssize_t count=syscall(SYS_getdents64,fd,buffer,sizeof(buffer));
@@ -94,6 +95,7 @@ static int native_entries(struct md_inode_store *s,const struct mdi_node *node,v
             if (!r) {
                 *used+=md_directory_record_write((char *)out+*used,capacity-*used,name,length,entry.inode,next,DT_REG);
                 *offset=next;
+                if (capacity-*used<md_directory_record_size(1)) goto done;
             }
         }
     }
@@ -122,20 +124,23 @@ static ssize_t read_entries(struct md_inode_store *s, int fd, void *out, size_t 
     size_t used = 0;
     while (!r && offset < 2) {
         struct mdi_node entry = node;
-        if (offset == 1) r = mdi_node(s, !strcmp(node.id, mdi_root(s)) ? node.id : node.parent, &entry);
+        if (offset==1 && strcmp(node.id,mdi_root(s))) r=mdi_node(s,node.parent,&entry);
         if (r) break;
         size_t n = md_directory_record_write((char *)out + used, capacity-used, offset ? ".." : ".",
             offset ? 2 : 1, entry.logical_inode, offset+1, DT_DIR);
         if (!n) { if (!used) r = -EINVAL; break; }
         used += n; ++offset;
+        if (capacity-used<md_directory_record_size(1)) break;
     }
     sqlite3_stmt *q = NULL;
-    if (!r && offset >= 2 && offset<NATIVE_BASE) r = mdi_query_acquire(s, MDI_READDIR, &q);
+    int64_t native_start=offset>=NATIVE_BASE ? offset : -1;
+    if (!r && offset>=2 && offset<NATIVE_BASE && (!used || capacity-used>=md_directory_record_size(1)))
+        r=mdi_query_acquire(s,MDI_READDIR,&q);
     if (!r && q) r = mdi_bind_id(q, 1, node.id);
     if (!r && q) r = mdi_sql_error(sqlite3_bind_int64(q, 2, offset-2));
     while (!r && q) {
         int rc = mdi_step(s, q);
-        if (rc == SQLITE_DONE) { if (node.mode>=0) offset=NATIVE_BASE; break; }
+        if (rc==SQLITE_DONE) { native_start=NATIVE_BASE; break; }
         if (rc != SQLITE_ROW) { r = mdi_sql_failure(rc); break; }
         int length = sqlite3_column_bytes(q, 1);
         const char *name = sqlite3_column_blob(q, 1);
@@ -147,13 +152,16 @@ static ssize_t read_entries(struct md_inode_store *s, int fd, void *out, size_t 
             (uint64_t)sqlite3_column_int64(q, 2), next, (uint8_t)(sqlite3_column_int(q, 3) >> 12));
         if (!n) { if (!used) r = -EINVAL; break; }
         used += n; offset = next;
+        if (capacity-used<md_directory_record_size(1)) break;
     }
     r = mdi_query_release(q, r);
-    if (!r && offset>=NATIVE_BASE && used<capacity) r=native_entries(s,&node,out,capacity,&used,&offset);
+    /* Entering the backing directory is not itself a published entry cookie. */
+    if (!r && native_start>=0 && used<capacity)
+        r=native_entries(s,&node,out,capacity,&used,native_start,&offset);
     r = mdi_finish(s, r);
     if (!r && deliver) r = deliver(context, out, used);
     if (!r && next) *next=offset;
-    else if (!r && used && lseek(fd, offset, SEEK_SET) != offset) r = -EIO;
+    else if (!r && used) r=md_directory_seek_exact(fd,offset);
     return r ? r : (ssize_t)used;
 }
 ssize_t md_inode_getdents_prepare(struct md_inode_store *s, int fd, void *out, size_t capacity, int64_t *next) {

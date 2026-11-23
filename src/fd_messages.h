@@ -46,6 +46,9 @@ int md_fd_message_bind(struct md_fd_message *, const struct md_ipc_binding *, co
 /* Freeze a bound message for self-contained kernel custody. No registry entry,
  * lifetime monitor or retained carrier. Serialization uses the same route. */
 int md_fd_message_issue(struct md_fd_message *, int carrier);
+/* Enroll a bound, issued route in local custody before its carrier escapes.
+ * Transfers the lifetime reader only on success; may enroll only once. */
+int md_fd_messages_hold_issued(struct md_fd_messages *, struct md_fd_message *, int lifetime_reader);
 /* Published route hint; no in-memory origin pointer crosses a process boundary. */
 int md_fd_message_route(const struct md_fd_message *, struct md_fd_message_route *);
 /* Borrowed retained store directory from the bound source authority, or -1.

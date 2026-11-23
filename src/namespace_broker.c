@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "task_memory.h"
 #include "namespace_broker.h"
+#include "directory_cursor.h"
 #include "svc_registry.h"
 #include "fs_engine.h"
 #include "watch_broker.h"
@@ -1045,10 +1046,8 @@ static int reply(struct operation *op, const void *data) {
     if (op->channel) {
         /* Commit the directory cursor before waking a caller that can issue
          * another read immediately. Failed output never advances it. */
-        if (!response.error && op->request.operation==MD_FS_GETDENTS) {
-            off_t position=lseek(op->directory,op->position,SEEK_SET);
-            if (position!=op->position) response.error=position<0 ? -errno : -EIO;
-        }
+        if (!response.error && op->request.operation==MD_FS_GETDENTS)
+            response.error=md_directory_seek_exact(op->directory,op->position);
         cooperative_reply(op,MD_ENTRY_COMPLETED,response.error ? response.error : response.val);
         return 1;
     }
@@ -1057,8 +1056,8 @@ static int reply(struct operation *op, const void *data) {
     /* A signal may cancel the notification after copying bytes. Commit only
      * after kernel acceptance, retaining the table/OFD turn through this seek. */
     if (!response.error && op->notification.data.nr==SYS_getdents64) {
-        off_t position=lseek(op->directory,op->position,SEEK_SET);
-        if (position!=op->position) return position<0 ? -errno : -EIO;
+        int error=md_directory_seek_exact(op->directory,op->position);
+        if (error) return error;
     }
     return 1;
 }

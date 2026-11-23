@@ -12,6 +12,7 @@ lab = Path(__file__).resolve().parents[1]
 with patch.object(sys, 'path', [str(lab), *sys.path]):
     from client_fixture import archive_fixture
     from executors.local import LocalExecutor
+    from fixture_executor import probe_native_capability
     from kernel_profile import KernelProfile
     from test_oci_services import Suite
     from test_debugger_runtime import outcome
@@ -215,6 +216,20 @@ class GuestFixtureTest(unittest.TestCase):
         self.assertEqual('output\n', suite.command(['/fixture/test'], expected=19, quiet=True))
         self.assertEqual(2, len(suite.report['commands']))
 
+    def test_external_watchdog_observes_progress_before_completion(self):
+        suite = self.suite('local')
+        def execute(command, timeout, *, on_line):
+            self.assertIsNone(timeout)
+            on_line('checkpoint\n')
+            output.assert_called_once_with('checkpoint\n', end='', flush=True)
+            self.assertEqual([], suite.report['commands'])
+            return dict(exitCode=0, output='checkpoint\n')
+        suite.executor.execute.side_effect = execute
+        with patch('builtins.print') as output:
+            self.assertEqual('checkpoint\n', suite.command(['/fixture/test'], timeout=None))
+            output.assert_called_once()
+        self.assertEqual('checkpoint\n', suite.report['commands'][0]['output'])
+
     def test_transport_failure_is_not_a_command_result(self):
         suite = self.suite()
         suite.executor.execute.side_effect = TimeoutError('incomplete command')
@@ -247,6 +262,14 @@ class GuestFixtureTest(unittest.TestCase):
         for code in (1, 124, 134, 139):
             with self.subTest(code=code), self.assertRaises(AssertionError):
                 self.suite(code=code).native_capability('/fixture/test', 'openat2')
+
+    def test_probe_watchdog_belongs_to_the_observer(self):
+        for timeout in (30, None):
+            observe = Mock(return_value={'exitCode': 0})
+            report = {}
+            self.assertTrue(probe_native_capability(observe, report, '/fixture', 'example', timeout=timeout))
+            observe.assert_called_once_with(['/fixture', '--probe-example'], quiet=True, timeout=timeout)
+            self.assertEqual(report['nativeCapabilities'][0]['exitCode'], 0)
 
     def test_profile_keeps_raw_evidence_in_report(self):
         suite = self.suite()

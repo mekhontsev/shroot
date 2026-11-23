@@ -23,6 +23,7 @@ void md_task_wait_track(struct md_task_wait *w,struct md_task_wait_member *m,pid
 }
 void md_task_wait_untrack(struct md_task_wait *w,struct md_task_wait_member *m) {
     if (!m->next) return;
+    if (m->exit_state!=MD_EXIT_DELIVER) md_task_wait_release_exit(w,m);
     --w->members;
     if (m->next==m) w->cursor=NULL;
     else {
@@ -30,6 +31,27 @@ void md_task_wait_untrack(struct md_task_wait *w,struct md_task_wait_member *m) 
         if (w->cursor==m) w->cursor=m->next;
     }
     *m=(struct md_task_wait_member){0};
+}
+void md_task_wait_guard_exit(struct md_task_wait *w,struct md_task_wait_member *m) {
+    if (m->exit_state!=MD_EXIT_DELIVER) return;
+    m->exit_state=MD_EXIT_GUARDED;
+    m->guard_next=w->guarded; w->guarded=m; w->drained=0;
+}
+void md_task_wait_release_exit(struct md_task_wait *w,struct md_task_wait_member *m) {
+    if (m->exit_state==MD_EXIT_DELIVER) return;
+    struct md_task_wait_member **slot=&w->guarded;
+    while (*slot && *slot!=m) slot=&(*slot)->guard_next;
+    if (*slot) {
+        *slot=m->guard_next; m->guard_next=NULL; m->exit_state=MD_EXIT_DELIVER; w->drained=0;
+    }
+}
+static struct md_task_wait_member *guarded(const struct md_task_wait *w,pid_t pid) {
+    for (struct md_task_wait_member *m=w->guarded;m;m=m->guard_next)
+        if (m->pid==pid) return m;
+    return NULL;
+}
+static int terminal_info(const siginfo_t *info) {
+    return info->si_pid && (info->si_code==CLD_EXITED || info->si_code==CLD_KILLED || info->si_code==CLD_DUMPED);
 }
 static void forget(struct md_task_wait *w, pid_t pid) {
     unsigned out=0;
@@ -68,15 +90,18 @@ void md_task_wait_hint(struct md_task_wait *w, pid_t pid) {
         if (w->hints[(w->first+i)%capacity]==pid) return;
     if (w->count<capacity) w->hints[(w->first+w->count++)%capacity]=pid;
 }
+void md_task_wait_sigchld(struct md_task_wait *w,pid_t pid) {
+    if (pid>0) md_task_wait_hint(w,pid);
+    else w->drained=0;
+}
 int md_task_wait_handoff_exit(struct md_task_wait *w,pid_t pid) {
     siginfo_t info={0};
-    if (pid<=0) return 0;
+    if (pid<=0 || guarded(w,pid)) return 0;
     /* Even with WEXITED, __WALL can expose a ptrace stop. Only take a
      * proven termination; this never advances a still-running child. */
     int found;
     do found=waitid(P_PID,pid,&info,__WALL|WEXITED|WNOHANG|WNOWAIT); while (found<0 && errno==EINTR);
-    if (found<0 || info.si_pid!=pid || (info.si_code!=CLD_EXITED && info.si_code!=CLD_KILLED
-            && info.si_code!=CLD_DUMPED)) return 0;
+    if (found<0 || info.si_pid!=pid || !terminal_info(&info)) return 0;
     struct md_task_wait_exit *event=malloc(sizeof(*event));
     if (!event) return -ENOMEM;
     pid_t collected;
@@ -123,10 +148,41 @@ static pid_t collect(struct md_task_wait *w,int *status,struct rusage *usage,uns
     }
     return md_task_wait_take(w,status,usage);
 }
+static pid_t guarded_ready(struct md_task_wait *w,int *status,struct rusage *usage) {
+    siginfo_t info;
+    /* A guarded zombie can stay first in P_ALL. Consume other registered
+     * children directly without publishing that zombie to its real parent. */
+    struct md_task_wait_member *p=w->cursor;
+    for (unsigned n=w->members;n--;p=p->next) {
+        if (p->exit_state==MD_EXIT_OBSERVED) continue;
+        if (p->exit_state==MD_EXIT_GUARDED) {
+            info=(siginfo_t){0};
+            if (waitid(P_PID,p->pid,&info,__WALL|WEXITED|WSTOPPED|WNOHANG|WNOWAIT)<0) {
+                if (errno!=ECHILD && errno!=ESRCH) return -1;
+                continue;
+            }
+            if (terminal_info(&info)) {
+                p->exit_state=MD_EXIT_OBSERVED; errno=EINTR; return -1;
+            }
+            if (!info.si_pid) continue;
+        }
+        pid_t pid=wait4(p->pid,status,__WALL|WNOHANG,usage);
+        if (pid>0) { w->cursor=p->next; return pid; }
+        if (pid<0 && errno!=ECHILD && errno!=ESRCH) return pid;
+    }
+    /* Newborns can stop before their parent's birth notification. */
+    info=(siginfo_t){0};
+    if (waitid(P_ALL,0,&info,__WALL|WSTOPPED|WNOHANG|WNOWAIT)<0 && errno!=ECHILD) return -1;
+    if (info.si_pid && (info.si_code==CLD_TRAPPED || info.si_code==CLD_STOPPED))
+        return wait4(info.si_pid,status,__WALL|WNOHANG,usage);
+    w->drained=1;
+    return 0;
+}
 pid_t md_task_wait_ready(struct md_task_wait *w, int *status, struct rusage *usage, int runnable) {
     pid_t pending=md_task_wait_take(w,status,usage);
     if (pending) return pending;
     if (w->drained) return 0;
+    if (w->guarded) return guarded_ready(w,status,usage);
     /* Small trees cost less to scan once than to query several sleeping TIDs.
      * Collect before resuming anyone: a hot child cannot take the list head
      * again while an older stop is waiting. Untracked births are retained too. */

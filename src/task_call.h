@@ -44,6 +44,7 @@ struct md_task_call {
     struct md_task_call_arguments arguments;
     uint64_t mask;
     uint64_t original_first_argument, seccomp_first_argument;
+    int entry_number;
     long result, active_number;
     unsigned long cookie;
 };
@@ -74,7 +75,8 @@ int md_task_call_retire_entry(struct md_task_call *);
  * the owned gate before returning the original registers to its dispatcher;
  * a later TSYNC must not re-evaluate the already-admitted operation. Requires
  * owned-gate delegation in every installed application filter. */
-int md_task_call_preserve_admission(struct md_task_call *);
+struct seccomp_data;
+int md_task_call_preserve_admission(struct md_task_call *,const struct seccomp_data *);
 /* Resume the same internal boundary after an unrelated stop. Pass zero after
  * retaining a signal, or its number for native signal delivery (e.g. SIGSTOP).
  * Does not change the saved application state. */

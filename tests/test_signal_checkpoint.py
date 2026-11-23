@@ -35,7 +35,7 @@ def main():
         suite.upload(source, binary)
         suite.chmod('700', binary)
         native_skip = args.copy_fault or probe_native_capability(
-            suite.observe, suite.report, binary, 'syscall-skip')
+            suite.observe, suite.report, binary, 'syscall-skip', timeout=None if args.external_watchdog else 30)
         options = ['--copy-fault'] if args.copy_fault else [] if native_skip else ['--without-syscall-skip']
         if args.mode != 'all':
             options.append('--' + args.mode + '-only')

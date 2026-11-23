@@ -437,7 +437,7 @@ static void drain(void) {
      * Do not append an empty read to every successful notification batch. */
     for (size_t i=0;i<(size_t)bytes/sizeof(*signals);i++) {
         struct signalfd_siginfo info=signals[i];
-        if (info.ssi_signo == SIGCHLD) md_task_wait_hint(&task_wait, (pid_t)info.ssi_pid);
+        if (info.ssi_signo == SIGCHLD) md_task_wait_sigchld(&task_wait,(pid_t)info.ssi_pid);
         else if (!cancelling) {
             SUPERVISOR_TRACE("PROBE cancelled signal=%u\n", info.ssi_signo);
             cancel_tree(128 + info.ssi_signo);
@@ -733,7 +733,7 @@ int main(int argc, char **argv) {
     }
     setvbuf(stderr, NULL, _IONBF, 0);
     struct md_debugger_host debug_host={.trace=debugger_trace,.seccomp_events=1,.parent=debugger_parent,.group=debugger_group,.uid=debugger_uid,.allowed=debugger_allowed,.traceme=debugger_traceme,
-        .wait_children=private_wait_children,
+        .wait_children=private_wait_children,.child_notice=retained_publish_child_notice,
         .visible_pid=debugger_visible_pid,.native_pid=debugger_native_pid,.visible_uid=debugger_visible_uid,.reaped=debugger_reaped,
         .signal_origin=debugger_signal_origin,.signal_translate=debugger_signal_translate,
         .attachable=debugger_attachable,.observe=debugger_observe,.interrupt=debugger_interrupt,.options=debugger_options,

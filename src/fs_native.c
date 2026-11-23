@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "fs_native.h"
+#include "directory_cursor.h"
 #include "host_open.h"
 #include "fs_mount_internal.h"
 #include "inode_internal.h"
@@ -19,6 +20,7 @@
 
 void md_fs_directory_read(const struct md_fs_request *q, struct md_fs_result *out,
         const struct md_fs_output *output, md_fs_directory_reader reader, void *context) {
+    out->size=0;
     if (!output || !output->data || !output->capacity) { out->error=-EINVAL; return; }
     int fd=q->directory[0];
     off_t before=lseek(fd,0,SEEK_CUR);
@@ -26,16 +28,25 @@ void md_fs_directory_read(const struct md_fs_request *q, struct md_fs_result *ou
     size_t count=q->capacity<output->capacity ? q->capacity : output->capacity;
     ssize_t n=reader ? reader(context,fd,output->data,count)
         : syscall(SYS_getdents64,fd,output->data,count);
-    if (n<0) { out->error=reader ? (int)n : -errno; return; }
-    int error=0;
-    if (output->directory_position) {
-        off_t next=lseek(fd,0,SEEK_CUR);
-        if (next<0) error=-errno; else *output->directory_position=next;
-    } else if (output->deliver) error=output->deliver(output->context,output->data,(size_t)n);
-    if (error || output->directory_position)
-        if (lseek(fd,before,SEEK_SET)<0) error=-errno;
+    int error=n<0 ? (reader ? (int)n : -errno) : 0;
+    off_t next=before;
+    if (!error && (output->directory_position || output->deliver)) {
+        next=lseek(fd,0,SEEK_CUR);
+        if (next<0) error=-errno;
+    }
+    if (error || next!=before) {
+        int restore=md_directory_seek_exact(fd,before);
+        if (restore) error=restore;
+    }
+    if (!error && !output->directory_position && output->deliver) {
+        error=output->deliver(output->context,output->data,(size_t)n);
+        if (!error && next!=before) error=md_directory_seek_exact(fd,next);
+    }
     out->error=error;
-    if (!error) out->size=(size_t)n;
+    if (!error) {
+        if (output->directory_position) *output->directory_position=next;
+        out->size=(size_t)n;
+    }
 }
 
 static ssize_t native_directory(void *context,int fd,void *data,size_t size) {

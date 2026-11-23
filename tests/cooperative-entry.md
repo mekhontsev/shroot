@@ -106,6 +106,9 @@ lazy entry with the same guest ELF. Each launch retains all consecutive
 and caller CPU endpoints. Output is deferred until the series ends. The first
 block follows fixture initialization; it is not a filesystem-cache-cold test.
 Full launch time and the last-half block median remain separate measurements.
+For a store without a C compiler, build `tests/fixtures/readiness-benchmark.c`
+against the guest libc and pass `--fixture PATH`. Both runtimes use the same
+binary; its hash is recorded in the report.
 Frequency observations cover host cpufreq policies across each command, not the
 instantaneous frequency of every worker or caller instruction.
 `--pid-namespace` runs each measured command as a new guest PID 1; the fixture

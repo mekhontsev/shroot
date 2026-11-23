@@ -96,7 +96,13 @@ static void retained(const char *path) {
     struct md_fd_message_route route, observed;
     assert(md_fd_message_route(p,&route)==-ENODATA);
     test_ipc_allocations(0);
-    bind_publish(messages,p,&source,"0123456789abcdef0123456789abcdef",fd[1],lifetime[0],&route);
+    assert(!md_fd_message_bind(p,&source,"0123456789abcdef0123456789abcdef"));
+    assert(md_fd_messages_hold_issued(messages,p,lifetime[0])==-ESTALE);
+    assert(!md_fd_message_issue(p,fd[1]));
+    assert(!md_fd_message_route(p,&route));
+    assert(md_fd_messages_hold_issued(messages,p,-1)==-EBADF);
+    assert(!md_fd_messages_hold_issued(messages,p,lifetime[0]));
+    assert(md_fd_messages_hold_issued(messages,p,lifetime[0])==-ESTALE);
     test_ipc_allocations(-1);
     md_ipc_binding_release(&source); md_ipc_credentials_close(a); md_ipc_credentials_close(b);
     send_route(fd[0],&route,payload[1],253); close(payload[1]);
@@ -134,6 +140,7 @@ static void retained(const char *path) {
     assert(!md_fd_messages_claim(messages,&destination,fd[1],&route,&claim));
     md_fd_message_release(p); md_ipc_binding_release(&destination);
     close(fd[1]); ready(md_fd_messages_fd(messages)); assert(md_fd_messages_dispatch(messages)==1);
+    assert(md_fd_messages_hold_issued(messages,claim,-1)==-ESTALE);
     md_fd_messages_free(messages);
     char byte; assert(!read(payload[0],&byte,1)); close(payload[0]);
     int maintenance=open(path,O_RDONLY|O_DIRECTORY|O_CLOEXEC); assert(maintenance>=0);

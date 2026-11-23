@@ -553,7 +553,8 @@ attribute restrictions. Attribute listing does not require file-read access.
 numbers and types, `.`/`..`, and opaque cookies. Committed catalogue name cookies
 are not reused after deletion. Enumeration uses an indexed database read snapshot
 per batch; changes between batches have ordinary non-snapshot traversal semantics.
-An undersized first-record buffer fails without advancing the cursor.
+An undersized first-record buffer fails without advancing the cursor. A successful
+batch publishes the last returned record's cookie; EOF leaves that cookie intact.
 Enumeration visits catalogue names, then native leaves using a separate temporary
 directory description. Large host cookies use persistent store-wide mappings;
 small cookies encode directly. Published offsets stay below INT32_MAX for F2FS
@@ -692,7 +693,9 @@ independent of OCI parsing and launch-local directory attachments.
   change is needed. Creation, copy-up and overlay publication promote that
   sole snapshot under its retained exclusive store gate. Nested read snapshots
   cannot promote. No pathname is re-resolved and no mutation is replayed.
-- Catalogue-backed guest regular-file creation claims a preallocated backing from a batch of 32.
+- Catalogue-backed guest regular-file creation consumes the store's existing reserve first.
+  On depletion a connection starts with two backings and doubles successive refills up
+  to 32, keeping cold creation inexpensive without a separate bulk-write path.
   All backing files and their containing directory are synced before inventory
   rows enter the WAL. Claim removal and logical-object publication share one
   transaction. No live or unlinked object is recycled. A claim restored by loss

@@ -297,9 +297,10 @@ contract, independent of the persistent storage format.
 The retained topology stream's device/inode identifies the graph across private
 transfers and forwarding, independently of the publisher's process lifetime.
 Mount IDs remain receiver-local and are allocated from its existing owner.
-Import into an already known view verifies that identity and every descriptor,
-then reuses its IDs and object cache. It does not reconstruct the cache or infer
-identity from equal directory trees. A namespace copy has independent policy
+Import into a known view still verifies every incoming descriptor and compares
+the received topology with the live view. It reuses the view's IDs and object
+cache without preparing its own descriptors for export. Equal directory trees
+alone do not establish identity. A namespace copy has independent policy
 and a new graph identity on publication. The origin-transfer owner below interns
 imported views within one filesystem worker; concurrent workers cannot share one
 mutable object cache.

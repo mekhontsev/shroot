@@ -161,7 +161,7 @@ static void retained_termination(void) {
     }
 }
 struct native_shared {
-    uintptr_t head; uint32_t word; pid_t waiter;
+    uintptr_t head; uint32_t word;
     struct { pid_t tid; int descriptor; } readers[2];
 };
 static struct md_task_child_reap_scratch signal_exchange;
@@ -292,7 +292,10 @@ static void reap_private(pid_t pid,pid_t group,pid_t agent,pid_t real,int code,i
 }
 static void *native_waiter(void *arg) {
     struct native_shared *s=arg;
-    __atomic_store_n(&s->waiter,(pid_t)syscall(SYS_gettid),__ATOMIC_RELEASE);
+    /* Debugger child notifications belong to the collecting thread. Taking
+     * one here can restart the timed futex between the owner CAS and wake. */
+    sigset_t mask; sigemptyset(&mask); sigaddset(&mask,SIGCHLD);
+    assert(!pthread_sigmask(SIG_BLOCK,&mask,NULL));
     struct timespec deadline={.tv_sec=10};
     long result=syscall(SYS_futex,&s->word,FUTEX_WAIT,owner|FUTEX_WAITERS,&deadline,NULL,0);
     if (result) fprintf(stderr,"robust waiter result=%ld errno=%d word=%#x owner=%#x\n",
@@ -302,8 +305,7 @@ static void *native_waiter(void *arg) {
     return NULL;
 }
 static void await_syscall(pid_t group,pid_t tid,long number,unsigned long argument) {
-    /* Prove the waiter entered the kernel; a ready flag before futex() would
-     * let cleanup win without actually exercising the wake. Test-only probe. */
+    /* Inspect the reader's exact blocking call before taking its group barrier. */
     struct timespec begin,now; assert(!clock_gettime(CLOCK_MONOTONIC,&begin));
     long nr=-1; unsigned long at=0;
     for (;;) {
@@ -311,11 +313,7 @@ static void await_syscall(pid_t group,pid_t tid,long number,unsigned long argume
             char path[96]; snprintf(path,sizeof(path),"/proc/%d/task/%d/syscall",group,tid);
             FILE *f=fopen(path,"r"); assert(f);
             int fields=fscanf(f,"%ld %lx",&nr,&at); fclose(f);
-            /* A ptrace interrupt can resume this exact timed futex through
-             * restart_block. ARM64 retains its arguments in /proc; the word
-             * identity still proves which wait entered the kernel. */
-            if (fields==2 && at==argument && (nr==number
-                    || (number==SYS_futex && nr==SYS_restart_syscall))) return;
+            if (fields==2 && at==argument && nr==number) return;
         }
         assert(!clock_gettime(CLOCK_MONOTONIC,&now));
         if (now.tv_sec-begin.tv_sec>=5)
@@ -327,12 +325,15 @@ static void await_syscall(pid_t group,pid_t tid,long number,unsigned long argume
 }
 static void await_waiter(struct native_shared *s) {
     struct timespec begin,now; assert(!clock_gettime(CLOCK_MONOTONIC,&begin));
-    pid_t tid;
-    while (!(tid=__atomic_load_n(&s->waiter,__ATOMIC_ACQUIRE))) {
+    for (;;) {
+        /* Requeue one plain waiter to its own key without waking it. A
+         * syscall-entry snapshot can precede the kernel's value comparison. */
+        long queued=syscall(SYS_futex,&s->word,FUTEX_CMP_REQUEUE,0,1,&s->word,owner|FUTEX_WAITERS);
+        if (queued==1) return;
+        assert(!queued);
         assert(!clock_gettime(CLOCK_MONOTONIC,&now) && now.tv_sec-begin.tv_sec<5);
         sched_yield();
     }
-    await_syscall(getpid(),tid,SYS_futex,(uintptr_t)&s->word);
 }
 static void native_cleanup(pid_t agent,uintptr_t head) {
     struct md_interception_abi abi=retained_abi();
@@ -520,12 +521,12 @@ static void native(const char *mode,const char *executable) {
     assert(WIFSTOPPED(status) && WSTOPSIG(status)==SIGSTOP && !(status>>16));
     pid_t agent=retain_mm(child);
     pthread_t waiter;
-    if (!fault) { assert(!pthread_create(&waiter,NULL,native_waiter,s)); await_waiter(s); }
     int killed=strstr(mode,"kill")!=NULL;
     if (killed) assert(!kill(child,SIGKILL));
     else assert(!ptrace(PTRACE_CONT,child,NULL,NULL));
     status=waiter_status(child);
     assert(WIFSTOPPED(status) && status>>16==(executing ? PTRACE_EVENT_EXEC : PTRACE_EVENT_EXIT));
+    if (!fault) { assert(!pthread_create(&waiter,NULL,native_waiter,s)); await_waiter(s); }
     native_cleanup(agent,s->head);
     if (fault) assert(s->word==(owner|FUTEX_WAITERS));
     else assert(!pthread_join(waiter,NULL));

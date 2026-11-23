@@ -117,7 +117,8 @@ int md_task_call_begin(struct md_task_call *f,long (*operation)(int,pid_t,void *
             || returned!=call+4 || boundary<MD_TASK_CALL_USER || boundary>MD_TASK_CALL_EMULATED_ENTRY) return -EINVAL;
     if (f->stage) return -EBUSY;
     *f=(struct md_task_call){.trace=operation,.actor=actor,.boundary=boundary,
-        .saved=*resume,.entry=*resume,.call=call,.returned=returned,.arguments=*arguments};
+        .saved=*resume,.entry=*resume,.entry_number=(int)resume->regs[8],
+        .call=call,.returned=returned,.arguments=*arguments};
     struct ptrace_syscall_info observed;
     int error=info(f,&observed);
     if (!error && observed.op==PTRACE_SYSCALL_INFO_NONE) {
@@ -133,12 +134,15 @@ int md_task_call_begin(struct md_task_call *f,long (*operation)(int,pid_t,void *
     if (!error && (boundary==MD_TASK_CALL_ENTRY || boundary==MD_TASK_CALL_SECCOMP || boundary==MD_TASK_CALL_EMULATED_ENTRY)
             && (resume->pc<4 || observed.instruction_pointer!=resume->pc)) error=-EINVAL;
     if (!error && (boundary==MD_TASK_CALL_ENTRY || boundary==MD_TASK_CALL_SECCOMP)) {
-        /* An owner can already have cancelled this entry. x8 still describes
-         * the original syscall, not the kernel's independent skip state. */
+        /* The latched operation is independent of the debugger-visible x8. */
         int active;
         struct iovec span={&active,sizeof(active)};
         error=trace(f,PTRACE_GETREGSET,(void *)NT_ARM_SYSTEM_CALL,&span);
-        if (!error) f->cancelled_entry=active==-1;
+        if (!error && span.iov_len!=sizeof(active)) error=-EPROTO;
+        if (!error) {
+            f->cancelled_entry=active==-1;
+            if (!f->cancelled_entry) f->entry_number=active;
+        }
     }
     int restarting=0;
     if (!error && boundary==MD_TASK_CALL_EXIT) {
@@ -194,13 +198,18 @@ int md_task_call_retire_entry(struct md_task_call *f) {
         f->retire_entry=1;
     return 0;
 }
-int md_task_call_preserve_admission(struct md_task_call *f) {
-    if (!f || !f->stage) return -EINVAL;
+int md_task_call_preserve_admission(struct md_task_call *f,const struct seccomp_data *original) {
+    if (!f || !f->stage || !original) return -EINVAL;
+    if (original->arch!=AUDIT_ARCH_AARCH64 || original->instruction_pointer!=f->saved.pc
+            || memcmp(original->args+1,f->saved.regs+1,5*sizeof(original->args[0]))
+            || ((f->boundary==MD_TASK_CALL_ENTRY || f->boundary==MD_TASK_CALL_SECCOMP)
+                && (f->cancelled_entry || original->nr!=f->entry_number))) return -EPROTO;
     if (f->admitted_entry) return 0;
     if (f->retire_entry || f->stage!=CALLING || f->boundary==MD_TASK_CALL_EMULATED_ENTRY) return -EINVAL;
     /* A cancelled native notification has already admitted this call too.
      * Restore its dispatch boundary, not another application-site admission. */
     f->boundary=MD_TASK_CALL_SECCOMP;
+    f->entry_number=original->nr;
     f->admitted_entry=1; return 0;
 }
 int md_task_call_again(struct md_task_call *f,const struct md_task_call_arguments *arguments) {
@@ -264,6 +273,7 @@ static int restore_boundary(struct md_task_call *f) {
         return trace(f,PTRACE_CONT,NULL,NULL);
     }
     struct user_pt_regs replay=f->entry; replay.pc=f->call;
+    replay.regs[8]=(unsigned long)f->entry_number;
     int error=regs(f,PTRACE_SETREGSET,&replay); if (error) return error;
     f->stage=f->boundary==MD_TASK_CALL_EXIT || f->retire_entry ? EXIT_REENTERING : REENTERING;
     return trace(f,f->boundary==MD_TASK_CALL_EXIT || f->retire_entry || f->boundary==MD_TASK_CALL_EMULATED_ENTRY
@@ -332,18 +342,19 @@ static int task_call_event(struct md_task_call *f,int status,int collect) {
                     || observed.instruction_pointer!=f->returned) return -EPROTO;
             error=regs(f,PTRACE_GETREGSET,&current); if (error) return error;
             f->entry=current; f->entry.pc=f->saved.pc;
+            f->entry_number=(int)observed.entry.nr;
             f->original_first_argument=observed.entry.args[0];
             return replace_entry(f);
         }
         if (f->stage==EXIT_SKIPPING) {
             if (observed.op!=PTRACE_SYSCALL_INFO_EXIT) return -EPROTO;
-            error=number(f,(int)f->saved.regs[8]);
+            error=number(f,f->restarting ? (int)f->saved.regs[8] : f->entry_number);
             if (f->retire_entry) { f->boundary=MD_TASK_CALL_EXIT; f->retire_entry=0; }
             return error ? error : finish(f,1);
         }
         /* ARM64's syscall number is signed 32-bit even though x8 is a full
          * application register, including at an emulated signal checkpoint. */
-        if (observed.op!=PTRACE_SYSCALL_INFO_ENTRY || observed.entry.nr!=(unsigned long)(int)f->entry.regs[8]
+        if (observed.op!=PTRACE_SYSCALL_INFO_ENTRY || observed.entry.nr!=(unsigned long)f->entry_number
                 || observed.instruction_pointer!=f->returned
                 || memcmp(observed.entry.args,f->entry.regs,sizeof(observed.entry.args))) return -EPROTO;
         /* A retry borrows this restored entry. Its latched argument can differ
@@ -381,7 +392,7 @@ static int task_call_event(struct md_task_call *f,int status,int collect) {
                     || current.regs[8]!=(f->admitted_entry ? SYS_getpid : f->saved.regs[8])
                     || memcmp(current.regs,f->saved.regs,6*sizeof(current.regs[0]))) return -EPROTO;
             if (f->admitted_entry && cookie!=MD_INTERCEPT_TASK) return -EPROTO;
-            if (f->admitted_entry) { error=number(f,(int)f->saved.regs[8]); if (error) return error; }
+            if (f->admitted_entry) { error=number(f,f->entry_number); if (error) return error; }
             f->cookie=cookie; return finish(f,f->admitted_entry);
         }
         if (f->stage!=CALLING || cookie!=MD_INTERCEPT_TASK || current.pc!=f->returned

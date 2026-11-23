@@ -13,7 +13,19 @@ static struct rusage *expected_usage;
 static int batch_usage;
 static int exit_code,exit_status;
 static pid_t exit_target;
+static int guard_test;
+static pid_t newborn;
 int __wrap_waitid(idtype_t type,id_t id,siginfo_t *info,int flags) {
+    if (guard_test) {
+        *info=(siginfo_t){0};
+        if (type==P_ALL && flags==(__WALL|WSTOPPED|WNOHANG|WNOWAIT)) {
+            info->si_pid=newborn; info->si_code=CLD_TRAPPED;
+        } else {
+            assert(type==P_PID && (id==71 || id==72) && flags==(__WALL|WEXITED|WSTOPPED|WNOHANG|WNOWAIT));
+            info->si_pid=(pid_t)id; info->si_code=id==71 ? CLD_EXITED : CLD_KILLED;
+        }
+        return 0;
+    }
     assert(type==P_PID && (pid_t)id==exit_target && flags==(__WALL|WEXITED|WNOHANG|WNOWAIT));
     *info=(siginfo_t){.si_code=exit_code};
     info->si_pid=exit_code ? exit_target : 0;
@@ -55,6 +67,28 @@ pid_t __wrap_wait4(pid_t selected, int *status, int options, struct rusage *usag
 }
 static void done(void) { assert(taken == queued); taken = queued = 0; }
 
+static void guarded_terminal(void) {
+    struct md_task_wait w={0};
+    struct md_task_wait_member a={0},b={0},c={0};
+    md_task_wait_track(&w,&a,71); md_task_wait_track(&w,&b,72); md_task_wait_track(&w,&c,73);
+    md_task_wait_guard_exit(&w,&a); md_task_wait_guard_exit(&w,&b);
+    md_task_wait_guard_exit(&w,&a);
+    guard_test=1;
+    int status=0;
+    assert(!md_task_wait_handoff_exit(&w,71));
+    assert(md_task_wait_ready(&w,&status,NULL,0)<0 && errno==EINTR && a.exit_state==MD_EXIT_OBSERVED);
+    assert(md_task_wait_ready(&w,&status,NULL,0)<0 && errno==EINTR && b.exit_state==MD_EXIT_OBSERVED);
+    newborn=74; expect(73,0,0); expect(74,74,0);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==74); newborn=0;
+    expect(73,73,0); assert(md_task_wait_ready(&w,&status,NULL,0)==73);
+    expect(73,0,0); assert(!md_task_wait_ready(&w,&status,NULL,0) && w.drained); done();
+    md_task_wait_untrack(&w,&b); assert(w.guarded==&a && !w.drained);
+    md_task_wait_release_exit(&w,&a); assert(!w.guarded && a.exit_state==MD_EXIT_DELIVER);
+    guard_test=0;
+    expect(-1,71,0); expect(-1,0,0);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==71); done();
+    md_task_wait_untrack(&w,&a); md_task_wait_untrack(&w,&c);
+}
 static void terminal_handoff(void) {
     struct md_task_wait w={.drained=1};
     struct rusage usage={0};
@@ -162,6 +196,7 @@ static void fair_discovery(unsigned population,unsigned hot) {
 }
 
 int main(void) {
+    guarded_terminal();
     terminal_handoff();
     drained_bursts();
     int status;
@@ -236,6 +271,15 @@ int main(void) {
     md_task_wait_hint(&w,20);
     expect(20,20,0);
     assert(md_task_wait_ready(&w,&status,NULL,0)==20); done();
+    /* A wake without an addressable sender still invalidates an empty queue. */
+    w=(struct md_task_wait){0};
+    expect(-1,0,0);
+    assert(!md_task_wait_ready(&w,&status,NULL,0) && w.drained); done();
+    md_task_wait_hint(&w,0);
+    assert(!md_task_wait_ready(&w,&status,NULL,0) && w.drained); done();
+    md_task_wait_sigchld(&w,0);
+    expect(-1,51,0);
+    assert(md_task_wait_ready(&w,&status,NULL,0)==51); done();
     /* Wrap the hint ring while preserving order and the global budget. */
     w=(struct md_task_wait){0};
     for (pid_t pid=30;pid<38;pid++) md_task_wait_hint(&w,pid);

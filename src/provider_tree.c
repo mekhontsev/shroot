@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "provider_tree.h"
+#include "directory_cursor.h"
 #include "temporary_directory.h"
 #include "directory_record.h"
 #include "user_namespace.h"
@@ -140,6 +141,9 @@ void md_provider_tree_release(struct md_provider_tree *tree) {
     free(tree->opaque); free(tree);
 }
 int md_provider_tree_root(struct md_provider_tree *tree) { return tree->upper; }
+int md_provider_tree_root_matches(const struct md_provider_tree *tree,const struct stat *st) {
+    return tree->roots[0].device==st->st_dev && tree->roots[0].inode==st->st_ino;
+}
 void md_provider_tree_set_owner(struct md_provider_tree *tree,const struct md_user_namespace *owner) {
     struct md_user_namespace *previous=tree->owner;
     tree->owner=md_user_namespace_retain((struct md_user_namespace *)owner); md_user_namespace_release(previous);
@@ -298,7 +302,8 @@ static int directory_open(int root,const char *path,int retained) {
      * can remain readable even when its pathname cannot be reopened. */
     fd=fcntl(retained,F_DUPFD_CLOEXEC,3);
     if (fd<0) return -errno;
-    if (lseek(fd,0,SEEK_SET)<0) { error=errno; close(fd); return -error; }
+    error=md_directory_seek_exact(fd,0);
+    if (error) { close(fd); return error; }
     return fd;
 }
 static ssize_t read_entries(struct md_provider_tree *tree,int fd,void *out,size_t capacity,int host) {
@@ -325,8 +330,11 @@ static ssize_t read_entries(struct md_provider_tree *tree,int fd,void *out,size_
     }
     int roots[]={upper,lower},stop=0;
     /* A hint must never turn a previously readable directory into an error. */
-    if (native && lseek(roots[first],native,SEEK_SET)<0) { first=0; index=0; native=0; }
-    for (unsigned i=first;i<2 && !stop;++i) {
+    if (native && md_directory_seek_exact(roots[first],native)) {
+        error=md_directory_seek_exact(roots[first],0);
+        first=0; index=0; native=0;
+    }
+    for (unsigned i=first;i<2 && !error && !stop;++i) {
         if (roots[i]<0) continue;
         int duplicate=fcntl(roots[i],F_DUPFD_CLOEXEC,3);
         DIR *dir=duplicate<0 ? NULL : fdopendir(duplicate);
@@ -382,7 +390,8 @@ static ssize_t read_entries(struct md_provider_tree *tree,int fd,void *out,size_
     }
     if (upper>=0) close(upper);
     if (lower>=0) close(lower);
-    if (lseek(fd,error ? position : next,SEEK_SET)<0 && !error) error=-errno;
+    int seek=md_directory_seek_exact(fd,error ? position : next);
+    if (seek) error=seek;
     if (!error && cache && checkpoint.position) {
         pthread_mutex_lock(&tree->directory_lock);
         struct directory_checkpoint *slot=directory_position(tree,path,identities,checkpoint.position,1);

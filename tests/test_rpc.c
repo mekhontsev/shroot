@@ -3,6 +3,7 @@
 #include "test_fd_accounting.h"
 #include "fs_service.h"
 #include "fs_engine.h"
+#include "fs_native.h"
 #include "fs_mounts.h"
 #include "fs_mount_internal.h"
 #include "posix_acl.h"
@@ -88,7 +89,7 @@ static void start(struct service *s, enum fault fault, const char *existing, uns
     else CHECK(snprintf(s->directory, sizeof(s->directory), "%s/store-%u", root, serial) < PATH_MAX);
     struct md_inode_store *store;
     CHECK(md_inode_store_open(s->directory, !existing, &store) == 0); md_inode_store_close(store);
-    int listener = md_fs_listen(s->endpoint); CHECK(listener >= 0);
+    int listener = md_fs_listener_bind(s->endpoint); CHECK(listener >= 0);
     CHECK(md_fs_listen(s->endpoint) == -EADDRINUSE);
     int stop[2], ready[2], notice[2], control[2];
     CHECK(pipe2(stop, O_CLOEXEC) == 0 && pipe2(ready, O_CLOEXEC) == 0
@@ -123,8 +124,12 @@ static void start(struct service *s, enum fault fault, const char *existing, uns
         }
         struct hooks hooks = {.fault=fault,.notify=notice[1],.control=control[0],.client=parent,
             .replacement=fault==REPLACE_TASK ? &replacement : NULL};
-        md_fs_observe(observe, &hooks); byte(ready[1]); close(ready[1]);
-        CHECK(md_fs_serve(&fs, listener, stop[0], timeout, NULL, NULL) == 0);
+        struct md_fs_service *service=NULL;
+        md_fs_observe(observe, &hooks);
+        CHECK(!md_fs_service_open(&fs,listener,stop[0],timeout,NULL,NULL,&service));
+        byte(ready[1]); close(ready[1]);
+        CHECK(!md_fs_service_run(service));
+        md_fs_service_close(service);
         if (fault==REPLACE_TASK || fault==PEER_METADATA) {
             CHECK(fault!=REPLACE_TASK || replacement.swapped);
             md_ipc_credentials_close(fs.ipc);
@@ -149,16 +154,21 @@ static void stop(struct service *s, int killed) {
     CHECK(md_inode_store_open(s->directory, 0, &store) == 0);
     CHECK(md_inode_audit(store, &audit) == 0); md_inode_store_close(store);
 }
-static struct md_fs_response call(const char *endpoint, uint32_t op, int a, const char *path,
-        int b, const char *second, uint32_t flags, uint32_t mode, int error) {
-    struct md_fs_request q = {.operation=op, .flags=flags, .mode=mode, .directory={a,b}, .path={path,second}};
+static struct md_fs_response checked_call(const char *endpoint,const struct md_fs_request *q,int error) {
     struct md_fs_response out;
-    long r = md_fs_call(endpoint, 5000, &q, &out);
-    if (r || out.result.error != error) fprintf(stderr, "rpc op=%u path=%s transport=%ld remote=%d expected=%d delivery=%d\n",
-        op, path ? path : "", r, out.result.error, error, out.delivery);
+    long r = md_fs_call(endpoint, 5000, q, &out);
+    if (r || out.delivery!=MD_FS_REPLIED || out.result.error!=error)
+        fprintf(stderr,"rpc op=%u path=%s fd=%d capacity=%u offset=%lld transport=%ld remote=%d expected=%d delivery=%d\n",
+            q->operation,q->path[0] ? q->path[0] : "",q->directory[0],q->capacity,(long long)q->offset,
+            r,out.result.error,error,out.delivery);
     CHECK(r == 0 && out.delivery == MD_FS_REPLIED && out.result.error == error);
     CHECK(out.result.fd < 0 || (fcntl(out.result.fd, F_GETFD) & FD_CLOEXEC));
     return out;
+}
+static struct md_fs_response call(const char *endpoint, uint32_t op, int a, const char *path,
+        int b, const char *second, uint32_t flags, uint32_t mode, int error) {
+    struct md_fs_request q = {.operation=op, .flags=flags, .mode=mode, .directory={a,b}, .path={path,second}};
+    return checked_call(endpoint,&q,error);
 }
 static void captured_authentication(void) {
     struct service s; start(&s,REPLACE_TASK,NULL,5000);
@@ -403,6 +413,7 @@ static void dump_fds(void) {
 }
 struct exchange_service {
     struct md_filesystem fs;
+    struct md_fs_service *service;
     int listener, stop, notice[2], release[2], after_reply;
 };
 static void exchange_checkpoint(enum md_fs_checkpoint point,
@@ -416,7 +427,7 @@ static void exchange_checkpoint(enum md_fs_checkpoint point,
 }
 static void *exchange_serve(void *context) {
     struct exchange_service *s=context;
-    CHECK(!md_fs_serve(&s->fs,s->listener,s->stop,60000,NULL,NULL));
+    CHECK(!md_fs_service_run(s->service));
     return NULL;
 }
 static void *warm_thread(void *context) { return context; }
@@ -476,10 +487,11 @@ static void exchange_retirement(void) {
             CHECK(!md_fd_origins_prepare_object(resources.files,&typed.object,FD_CLOEXEC,&update));
             md_fd_origins_finish(&update,watch);
         }
-        s.listener=md_fs_listen(endpoint); CHECK(s.listener>=0);
+        s.listener=md_fs_listener_bind(endpoint); CHECK(s.listener>=0);
         s.stop=eventfd(0,EFD_CLOEXEC); CHECK(s.stop>=0);
         CHECK(!pipe2(s.notice,O_CLOEXEC) && !pipe2(s.release,O_CLOEXEC));
         md_fs_observe(exchange_checkpoint,&s);
+        CHECK(!md_fs_service_open(&s.fs,s.listener,s.stop,60000,NULL,NULL,&s.service));
         pthread_t thread; CHECK(!pthread_create(&thread,NULL,exchange_serve,&s));
         struct md_fd_exchange *exchange=NULL;
         int bases[2]={watch,-1};
@@ -526,6 +538,7 @@ static void exchange_retirement(void) {
         uint64_t value=1; CHECK(write(s.stop,&value,sizeof(value))==sizeof(value));
         /* EVENT_WAIT: worker exit; the test runner bounds failed shutdown. */
         CHECK(!pthread_join(thread,NULL));
+        md_fs_service_close(s.service);
         md_fs_observe(NULL,NULL);
         if (watch>=0) {
             if (result==2) CHECK(md_inode_watch_bytes(s.fs.store,watch)==(after ? 0 : 32));
@@ -722,7 +735,7 @@ static void faulty_reply(enum reply_fault fault) {
     CHECK(out.delivery == MD_FS_UNCONFIRMED && out.result.fd == -1 && fd_count(getpid()) == before);
     event(received[0]); if (timeout) byte(stop[1]); close(stop[1]); close(received[0]); joined(child, 0);
 }
-static void missing_reply_chunk(void) {
+static void reply_framing(void) {
     int pair[2], before=fd_count(getpid());
     CHECK(!socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_NONBLOCK|SOCK_CLOEXEC,0,pair));
     struct md_fs_reply reply={.magic=MD_FS_MAGIC,.version=MD_FS_VERSION};
@@ -737,7 +750,13 @@ static void missing_reply_chunk(void) {
     CHECK(md_fs_receive_reply(pair[0],&deadline,100,&q,&out,&reply,0,NULL,NULL)==-ETIMEDOUT);
     CHECK(out.delivery==MD_FS_UNCONFIRMED && out.result.fd==-1);
     CHECK(md_fs_receive(pair[0],&reply,sizeof(reply),&none)==-EAGAIN);
+    q.operation=MD_FS_STAT;
+    CHECK(md_fs_send(pair[1],&reply,first,&none)==(long)first);
+    deadline=md_event_now()+100000000LL;
+    CHECK(md_fs_receive_reply(pair[0],&deadline,100,&q,&out,&reply,0,NULL,NULL)==-EPROTO);
+    CHECK(out.delivery==MD_FS_UNCONFIRMED && out.result.fd==-1);
     CHECK(!close(pair[0]) && !close(pair[1]) && fd_count(getpid())==before);
+    puts("PASS RPC framing: a missing continuation times out; an oversized metadata frame is rejected immediately");
 }
 static void deferred_reply(void) {
     for (unsigned fault=0;fault<4;++fault) {
@@ -791,9 +810,7 @@ static struct md_fs_response directory_call(const char *endpoint, int fd, uint32
         unsigned capacity, int64_t offset, int whence, int error) {
     struct md_fs_request q = {.operation=op, .directory={fd,-1}, .capacity=capacity,
         .offset=offset, .flags=(uint32_t)whence};
-    struct md_fs_response out;
-    CHECK(md_fs_call(endpoint, 5000, &q, &out) == 0 && out.delivery == MD_FS_REPLIED && out.result.error == error);
-    return out;
+    return checked_call(endpoint,&q,error);
 }
 static struct md_directory_entry entry(const struct md_fs_response *r, const char *name, int type) {
     struct md_directory_entry d;
@@ -865,6 +882,7 @@ static void directories(const char *exe) {
         char name[16]; snprintf(name,sizeof(name),"n%02u",i);
         close(call(s.endpoint,MD_FS_CREATE,fd,name,-1,NULL,0,0600,0).result.fd);
     }
+    puts("Checking eight concurrent RPC readers of one directory cursor");
     struct reader readers[8]; pthread_t threads[8]; uint64_t mask=0;
     for(unsigned i=0;i<8;++i) {
         readers[i]=(struct reader){.endpoint=s.endpoint,.fd=fd};
@@ -921,6 +939,45 @@ static int engine_publish(void *context, const void *data, size_t size) {
     CHECK(!strcmp(((const struct md_directory_entry *)data)->name, "."));
     p->calls++;
     return p->error;
+}
+static ssize_t skip_directory_entries(void *context,int fd,void *data,size_t size) {
+    (void)data; (void)size;
+    CHECK(lseek(fd,2,SEEK_SET)==2);
+    return *(int *)context;
+}
+static int publish_skipped(void *context,const void *data,size_t size) {
+    struct publication *p=context;
+    CHECK(data && !size && lseek(p->fd,0,SEEK_CUR)==0);
+    ++p->calls;
+    return p->error;
+}
+static void provider_directory_cursor(void) {
+    int fd=open(".",O_RDONLY|O_DIRECTORY|O_CLOEXEC); CHECK(fd>=0);
+    char data[24];
+    int64_t next=-1;
+    struct md_fs_output output={.data=data,.capacity=sizeof(data),.directory_position=&next};
+    struct md_fs_request q={.operation=MD_FS_GETDENTS,.directory={fd,-1},.capacity=sizeof(data)};
+    struct md_fs_result r={0};
+    int result=-ECANCELED;
+    md_fs_directory_read(&q,&r,&output,skip_directory_entries,&result);
+    CHECK(r.error==-ECANCELED && !r.size && next==-1 && lseek(fd,0,SEEK_CUR)==0);
+    result=0;
+    md_fs_directory_read(&q,&r,&output,skip_directory_entries,&result);
+    CHECK(!r.error && !r.size && next==2 && lseek(fd,0,SEEK_CUR)==0);
+    output.directory_position=NULL;
+    struct publication p={.fd=fd,.error=-EFAULT};
+    output.deliver=publish_skipped; output.context=&p;
+    md_fs_directory_read(&q,&r,&output,skip_directory_entries,&result);
+    CHECK(r.error==-EFAULT && !r.size && p.calls==1 && lseek(fd,0,SEEK_CUR)==0);
+    p.error=0;
+    md_fs_directory_read(&q,&r,&output,skip_directory_entries,&result);
+    CHECK(!r.error && !r.size && p.calls==2 && lseek(fd,0,SEEK_CUR)==2);
+    CHECK(!lseek(fd,0,SEEK_SET));
+    output.deliver=NULL;
+    md_fs_directory_read(&q,&r,&output,skip_directory_entries,&result);
+    CHECK(!r.error && !r.size && lseek(fd,0,SEEK_CUR)==2);
+    close(fd);
+    puts("PASS directory cursor: reader rollback, filtered EOF, deferred and synchronous publication");
 }
 static void engine_buffers(void) {
     char path[PATH_MAX]; CHECK(snprintf(path, sizeof(path), "%s/engine", root) < PATH_MAX);
@@ -1262,6 +1319,23 @@ static int loop_notification(void *context,struct md_filesystem *fs,short events
     return 0;
 }
 static void loop_signal(int fd) { uint64_t value=1; CHECK(write(fd,&value,sizeof(value))==sizeof(value)); }
+static void peer_deadline(struct md_filesystem *fs,int listener,const char *endpoint) {
+    int stop=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC); CHECK(stop>=0);
+    struct md_fs_service *service=NULL;
+    CHECK(!md_fs_service_open(fs,listener,stop,60000,NULL,NULL,&service));
+    struct md_fs_service_poll wait;
+    int peer=connect_peer(endpoint);
+    CHECK(!md_fs_service_prepare(service,&wait) && wait.deadline==INT64_MAX);
+    CHECK(md_event_poll(wait.fds,wait.count)>0 && !md_fs_service_dispatch(service));
+    CHECK(!md_fs_service_prepare(service,&wait));
+    int64_t deadline=wait.deadline;
+    CHECK(deadline>0 && deadline<INT64_MAX);
+    CHECK(!md_fs_service_prepare(service,&wait) && wait.deadline==deadline);
+    close(peer);
+    CHECK(md_event_poll(wait.fds,wait.count)>0 && !md_fs_service_dispatch(service));
+    CHECK(!md_fs_service_prepare(service,&wait) && wait.deadline==INT64_MAX);
+    md_fs_service_close(service); close(stop);
+}
 static void service_lifecycle(void) {
     int before=fd_count(getpid());
     char directory[PATH_MAX],endpoint[96];
@@ -1269,7 +1343,7 @@ static void service_lifecycle(void) {
     snprintf(endpoint,sizeof(endpoint),"md-fs-loop-%d",getpid());
     struct md_inode_store *store=NULL;
     CHECK(!md_inode_store_open(directory,1,&store));
-    int listener=md_fs_listen(endpoint),stop=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC);
+    int listener=md_fs_listener_bind(endpoint),stop=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC);
     struct loop_probe probe={.wake=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC),
         .notification=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC)};
     CHECK(listener>=0 && stop>=0 && probe.wake>=0 && probe.notification>=0);
@@ -1283,15 +1357,20 @@ static void service_lifecycle(void) {
     struct md_fs_service *service=NULL;
     CHECK(md_fs_service_open(&fs,listener,stop,100,&statistics,&work,&service)==-EINVAL);
     CHECK(!service && !fs.cursors && fs.wakeup==wakeup && fs.statistics==&previous);
+    int listening=-1; socklen_t length=sizeof(listening);
+    CHECK(!getsockopt(listener,SOL_SOCKET,SO_ACCEPTCONN,&listening,&length) && !listening);
     work.wakeup=wakeup;
+    CHECK(md_fs_service_open(&fs,stop,stop,100,&statistics,&work,&service)==-ENOTSOCK);
+    CHECK(!service && !fs.cursors && fs.wakeup==wakeup && fs.statistics==&previous);
     CHECK(!md_fs_service_open(&fs,listener,stop,100,&statistics,&work,&service));
+    CHECK(!getsockopt(listener,SOL_SOCKET,SO_ACCEPTCONN,&listening,&length) && listening);
     CHECK(fs.cursors && fs.statistics==&statistics && fs.wakeup==wakeup);
     struct md_fs_service_poll wait;
-    CHECK(!md_fs_service_prepare(service,&wait) && wait.count>2 && !wait.timeout);
+    CHECK(!md_fs_service_prepare(service,&wait) && wait.count>2 && wait.deadline==INT64_MAX);
     CHECK(probe.preparations==1 && !probe.ready && !probe.notices && !probe.retries);
     probe.shared=1;
     CHECK(!md_fs_service_prepare(service,&wait));
-    CHECK(wait.timeout && !wait.timeout->tv_sec && !wait.timeout->tv_nsec);
+    CHECK(!wait.deadline);
     CHECK(poll(wait.fds,wait.count,0)>=0 && !md_fs_service_dispatch(service));
     CHECK(probe.retries==1 && !probe.ready && !probe.notices);
     probe.shared=0; loop_signal(probe.wake); loop_signal(probe.notification);
@@ -1300,7 +1379,7 @@ static void service_lifecycle(void) {
     CHECK(probe.ready==1 && probe.notices==1 && probe.retries==2);
     CHECK(probe.count==2 && !memcmp(probe.order,"wn",2));
     probe.paused=1; loop_signal(probe.notification);
-    CHECK(!md_fs_service_prepare(service,&wait) && wait.count==2 && !wait.timeout);
+    CHECK(!md_fs_service_prepare(service,&wait) && wait.count==2 && wait.deadline==INT64_MAX);
     CHECK(poll(wait.fds,wait.count,0)==0 && !md_fs_service_dispatch(service));
     CHECK(probe.ready==1 && probe.notices==1 && probe.retries==2);
     loop_signal(probe.wake);
@@ -1324,6 +1403,7 @@ static void service_lifecycle(void) {
     CHECK(!md_fs_service_prepare(service,&wait));
     CHECK(poll(wait.fds,wait.count,0)>=1 && md_fs_service_dispatch(service)==1);
     md_fs_service_close(service); md_fs_service_close(NULL);
+    peer_deadline(&fs,listener,endpoint);
     CHECK(!fs.cursors && fs.wakeup==wakeup && fs.statistics==&previous);
     md_resource_wakeup_release(wakeup);
     close(listener); close(stop); close(probe.wake); close(probe.notification);
@@ -1333,8 +1413,10 @@ static void service_lifecycle(void) {
 }
 static void transport_contract(void) {
     deferred_reply();
-    missing_reply_chunk();
-    for (enum reply_fault fault = UNEXPECTED_FD; fault < REPLY_FAULT_COUNT; fault++) faulty_reply(fault);
+    for (enum reply_fault fault = UNEXPECTED_FD; fault < REPLY_FAULT_COUNT; fault++) {
+        printf("Checking RPC reply fault %u/%u\n", fault+1, REPLY_FAULT_COUNT);
+        faulty_reply(fault);
+    }
     struct md_fs_request q = {.operation=MD_FS_STAT, .directory={-1,-1}, .path={"/",NULL}};
     struct md_fs_response result;
     CHECK(md_fs_call("md-fs-lab-not-listening", 100, &q, &result) == -ECONNREFUSED
@@ -1343,8 +1425,14 @@ static void transport_contract(void) {
 }
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
+    if (argc==2 && !strcmp(argv[1],"--directory-cursor")) {
+        provider_directory_cursor(); return 0;
+    }
+    if (argc==2 && !strcmp(argv[1],"--reply-framing")) {
+        reply_framing(); return 0;
+    }
     if (argc==2 && !strcmp(argv[1],"--transport")) {
-        md_test_prepare_fd_transfer(); transport_contract(); return 0;
+        md_test_prepare_fd_transfer(); reply_framing(); transport_contract(); return 0;
     }
     if (argc == 3 && !strcmp(argv[1], "stress")) {
         CHECK(argv[2][0] == '/' && strlen(argv[2]) < sizeof(root)); strcpy(root, argv[2]);

@@ -1334,7 +1334,7 @@ void task_exec_event(struct thread *t,pid_t pid,unsigned event) {
     md_ipc_transport_close(&t->io.transport);
     struct md_interception_memory *memory=md_memory_new_image(t->memory); CHECK(memory);
     t->process_op.vfork_borrowed=0;
-    retained_detach(t);
+    int departing=retained_depart(t,RETAINED_EXEC);
     md_memory_release(t->memory); t->memory=memory;
     t->memory_op.access_pending=0;
     t->phase = IDLE; t->execution.stack = 0; t->ready = 0; t->resume_lost = 0; t->terminal_stop=0; images++;
@@ -1352,9 +1352,12 @@ void task_exec_event(struct thread *t,pid_t pid,unsigned event) {
     t->seccomp.trace.stage=GUEST_TRACE_NONE;
     t->debug.adapter=t->debug.call_active;
     CHECK(!t->close.closed.first); t->close.closed=exec_closed;
-    if (!image_layout_begin(t)) task_exec_ready(t);
+    if (!departing) task_exec_layout(t);
 }
 
+void task_exec_layout(struct thread *t) {
+    if (!image_layout_begin(t)) task_exec_ready(t);
+}
 void task_exec_ready(struct thread *t) {
     close_event_begin(t,PTRACE_EVENT_EXEC,t->debug.exec_old); adapter_progress();
 }

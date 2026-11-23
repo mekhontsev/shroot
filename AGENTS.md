@@ -66,6 +66,9 @@ When fixing a defect, audit analogous entry points, executors, lifecycle and
 failure paths across the owning mechanism. Add focused regression tests using
 the shared fixtures. Report unverified paths; a single successful reproduction
 is not proof of general correctness.
+For defects exposed by nesting, reduce the failure to a single-runtime
+regression where possible. Verify the same assertions before and after the fix
+at one level, then qualify the fix at the depth that exposed it.
 
 Keep host component, runtime and real-application tests distinct. Reuse assertions
 across transport adapters and identities. Retain native controls and sandbox

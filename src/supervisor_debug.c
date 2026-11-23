@@ -477,6 +477,7 @@ static int debug_host_policy_visit(void *context,const siginfo_t *info) {
 }
 
 int debug_host_policy_pending(struct thread *t,struct ptrace_syscall_info *info) {
+    const struct seccomp_data *reported=guest_trace_drain_exit(t);
     if (!t->signals.host || !t->debug.call_active || !t->entered) return 0;
     struct seccomp_data call={.arch=info->arch,.instruction_pointer=info->instruction_pointer};
     struct debug_host_policy_probe probe={.thread=t,.call=&call};
@@ -504,6 +505,9 @@ int debug_host_policy_pending(struct thread *t,struct ptrace_syscall_info *info)
          * signal at its exit must queue it, not replace the pending host trap. */
         t->debug.host_completed_pc=call.instruction_pointer;
         t->debug.host_completed_number=call.nr;
+        /* A virtual tracer may see a queued signal at the same exit whose
+         * TRACE it just reported. Publish the exit, not a second TRACE stop. */
+        if (reported && !memcmp(reported,&call,sizeof(call))) return 0;
         CHECK(guest_trace_begin(t,&call,&regs,NULL,MD_TASK_CALL_EXIT));
         return 2;
     }

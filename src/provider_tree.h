@@ -56,6 +56,8 @@ int md_provider_tree_matches(const struct md_provider_tree *,const struct md_pro
 struct md_provider_tree *md_provider_tree_retain(struct md_provider_tree *);
 void md_provider_tree_release(struct md_provider_tree *);
 int md_provider_tree_root(struct md_provider_tree *);
+/* The tree retains this directory for its entire lifetime. */
+int md_provider_tree_root_matches(const struct md_provider_tree *,const struct stat *);
 /* Reuse a provider-relative directory resolved in this same operation. It is
  * not a persistent path cache. Host selection skips private attachment points;
  * both selections retain the common traversal and visibility rules. */

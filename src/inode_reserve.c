@@ -8,9 +8,10 @@
 
 static int refill(struct md_inode_store *s) {
     char ids[MDI_RESERVE_BATCH][33];
+    unsigned target=s->reserve_batch ? s->reserve_batch : MDI_RESERVE_INITIAL;
     int r=0;
     unsigned count=0;
-    for (;count<MDI_RESERVE_BATCH && !r;++count) {
+    for (;count<target && !r;++count) {
         r=mdi_random_id(ids[count]);
         int fd=r ? -1 : openat(s->objects,ids[count],O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC|O_NOFOLLOW,0600);
         if (!r && fd<0) {
@@ -31,6 +32,9 @@ static int refill(struct md_inode_store *s) {
         if (!r) r=mdi_sql_error(mdi_step(s,q));
         r=mdi_query_release(q,r);
     }
+    /* Repeated depletion justifies more speculative work. A new connection
+     * still consumes any durable inventory left by an earlier writer first. */
+    if (!r) s->reserve_batch=count>=MDI_RESERVE_BATCH/2 ? MDI_RESERVE_BATCH : count*2;
     return r;
 }
 static int first(struct md_inode_store *s,char id[33]) {

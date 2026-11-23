@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "inode_store.h"
+#include "directory_cursor.h"
 #include "inode_internal.h"
 #include "fs_operation.h"
 #include "linux_abi.h"
@@ -1091,6 +1092,11 @@ static int deliver_entries(void *data, const void *entries, size_t size) {
 static void directory_publication(void) {
     struct md_inode_store *s = store("delivery", 1);
     int dir = md_inode_open(s, MD_INODE_ROOT, "/", O_RDONLY | O_DIRECTORY, 0); CHECK(dir >= 0);
+    CHECK(md_directory_seek_exact(-1,1)==-EBADF);
+    int fixed=open("/dev/null",O_RDONLY|O_CLOEXEC); CHECK(fixed>=0);
+    errno=EBUSY;
+    CHECK(md_directory_seek_exact(fixed,1)==-EIO);
+    close(fixed);
     struct directory_delivery delivery = {.fd = dir, .error = -EACCES};
     char entries[24];
     CHECK(md_inode_getdents_deliver(s, dir, entries, sizeof(entries), deliver_entries, &delivery) == -EACCES);
@@ -1103,6 +1109,18 @@ static void directory_publication(void) {
     CHECK(lseek(dir, 0, SEEK_CUR) == 1 && delivery.calls == 3);
     CHECK(md_inode_getdents(s, dir, entries, sizeof(entries)) == 24);
     CHECK(!strcmp(((struct md_directory_entry *)entries)->name, ".."));
+    struct md_identity id=md_identity_new(0,0); s->identity=&id; s->native_files=1;
+    CHECK(!md_inode_mkdir(s,dir,"mixed",0700));
+    int mixed=md_inode_open(s,dir,"mixed",O_RDONLY|O_DIRECTORY,0); CHECK(mixed>=0);
+    _Alignas(8) char dots[128]; int64_t next=-1;
+    CHECK(md_inode_getdents(s,mixed,dots,sizeof(dots))==48);
+    CHECK(lseek(mixed,0,SEEK_CUR)==2);
+    CHECK(!md_inode_getdents_prepare(s,mixed,dots,sizeof(dots),&next) && next==2);
+    CHECK(!md_inode_symlink(s,"target",mixed,"later"));
+    CHECK(md_inode_getdents(s,mixed,dots,sizeof(dots))==32);
+    struct md_directory_entry e; CHECK(md_directory_record_read(dots,32,&e)==5);
+    CHECK(!strcmp(dots+offsetof(struct md_directory_entry,name),"later") && lseek(mixed,0,SEEK_CUR)==e.next);
+    close(mixed);
     close(dir); md_inode_store_close(s);
     puts("PASS directory publication: rejected/cancelled output preserves the shared cursor");
 }

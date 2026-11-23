@@ -148,20 +148,26 @@ static void reserve_failures(const char *path) {
     assert(md_inode_create(s,-1,"failed",0600)==-EIO); fail_fd=-1;
     assert(!scalar(s,"SELECT count(*) FROM allocation_reserve"));
     struct md_inode_audit a;
-    assert(!md_inode_audit(s,&a) && a.untracked==MDI_RESERVE_BATCH && a.names==0);
+    assert(!md_inode_audit(s,&a) && a.untracked==MDI_RESERVE_INITIAL && a.names==0);
     struct md_inode_statistics stats={0}; md_inode_measure(s,&stats);
-    for (unsigned i=0;i<MDI_RESERVE_BATCH;++i) {
-        char name[32]; snprintf(name,sizeof(name),"file-%u",i);
-        int fd=md_inode_create(s,-1,name,0600); assert(fd>=0); close(fd);
+    unsigned names=0, batches=0;
+    const unsigned sizes[]={2,4,8,16,32,32};
+    for (unsigned n=0;n<sizeof(sizes)/sizeof(*sizes);++n) {
+        unsigned size=sizes[n];
+        for (unsigned i=0;i<size;++i) {
+            char name[32]; snprintf(name,sizeof(name),"file-%u",names++);
+            int fd=md_inode_create(s,-1,name,0600); assert(fd>=0); close(fd);
+            if (!i) assert(scalar(s,"SELECT count(*) FROM allocation_reserve")==((int)size-1));
+        }
+        assert(!scalar(s,"SELECT count(*) FROM allocation_reserve"));
+        ++batches; assert(stats.sync_directory.calls==batches);
     }
-    assert(stats.sync_directory.calls==1);
-    assert(!scalar(s,"SELECT count(*) FROM allocation_reserve"));
     int reader=md_inode_watch_create(s,IN_NONBLOCK); assert(reader>=0);
     int root=md_inode_open(s,-1,"/",O_PATH|O_DIRECTORY,0); assert(root>=0);
     int wd=md_inode_watch_add(s,reader,root,IN_ALL_EVENTS); assert(wd>0);
     int watched=md_inode_create(s,-1,"watched",0600); assert(watched>=0);
     close(watched);
-    assert(stats.sync_directory.calls==2);
+    assert(stats.sync_directory.calls==batches+1);
     assert(!scalar(s,"SELECT count(*) FROM allocation_reserve"));
     assert(!md_inode_watch_pump(s));
     char events[4096]; ssize_t size=md_inode_watch_read(s,reader,events,sizeof(events),NULL,NULL);
@@ -178,7 +184,7 @@ static void reserve_failures(const char *path) {
     close(root); close(reader); assert(!md_inode_watch_pump(s));
     audit(s); md_inode_store_close(s);
     assert(!md_inode_store_open_exclusive(path,&s));
-    assert(!md_inode_audit(s,&a) && a.untracked==0 && a.names==MDI_RESERVE_BATCH+1);
+    assert(!md_inode_audit(s,&a) && a.untracked==0 && a.names==names+1);
     md_inode_store_close(s);
     puts("PASS reserve failures, batched directory sync, clean directory watch events and exclusive orphan cleanup");
 }
@@ -266,7 +272,7 @@ static void snapshot(const char *source,const char *target) {
     assert(!md_inode_store_open(source,1,&a)); a->identity=&identity;
     int fd=md_inode_create(a,-1,"image",0600); assert(fd>=0);
     assert(write(fd,"image",5)==5); close(fd);
-    assert(scalar(a,"SELECT count(*) FROM allocation_reserve")==MDI_RESERVE_BATCH-1);
+    assert(scalar(a,"SELECT count(*) FROM allocation_reserve")==MDI_RESERVE_INITIAL-1);
     assert(!md_inode_store_seal(a));
     assert(!md_inode_store_open(target,1,&b));
     assert(!md_inode_snapshot(a,b));

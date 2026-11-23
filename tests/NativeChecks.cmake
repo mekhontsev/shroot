@@ -72,6 +72,8 @@ foreach(mode exit kill exec exec-fault exec-real-first exec-private-first exec-d
 endforeach()
 shroot_component(elf test_elf @WORK@/elf)
 shroot_component(rpc test_rpc @WORK@/rpc)
+shroot_component(rpc_directory_cursor test_rpc --directory-cursor)
+shroot_component(rpc_reply_framing test_rpc --reply-framing)
 foreach(case namespace native paths metadata recovery)
     shroot_component(inodes_${case} test_inodes @WORK@/store --case ${case})
 endforeach()

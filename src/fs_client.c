@@ -143,8 +143,10 @@ long md_fs_receive_reply(int socket, int64_t *delivery_deadline, unsigned timeou
     struct md_fs_rights rights = {0};
     long r; int deferred=0;
     int64_t deadline=*delivery_deadline;
+    size_t capacity=md_fs_reply_capacity(request->operation);
+    size_t first=offsetof(struct md_fs_reply,data)+md_fs_reply_chunk(capacity);
     for (;;) {
-        r = md_fs_receive(socket, reply, sizeof(*reply), &rights);
+        r = md_fs_receive(socket, reply, first, &rights);
         if (r==sizeof(struct md_fs_deferred)) {
             struct md_fs_deferred admission;
             memcpy(&admission,reply,sizeof(admission));
@@ -191,16 +193,15 @@ long md_fs_receive_reply(int socket, int64_t *delivery_deadline, unsigned timeou
     if (r < (long)offsetof(struct md_fs_reply, data)
             || reply->magic != MD_FS_MAGIC || reply->version != MD_FS_VERSION
             || reply->receipt>1
-            || reply->size > sizeof(reply->data)
-            || (size_t)r != offsetof(struct md_fs_reply, data)
-                + (reply->size<MD_FS_REPLY_CHUNK ? reply->size : MD_FS_REPLY_CHUNK)
+            || reply->size > capacity
+            || (size_t)r != offsetof(struct md_fs_reply, data) + md_fs_reply_chunk(reply->size)
             || (reply->size>MD_FS_REPLY_CHUNK && (reply->receipt || reply->descriptors))
             || reply->descriptors != rights.count) {
         md_fs_close_rights(&rights); return -EPROTO;
     }
     size_t received=(size_t)r - offsetof(struct md_fs_reply,data);
     while (received<reply->size) {
-        size_t left=reply->size-received, size=left<MD_FS_REPLY_CHUNK ? left : MD_FS_REPLY_CHUNK;
+        size_t size=md_fs_reply_chunk(reply->size-received);
         struct md_fs_rights extra={0};
         /* EVENT_WAIT: the same accepted reply's next chunk; the original call
          * deadline bounds missing bytes without replaying the request. */
@@ -309,7 +310,7 @@ long md_fs_call_deliver(const char *name, unsigned timeout_ms,
             if (!r && error) r = -error;
         }
     }
-    if (!r) r = md_fs_peer((int)socket);
+    if (!r) r = md_fs_peer((int)socket,NULL);
     length += offsetof(struct md_fs_packet, data);
     uint64_t exchange=0;
     while (!r) {

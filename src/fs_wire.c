@@ -16,11 +16,13 @@ long md_fs_address(const char *name, struct sockaddr_un *out) {
     }
     return offsetof(struct sockaddr_un, sun_path) + 1 + n;
 }
-long md_fs_peer(int socket) {
+long md_fs_peer(int socket, pid_t *pid) {
     struct ucred cred; unsigned size = sizeof(cred);
     long r = RAW5(getsockopt, socket, SOL_SOCKET, SO_PEERCRED, &cred, &size);
     if (r < 0) return r;
-    return size == sizeof(cred) && cred.uid == (unsigned)RAW0(geteuid) ? 0 : -EACCES;
+    if (size!=sizeof(cred) || cred.uid!=(unsigned)RAW0(geteuid)) return -EACCES;
+    if (pid) *pid=cred.pid;
+    return 0;
 }
 long md_fs_private_peer(int socket) {
     int value; unsigned size=sizeof(value);
@@ -33,10 +35,9 @@ long md_fs_private_peer(int socket) {
     long flags=RAW3(fcntl,socket,F_GETFL,0), descriptor=RAW3(fcntl,socket,F_GETFD,0);
     if (flags<0 || descriptor<0) return flags<0 ? flags : descriptor;
     if (!(flags&O_NONBLOCK) || !(descriptor&FD_CLOEXEC)) return -EINVAL;
-    struct ucred cred; size=sizeof(cred);
-    r=RAW5(getsockopt,socket,SOL_SOCKET,SO_PEERCRED,&cred,&size);
-    if (r<0) return r;
-    return size==sizeof(cred) && cred.uid==(unsigned)RAW0(geteuid) && cred.pid>0 ? cred.pid : -EACCES;
+    pid_t pid;
+    r=md_fs_peer(socket,&pid);
+    return r<0 ? r : pid>0 ? pid : -EACCES;
 }
 void md_fs_close_rights(struct md_fs_rights *rights) {
     for (unsigned i = 0; i < rights->count; ++i) RAW1(close, rights->fd[i]);

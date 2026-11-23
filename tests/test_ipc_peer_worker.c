@@ -414,11 +414,51 @@ static void unavailable(const char *store) {
     assert(descriptors()==before);
     puts("PASS failed worker rejects new admission without stealing caller descriptors");
 }
+static void metadata_admission(const char *path) {
+    struct md_ipc_credentials *ipc=NULL;
+    assert(!md_ipc_credentials_open(path,MD_IPC_TRANSPORT_ORIGINS_V1,&ipc));
+    int notice=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC); assert(notice>=0);
+    struct md_identity id=md_identity_new(0,0);
+    const int types[]={SOCK_STREAM,SOCK_SEQPACKET,SOCK_DGRAM};
+    for (unsigned i=0;i<sizeof(types)/sizeof(*types);++i) {
+        int fd=socket(AF_UNIX,types[i]|SOCK_CLOEXEC,0); assert(fd>=0);
+        struct md_fs_request q={.operation=MD_FS_IPC,.directory={fd,-1},.peer=getpid(),
+            .flags=types[i]==SOCK_DGRAM ? MD_IPC_CONNECT_BEGIN : MD_IPC_BIND};
+        struct md_fs_result r;
+        lock_notification=notice;
+        md_ipc_credentials_execute(ipc,&id,NULL,&q,&r,NULL);
+        assert(!r.error && r.fd==-1 && !r.position && lock_notification==notice);
+        q.operation=MD_FS_IPC_PEER; q.flags=0;
+        md_ipc_credentials_execute(ipc,&id,NULL,&q,&r,NULL);
+        assert(r.error==-ENODATA && lock_notification==-1);
+        close(fd);
+    }
+    int fd[2]; assert(!socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,fd));
+    struct md_fs_request q={.operation=MD_FS_IPC,.flags=MD_IPC_PAIR,.peer=getpid(),.directory={fd[0],fd[1]}};
+    struct md_fs_result r;
+    md_ipc_credentials_execute(ipc,&id,NULL,&q,&r,NULL); assert(!r.error);
+    struct md_ipc_binding side[2]={0};
+    for (unsigned i=0;i<2;++i) assert(!md_ipc_credentials_bind(ipc,fd[i],&side[i]));
+    q.flags=MD_IPC_MESSAGE_SENDER;
+    assert(!md_ipc_credentials_message(ipc,&side[0],&id,NULL,&q,&r) && r.fd>=0);
+    int token=r.fd;
+    q.flags=MD_IPC_MESSAGE_READ; q.directory[1]=token;
+    lock_notification=notice;
+    assert(md_ipc_credentials_message(ipc,&side[0],&id,NULL,&q,&r)==-ENODATA && r.fd<0);
+    q.directory[0]=fd[1];
+    assert(!md_ipc_credentials_message(ipc,&side[1],&id,NULL,&q,&r)
+        && r.fd>=0 && r.position==getpid() && !r.info.uid && !r.info.gid);
+    assert(lock_notification==notice); lock_notification=-1;
+    close(r.fd); close(token);
+    for (unsigned i=0;i<2;++i) { md_ipc_binding_release(&side[i]); close(fd[i]); }
+    md_identity_release(&id); close(notice); md_ipc_credentials_close(ipc);
+    puts("PASS socket metadata admission: no gate for unrelated operations; peer lookup still serialized");
+}
 void md_test_ipc_peer_worker(const char *path) {
     /* EVENT_WAIT: outer failure bound includes worker stall, stop and join. */
     alarm(45); setbuf(stdout,NULL);
     struct md_inode_store *store=NULL; assert(!md_inode_store_open(path,1,&store)); md_inode_store_close(store);
-    joined_handshake(path);
+    metadata_admission(path); joined_handshake(path);
     for (unsigned phase=0;phase<3;++phase) cancellation(path,phase);
     cancel_running(path); burst(path); failure(path); shutdown_pending(path,0); shutdown_pending(path,1); unavailable(path);
     puts("PASS asynchronous IPC peer admission");

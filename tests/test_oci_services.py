@@ -209,14 +209,18 @@ class Suite:
         text = shell + ' -c ' + shlex.quote(shlex.join(list(map(str, argv))))
         text = bounded_shell(self.executor, text, timeout, kill_after=15)
         text = self.kernel_profile.shell(text)
-        result = self.executor.execute(text, None if timeout is None else timeout + 15)
+        stream = timeout is None and not quiet
+        if stream:
+            result = self.executor.execute(text, None, on_line=lambda line: print(line, end='', flush=True))
+        else:
+            result = self.executor.execute(text, None if timeout is None else timeout + 15)
         self.report['commands'].append({'command': text, **result})
         self.record_entry(result['output'])
         if self.kernel_profile.options and not raw and '--test-kernel-profile' not in argv:
             launching = (self.runner in argv and '--store' in argv
                          or self.image in argv and any(action in argv for action in ('run', 'exec', 'login')))
             self.kernel_profile.observe(result['output'], required=launching and result['exitCode'] == 0)
-        if not quiet:
+        if not quiet and not stream:
             print(result['output'], end='', flush=True)
         if not raw and '--test-kernel-profile' not in argv:
             result = {**result, 'output': self.kernel_profile.output(result['output'])}

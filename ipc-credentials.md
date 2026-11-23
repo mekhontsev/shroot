@@ -396,6 +396,10 @@ opposite side of the same connection can validate it; replay toward the sender,
 another connection or another store does not translate the token. The receiving
 adapter removes that descriptor and publishes the validated guest credentials instead.
 The token also binds the retained PIDFD's kernel identity and records the subject's immutable PID-number snapshot at send time.
+Receive selects the socket binding once for an entire descriptor vector. Its
+epoch pin keeps published credential records immutable, so reading one checks
+the token and direction in a single SQLite snapshot without taking the writer
+lock. A native, unregistered endpoint does not interpret rights as credentials.
 Queued messages and peeks retain those numbers after sender exit/reaping, even
 if the native PID has been assigned to another process.
 

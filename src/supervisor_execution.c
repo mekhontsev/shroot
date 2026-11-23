@@ -1510,6 +1510,7 @@ void resume(pid_t pid, int sig) {
         }
         /* No guest instruction or syscall remains after the exit event. Keep
          * ownership until waitpid reaps it, without resuming adapter/debug steps. */
+        if (retained_depart(t,RETAINED_EXIT)) return;
         if (tracee_request(t,PTRACE_CONT,NULL,NULL,"continue-exit")) t->kernel_stopped=0;
         return;
     }

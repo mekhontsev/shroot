@@ -46,6 +46,7 @@ void guest_trace_promoted(struct thread *,const struct user_pt_regs *);
 int guest_trace_recheck(struct thread *,const struct seccomp_data *);
 int guest_trace_resume(struct thread *,int signal);
 int guest_trace_syscall(struct thread *,const struct ptrace_syscall_info *,struct user_pt_regs *);
+const struct seccomp_data *guest_trace_drain_exit(struct thread *);
 int guest_trace_execution(struct thread *,struct ptrace_syscall_info *,struct user_pt_regs *);
 int guest_trace_execution_begin(struct thread *,const struct seccomp_data *,struct user_pt_regs *);
 void guest_notification_discard(struct thread *t);

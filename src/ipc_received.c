@@ -66,8 +66,11 @@ int md_ipc_received_message(struct md_ipc_capsules **cache, struct md_fs_context
         struct md_fs_request q={.actor=context->actor,.peer=context->peer,
             .operation=MD_FS_IPC,.flags=MD_IPC_MESSAGE_READ,.directory={source->fds[0],fd}};
         struct md_fs_result result;
-        md_fs_context_execute(context,&q,&result,NULL);
-        if (!result.error) {
+        /* The captured receiving endpoint selects one peer for the entire
+         * vector. An unregistered endpoint has no credential tokens to claim. */
+        int credential=adapted ? md_ipc_credentials_message(authority,&binding,&context->task.identity,
+            context->task.pid_group,&q,&result) : -ENODATA;
+        if (!credential) {
             struct md_received_fds *sender=NULL;
             error=plan.count==254 ? -EOVERFLOW : md_received_fds_reserve(&sender,1);
             if (error) { if (result.fd>=0) close(result.fd); break; }
@@ -78,7 +81,7 @@ int md_ipc_received_message(struct md_ipc_capsules **cache, struct md_fs_context
             if (error) break;
             plan.entries[plan.count++]=(struct md_received_info){.index=(int)index,.flags=MD_RECEIVED_CREDENTIALS,
                 .credentials={(pid_t)result.position,result.info.uid,result.info.gid}};
-        } else if (!unrecognized(result.error)) error=result.error;
+        } else if (!unrecognized(credential)) error=credential;
         else if (framed) {
             if (!*cache) error=md_ipc_capsules_new(&binding,cache);
             struct md_received_fds *payload=NULL;

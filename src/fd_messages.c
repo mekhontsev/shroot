@@ -132,15 +132,8 @@ int md_fd_message_issue(struct md_fd_message *p, int carrier) {
     if (!error) { p->route.cookie=cookie; p->published=1; }
     return error;
 }
-int md_fd_messages_publish(struct md_fd_messages *s, struct md_fd_message *p,
-        const struct md_ipc_connection *destination, int carrier, int reader) {
-    if (!s || !p || !destination || destination->side>1) return -EINVAL;
-    if (p->published) return -ESTALE;
-    if (p->source.scope && (p->route.side!=destination->side
-            || memcmp(p->route.link,destination->link,sizeof(destination->link)))) return -EXDEV;
-    uint64_t cookie;
-    int error=carrier_cookie(carrier,&cookie);
-    if (error) return error;
+static int register_local(struct md_fd_messages *s, struct md_fd_message *p,
+        const struct md_ipc_connection *destination, uint64_t cookie, int reader) {
     struct md_fd_message **entry=slot(s,cookie);
     if (*entry) return -EEXIST;
     struct stat identity;
@@ -155,7 +148,7 @@ int md_fd_messages_publish(struct md_fd_messages *s, struct md_fd_message *p,
     if (events<0 && (events=epoll_create1(EPOLL_CLOEXEC))<0) return -errno;
     struct epoll_event event={.events=EPOLLIN,.data.u64=cookie};
     if (epoll_ctl(events,EPOLL_CTL_ADD,reader,&event)) {
-        error=-errno;
+        int error=-errno;
         if (s->events<0) close(events);
         return error;
     }
@@ -164,6 +157,25 @@ int md_fd_messages_publish(struct md_fd_messages *s, struct md_fd_message *p,
     p->monitor=reader; p->owner=s; p->published=1;
     *entry=md_fd_message_retain(p); ++s->count;
     return 0;
+}
+int md_fd_messages_publish(struct md_fd_messages *s, struct md_fd_message *p,
+        const struct md_ipc_connection *destination, int carrier, int reader) {
+    if (!s || !p || !destination || destination->side>1) return -EINVAL;
+    if (p->published) return -ESTALE;
+    if (p->source.scope && (p->route.side!=destination->side
+            || memcmp(p->route.link,destination->link,sizeof(destination->link)))) return -EXDEV;
+    uint64_t cookie;
+    int error=carrier_cookie(carrier,&cookie);
+    return error ? error : register_local(s,p,destination,cookie,reader);
+}
+int md_fd_messages_hold_issued(struct md_fd_messages *s, struct md_fd_message *p, int reader) {
+    if (!s || !p || !p->source.scope) return -EINVAL;
+    /* The route pins the carrier identity before serialization. A nonzero
+     * registry cookie is never cleared, even after withdrawal. */
+    if (!p->published || !p->route.cookie || p->cookie) return -ESTALE;
+    struct md_ipc_connection destination=p->source.connection;
+    destination.side=p->route.side;
+    return register_local(s,p,&destination,p->route.cookie,reader);
 }
 static void retire(struct md_fd_messages *s, struct md_fd_message **entry) {
     struct md_fd_message *p=*entry;
@@ -203,12 +215,10 @@ int md_fd_message_route_read(int carrier, const struct md_ipc_binding *destinati
     int r=carrier_cookie(carrier,&cookie);
     if (r) return r;
     struct md_fd_message_route route;
-    struct iovec io={&route,sizeof(route)};
-    struct msghdr msg={.msg_iov=&io,.msg_iovlen=1};
-    ssize_t n=recvmsg(carrier,&msg,MSG_PEEK|MSG_DONTWAIT);
+    ssize_t n=recv(carrier,&route,sizeof(route),MSG_PEEK|MSG_DONTWAIT|MSG_TRUNC);
     if (n<0) return -errno;
     if (!n) return -ECONNRESET;
-    if (n!=sizeof(route) || (msg.msg_flags&MSG_TRUNC) || route.magic!=MD_FD_ROUTE_MAGIC
+    if (n!=sizeof(route) || route.magic!=MD_FD_ROUTE_MAGIC
             || !route.count || route.count>MD_FD_RECEIPT_MAX || route.side>1) return -EPROTO;
     if (route.version!=MD_FD_ROUTE_VERSION) return -EPROTONOSUPPORT;
     char id[33]; memcpy(id,route.launch,32); id[32]=0;

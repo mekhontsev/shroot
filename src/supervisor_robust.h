@@ -16,7 +16,7 @@ struct retained_memory {
     struct md_task_retained retained;
     struct md_task_robust cleanup;
     struct md_resource_order order;
-    struct thread *creator, *terminal, *parent;
+    struct thread *creator, *terminal, *parent, *departing;
     int parent_exit_signal;
     unsigned members,pending;
     int ready, cleaning, retiring, dead, checkpoint_suspended, killed, exit_held,core_exit,queued;
@@ -34,6 +34,7 @@ struct retained_retirement {
     struct md_resource_order order;
     uintptr_t peer;
     int stage, borrowed, synthetic, checkpoint_suspended, broker_borrowed;
+    int child_notice;
 };
 
 extern struct retained_memory *retained_memories,*retained_creation,*retained_work;
@@ -42,10 +43,13 @@ extern struct md_task_quiesce *retained_barrier;
 
 int retained_task_held(const struct thread *t);
 int retained_cleanup_pending(const struct thread *t);
+void retained_publish_child_notice(pid_t recipient);
 struct retained_memory *retained_actor(pid_t pid);
 int retained_child_identity(const struct retained_memory *,pid_t *parent,pid_t *group,int *signal);
 struct retained_memory *retained_memory_get(struct thread *t);
 void retained_detach(struct thread *t);
+enum retained_departure { RETAINED_EXIT=1, RETAINED_EXEC };
+int retained_depart(struct thread *t,enum retained_departure);
 int robust_call(struct thread *t,const struct seccomp_data *call,struct user_pt_regs *regs,enum md_task_call_boundary boundary);
 struct md_process_query;
 long robust_query(struct thread *,pid_t,struct md_process_query *);

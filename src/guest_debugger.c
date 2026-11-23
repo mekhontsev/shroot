@@ -311,7 +311,10 @@ static int wake_waiters(struct md_debugger *d,pid_t owner) {
 }
 static void wake(struct md_debugger *d, pid_t owner) {
     /* The debugger may use a SIGCHLD self-pipe instead of a blocking wait. */
-    if (!wake_waiters(d,owner)) kill(owner,SIGCHLD);
+    if (!wake_waiters(d,owner)) {
+        if (d->host.child_notice) d->host.child_notice(owner);
+        else kill(owner,SIGCHLD);
+    }
 }
 void md_debugger_child_changed(struct md_debugger *d,pid_t pid) {
     if (!d || !d->waiters) return;

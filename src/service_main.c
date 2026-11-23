@@ -66,16 +66,20 @@ int main(int argc, char **argv) {
     if (!error) error = md_inode_runtime_prepare(store);
     if (!error && argc == 6) error = md_image_catalogue_open(store, argv[5], &images);
     if (!error) {
-        listener = md_fs_listen(argv[2]);
+        listener = md_fs_listener_bind(argv[2]);
         if (listener < 0)
             error = listener;
     }
+    struct md_filesystem fs={.store=store,.images=images};
+    struct md_fs_service *service=NULL;
+    if (!error) error=md_fs_service_open(&fs,listener,stop,5000,statistics ? &filesystem : NULL,NULL,&service);
     if (write(ready, &error, sizeof(error)) != sizeof(error))
         error = -EPIPE;
     close(ready);
     if (!error && statistics) md_inode_measure(store, &database);
     if (!error)
-        error = md_fs_serve(&(struct md_filesystem){.store=store,.images=images}, listener, stop, 5000, statistics ? &filesystem : NULL, NULL);
+        error = md_fs_service_run(service);
+    md_fs_service_close(service);
     if (statistics) {
         cost("prepare", &database.prepare); cost("step", &database.step);
         cost("transaction", &database.transaction); cost("lock", &database.lock);
