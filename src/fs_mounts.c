@@ -556,13 +556,7 @@ int md_fs_mounts_open(struct md_filesystem *fs, const struct md_fs_attachment *e
         if (!r) r=md_view_mount_prepare_transport(m);
         if (!r) ++tree->count;
     }
-    if (r) {
-        struct md_view_mount *pending = &tree->mounts[tree->count];
-        if (pending->source >= 0) close(pending->source);
-        if (pending->target >= 0) close(pending->target);
-        md_inode_lifetime_release(pending->storage); pending->storage=NULL;
-        md_provider_tree_release(pending->provider); pending->provider=NULL;
-    }
+    if (r) md_view_mount_close(&tree->mounts[tree->count]);
     for (unsigned i=0;i<count;++i) { free(paths[i].source); free(paths[i].target); }
     free(paths);
     if (r) md_fs_mounts_close(fs);

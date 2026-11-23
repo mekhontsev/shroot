@@ -199,6 +199,10 @@ int md_mount_namespace_lock_inherited(struct md_mount_namespace *n) {
     return error;
 }
 void md_view_mount_close(struct md_view_mount *mount) {
+    /* A mount pin can duplicate the provider's shared directory lease.
+     * Drop our pins before the last owner checks for independent holders. */
+    if (mount->source>=0) close(mount->source);
+    if (mount->target>=0) close(mount->target);
     md_mount_links_release(&mount->links);
     md_mount_policy_close(&mount->policy);
     md_inode_lifetime_release(mount->storage);
@@ -209,8 +213,6 @@ void md_view_mount_close(struct md_view_mount *mount) {
     md_provider_tree_release(mount->provider);
     md_ipc_namespace_release(mount->ipc_namespace);
     md_control_file_release(mount->file);
-    if (mount->source>=0) close(mount->source);
-    if (mount->target>=0) close(mount->target);
     *mount=(struct md_view_mount){.source=-1,.target=-1,.detached=1,.generation=mount->generation};
 }
 static int host_backing(const struct md_view_mount *m) {

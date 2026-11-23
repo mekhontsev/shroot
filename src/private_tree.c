@@ -14,9 +14,11 @@ int md_private_tree_discard(int parent, const char *name) {
     struct stat st;
     if (fstat(ref,&st)) { int r=-errno; close(ref); return r; }
     if (!S_ISDIR(st.st_mode)) { close(ref); return unlinkat(parent,name,0) ? -errno : 0; }
-    char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",ref);
     /* Mode-000 directories still belong to the exclusively retained tree. */
-    if (chmod(proc,0700)) { int r=-errno; close(ref); return r; }
+    if ((st.st_mode&07777)!=0700) {
+        char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",ref);
+        if (chmod(proc,0700)) { int r=-errno; close(ref); return r; }
+    }
     int fd=openat(ref,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC); close(ref);
     if (fd<0) return -errno;
     DIR *dir=fdopendir(fd);
@@ -26,6 +28,12 @@ int md_private_tree_discard(int parent, const char *name) {
         errno=0; struct dirent *entry=readdir(dir);
         if (!entry) { if (errno) r=-errno; break; }
         if (!strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+        /* unlinkat without AT_REMOVEDIR neither follows symlinks nor removes
+         * directories. Reclassify an entry if it changed since readdir. */
+        if (entry->d_type!=DT_UNKNOWN && entry->d_type!=DT_DIR) {
+            if (!unlinkat(fd,entry->d_name,0) || errno==ENOENT) continue;
+            if (errno!=EISDIR && errno!=EPERM) { r=-errno; break; }
+        }
         r=md_private_tree_discard(fd,entry->d_name);
     }
     closedir(dir);

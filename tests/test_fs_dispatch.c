@@ -733,6 +733,16 @@ static void worker_start_failure(const char *store) {
     assert(!close(listener));
     assert(!md_fs_worker_start(store,endpoint,NULL,NULL,NULL,NULL,&worker));
     assert(!md_fs_worker_stop(worker) && all_fds()==before);
+    char mounts[PATH_MAX];
+    assert(snprintf(mounts,sizeof(mounts),"%s/mounts",store)<PATH_MAX);
+    DIR *dir=opendir(mounts); assert(dir);
+    for (;;) {
+        errno=0;
+        struct dirent *entry=readdir(dir);
+        if (!entry) { assert(!errno); break; }
+        assert(!strcmp(entry->d_name,".") || !strcmp(entry->d_name,".."));
+    }
+    assert(!closedir(dir));
     puts("PASS worker runtime lifecycle: early/late startup failure, borrowed listener and clean restart");
 }
 struct copy_job { struct md_fs_work work; struct md_fs_worker *worker; int started,gate,completed; };

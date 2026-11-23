@@ -700,6 +700,25 @@ static void tree_recovery(enum operation op, enum md_inode_checkpoint point, uns
     CHECK(audit.untracked == (unsigned)(!committed && (op == MKDIR || op == SYMLINK)));
     close(sub); close(dst); md_inode_store_close(s);
 }
+static void runtime_directories(void) {
+    struct md_inode_store *s=store("runtime-dirs",1);
+    int fd=md_inode_create(s,-1,"sys",0600);
+    CHECK(fd>=0 && !close(fd));
+    struct stat st;
+    CHECK(md_inode_runtime_prepare(s)==-ENOTDIR);
+    CHECK(md_inode_stat(s,-1,"dev",0,&st)==-ENOENT);
+    CHECK(!md_inode_unlink(s,-1,"sys",0));
+    struct md_inode_statistics costs={0};
+    md_inode_measure(s,&costs);
+    CHECK(!md_inode_runtime_prepare(s) && costs.write_admissions==1);
+    costs=(struct md_inode_statistics){0};
+    CHECK(!md_inode_runtime_prepare(s) && !costs.write_admissions && !costs.transaction.calls);
+    md_inode_measure(s,NULL);
+    CHECK(!md_inode_store_reconfigure(s,1));
+    CHECK(md_inode_runtime_prepare(s)==-EROFS);
+    md_inode_store_close(s);
+    puts("PASS runtime directories: atomic creation, read-only admission and no writes on restart");
+}
 static void scoped_paths(void) {
     struct md_inode_store *s = store("scoped", 1);
     CHECK(md_inode_mkdir(s, MD_INODE_ROOT, "d", 0700) == 0);
@@ -1958,7 +1977,7 @@ int main(int argc, char **argv) {
         ++executed;
     }
     if (!selected || !strcmp(selected,"paths")) {
-        hierarchy(); symlinks(); permissions(); kernel_reference(); scoped_paths(); read_admission_failure(); operation_windows();
+        hierarchy(); symlinks(); permissions(); kernel_reference(); scoped_paths(); runtime_directories(); read_admission_failure(); operation_windows();
         path_prefixes(); prefix_mutations(); ++executed;
     }
     if (!selected || !strcmp(selected,"metadata")) {

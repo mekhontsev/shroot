@@ -16,19 +16,21 @@
 int md_inode_runtime_prepare(struct md_inode_store *s) {
     const char *paths[] = {"/dev", "/dev/shm", "/sys", "/proc"};
     const mode_t modes[] = {0755, 01777, 0755, 0755};
-    int r = mdi_begin(s,1);
+    int r = mdi_begin(s,0);
     if (r) return r;
+    if (mdi_readonly(s)) return mdi_finish(s,-EROFS);
     for (unsigned i=0; !r && i<sizeof(paths)/sizeof(*paths); i++) {
         struct mdi_location loc;
         r = mdi_walk(s,MD_INODE_ROOT,paths[i],MDI_ENTRY,1,&loc);
         if (!r && loc.exists) { if (loc.node.kind!=S_IFDIR) r=-ENOTDIR; continue; }
         int fd=-1;
+        if (!r) r=mdi_write(s);
         if (!r) r=mdi_allocate(s,S_IFDIR,modes[i],O_RDONLY,NULL,loc.parent.id,&loc.node,&fd);
         if (!r) r=mdi_metadata(s,&loc.node,0,0,modes[i]);
         if (!r) r=mdi_add_name(s,loc.parent.id,loc.name,loc.node.id);
         if (fd>=0) close(fd);
     }
-    return mdi_commit(s,r);
+    return s->write_transaction ? mdi_commit(s,r) : mdi_finish(s,r);
 }
 
 int mdi_permission_stat(struct md_inode_store *s,const struct mdi_node *node,struct stat *st) {

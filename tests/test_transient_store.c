@@ -35,6 +35,9 @@ static void temporary_recovery(int parent) {
         unsigned variant=i%5;
         int root=md_temporary_directory_new(parent); assert(root>=0);
         assert(!symlinkat("../unrelated",root,"outside"));
+        assert(!mkdirat(root,"nested",0700));
+        assert(!symlinkat("../../unrelated",root,"nested/outside"));
+        assert(!fchmodat(root,"nested",0000,0));
         assert(!fchmodat(root,MD_TEMPORARY_DIRECTORY_MARKER,0600,0));
         int marker=openat(root,MD_TEMPORARY_DIRECTORY_MARKER,O_RDWR|O_CLOEXEC);
         assert(marker>=0);
