@@ -226,10 +226,10 @@ Ignored signal stops retain the original deadline and resample, in both Base and
 resident execution. Base keeps interrupted ownership through the delivery stop,
 so a syscall-exit stop cannot decide EINTR before the signal disposition is known.
 After an interrupted caller-context wait, its temporary signal mask remains
-kernel-owned through delivery. That task cannot lend its continuation to FD
-retirement or publish retained signal carriers until its next syscall entry.
-This one-entry observation preserves the signal frame without single-stepping,
-stopping peers or adding observation to successful waits and ordinary data IO.
+kernel-owned through delivery. The task can lend its continuation to FD
+retirement or publish retained signal carriers once handler entry is confirmed.
+Without an explicit frame confirmation, the next native syscall entry proves
+the return instead. Neither path adds observation to successful waits or ordinary IO.
 An unmasked native epoll_pwait can first probe at timeout zero in the caller.
 An admitted application filter uses the shared native-effect journal, without
 ptrace entry/exit for the probe; its policy is evaluated against the original

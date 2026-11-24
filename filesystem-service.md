@@ -34,7 +34,9 @@ separate from successful namespace package-lifecycle checks.
   nonblocking-IO guarantee. The supervisor and filesystem worker remain separate
   threads; this lifecycle does not add a new scheduler or inline execution mode.
   Worker runtime open/close and pending-work retirement are separate from its
-  pthread entry, with the same startup publication and teardown order.
+  pthread entry. Only the ready event publishes startup completion. A startup
+  stage with no progress for 30 seconds fails; completed stages do not spend
+  the next stage's budget. Teardown joins the worker before releasing its state.
 - `fs_client.c` is freestanding: no libc, SQLite, heap, mutex, shared socket or
   thread-local errno. Invocation-local scratch and raw syscalls permit nested
   calls from a signal handler. Guest-pointer validation remains the adapter's

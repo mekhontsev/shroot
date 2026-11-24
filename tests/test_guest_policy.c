@@ -1304,6 +1304,38 @@ static long masked_wait(int mode,int epoll,const sigset_t *mask,int zero) {
     default: return syscall(SYS_rt_sigsuspend,mask,8);
     }
 }
+static volatile sig_atomic_t nested_wait_seen;
+static void nested_wait_handler(int sig,siginfo_t *info,void *context) {
+    (void)info;
+    ucontext_t *uc=context;
+    if (sig==SIGUSR1) {
+        sigset_t inner;
+        sigemptyset(&inner); sigaddset(&inner,SIGUSR1); sigaddset(&inner,SIGSYS);
+        assert(sigsuspend(&inner)==-1 && errno==EINTR);
+        assert(nested_wait_seen==1 && sigismember(&uc->uc_sigmask,SIGUSR1));
+        sigset_t current;
+        assert(!sigprocmask(SIG_SETMASK,NULL,&current));
+        assert(sigismember(&current,SIGUSR1) && sigismember(&current,SIGUSR2));
+        ++nested_wait_seen;
+    } else {
+        assert(sig==SIGUSR2 && !nested_wait_seen && sigismember(&uc->uc_sigmask,SIGUSR2));
+        ++nested_wait_seen;
+    }
+}
+static void nested_wait(void) {
+    struct sigaction action={.sa_sigaction=nested_wait_handler,.sa_flags=SA_SIGINFO};
+    sigemptyset(&action.sa_mask);
+    assert(!sigaction(SIGUSR1,&action,NULL) && !sigaction(SIGUSR2,&action,NULL));
+    sigset_t both,saved,outer,current;
+    sigemptyset(&both); sigaddset(&both,SIGUSR1); sigaddset(&both,SIGUSR2);
+    assert(!sigprocmask(SIG_BLOCK,&both,&saved));
+    assert(!raise(SIGUSR2) && !raise(SIGUSR1));
+    sigemptyset(&outer); sigaddset(&outer,SIGUSR2);
+    assert(sigsuspend(&outer)==-1 && errno==EINTR && nested_wait_seen==2);
+    assert(!sigprocmask(SIG_SETMASK,&saved,&current));
+    assert(sigismember(&current,SIGUSR1) && sigismember(&current,SIGUSR2)
+        && sigismember(&current,SIGSYS)==sigismember(&saved,SIGSYS));
+}
 static int signal_wait_masks(int filtered) {
     if (filtered) {
         struct sock_filter rule=BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW);
@@ -1332,6 +1364,7 @@ static int signal_wait_masks(int filtered) {
         int status; assert(waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status));
         assert(wait_seen==mode*2+2);
     }
+    nested_wait();
     close(epoll); alarm(0);
     puts("PASS atomic signal masks: poll/select/epoll/suspend, pending and late signals, handler and ucontext masks");
     return 0;

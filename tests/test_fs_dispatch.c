@@ -698,8 +698,27 @@ static void pause_wait(struct md_fs_worker *worker, struct md_fs_worker_pause *p
     assert(md_fs_worker_pause_state(pause)==1);
 }
 static atomic_int listener_timeout;
+static int startup_gate=-1;
+static _Thread_local int startup_waits;
+static _Thread_local int64_t first_deadline;
+long __real_md_event_wait_fd(int,short,int64_t);
+long __wrap_md_event_wait_fd(int fd,short events,int64_t deadline) {
+    if (startup_waits==1) {
+        startup_waits=2; first_deadline=deadline;
+        uint64_t one=1;
+        assert(write(startup_gate,&one,sizeof(one))==sizeof(one));
+        /* Deliver the first deadline after real startup progress. Waiting
+         * does not consume the ready FD; the retry must still observe it. */
+        long r=__real_md_event_wait_fd(fd,events,deadline);
+        return r<0 ? r : -ETIMEDOUT;
+    }
+    if (startup_waits==2) { assert(deadline>first_deadline); startup_waits=0; }
+    return __real_md_event_wait_fd(fd,events,deadline);
+}
 int __real_md_fs_listener_bind(const char *);
 int __wrap_md_fs_listener_bind(const char *endpoint) {
+    if (startup_gate>=0)
+        assert(!__real_md_event_wait_fd(startup_gate,POLLIN,md_event_now()+30000000000LL));
     return atomic_exchange(&listener_timeout,0) ? -ETIMEDOUT : __real_md_fs_listener_bind(endpoint);
 }
 static void worker_start_failure(const char *store) {
@@ -727,8 +746,12 @@ static void worker_start_failure(const char *store) {
     assert(md_fs_worker_start(store,endpoint,NULL,NULL,NULL,NULL,&worker)==-EADDRINUSE);
     assert(!worker && fcntl(listener,F_GETFD)>=0 && all_fds()==before+1);
     assert(!close(listener));
+    startup_gate=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK); assert(startup_gate>=0);
+    startup_waits=1;
     assert(!md_fs_worker_start(store,endpoint,NULL,NULL,NULL,NULL,&worker));
-    assert(!md_fs_worker_stop(worker) && all_fds()==before);
+    assert(!startup_waits && !md_fs_worker_stop(worker));
+    assert(!close(startup_gate)); startup_gate=-1;
+    assert(all_fds()==before);
     char mounts[PATH_MAX];
     assert(snprintf(mounts,sizeof(mounts),"%s/mounts",store)<PATH_MAX);
     DIR *dir=opendir(mounts); assert(dir);

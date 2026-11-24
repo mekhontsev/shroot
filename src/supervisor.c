@@ -1069,13 +1069,12 @@ int main(int argc, char **argv) {
             struct ptrace_syscall_info info={0};
             if (!tracee_request(t,PTRACE_GET_SYSCALL_INFO,(void *)sizeof(info),&info,"signal-return-entry")) continue;
             if (info.op==PTRACE_SYSCALL_INFO_ENTRY) {
-                t->signals.return_pending=0;
                 if (t->signals.wait_view.active) {
                     uint64_t mask=t->signals.wait_view.saved&~MD_SIGNAL_SYS_BIT;
                     signal_wait_restore(t);
                     if (!signal_mask(t,mask,"wait-return-mask")) continue;
                 }
-                CHECK(!md_event_signal(fd_ready));
+                signal_wait_return_commit(t);
             }
         }
         if (readiness_native_event(t,status)) continue;

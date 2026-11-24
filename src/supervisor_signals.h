@@ -57,6 +57,7 @@ long signal_logical_send(struct thread *from,const struct seccomp_data *call,con
 long signal_process_next(struct thread *from,pid_t selector,int signal,pid_t after);
 void signal_control_discard(struct thread *t);
 int signal_entry_committed(struct thread *t);
+void signal_wait_return_commit(struct thread *t);
 /* The veneer acknowledges its packet before application code can use the
  * ordinary channel. Its resource turn is retired at that entry or contention. */
 int signal_entry_published(const struct thread *t);

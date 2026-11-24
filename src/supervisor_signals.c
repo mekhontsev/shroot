@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "adapter_buffer.h"
+#include "event_signal.h"
 #include "fd_object.h"
 #include "fd_origins.h"
 #include "fd_selector.h"
@@ -496,6 +497,14 @@ void signal_control_discard(struct thread *t) {
     free(owner); t->signals.control=NULL;
 }
 
+/* An interrupted atomic wait needs one proof of kernel return: either a
+ * committed handler frame or, without one, the next native syscall entry. */
+void signal_wait_return_commit(struct thread *t) {
+    if (!t->signals.return_pending) return;
+    t->signals.return_pending=0;
+    CHECK(!md_event_signal(fd_ready));
+}
+
 static void signal_entry_complete(struct thread *t,int failed) {
     struct signal_control *owner=t->signals.control;
     struct md_kernel_action entered;
@@ -510,7 +519,7 @@ static void signal_entry_complete(struct thread *t,int failed) {
             entered.handler=(uintptr_t)SIG_DFL;
             CHECK(!md_signal_actions_commit(t->signals.actions,SIGSEGV,&entered));
         }
-    }
+    } else signal_wait_return_commit(t);
     signal_control_discard(t); t->phase=IDLE;
 }
 
@@ -793,6 +802,7 @@ static void signal_control_finish(struct thread *t,int ready) {
         /* The kernel applied the action's native mask while building this
          * frame. Frame translation changes only the logical SIGSYS view;
          * borrowed copies restore that same native mask before completion. */
+        signal_wait_return_commit(t);
         resume(t->pid,0);
         return;
     }
@@ -1234,6 +1244,7 @@ int signal_control_event(struct thread *t,int status) {
         if (t->signals.host_blocked
                 && !signal_mask(t,next&~MD_SIGNAL_SYS_BIT,"handler-frame-native-mask")) return 1;
         signal_mask_record(t,next);
+        signal_wait_return_commit(t);
         signal_control_discard(t); t->phase=IDLE; resume(t->pid,0); return 1;
     }
     struct user_pt_regs regs;

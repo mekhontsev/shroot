@@ -35,6 +35,7 @@ struct md_fs_worker {
     struct md_queue_signal wake, done;
     struct md_resource_wakeup *wakeup;
     int stop, ready, error, statistics;
+    atomic_int_fast64_t startup_progress;
     const char *store, *endpoint, *admit;
     struct md_task_registry *tasks;
     struct md_fd_exchanges *exchanges;
@@ -181,8 +182,9 @@ struct worker_runtime {
     int listener;
 };
 static void startup_stage(struct md_fs_worker *w,const char **stage,int64_t *started,const char *next) {
+    int64_t now=md_event_now();
+    atomic_store_explicit(&w->startup_progress,now,memory_order_relaxed);
     if (w->statistics) {
-        int64_t now=md_event_now();
         if (*stage) fprintf(stderr,"MD_WORKER_STARTUP pid=%d phase=%s ns=%lld next=%s\n",
             getpid(),*stage,(long long)(now-*started),next);
         *started=now;
@@ -324,6 +326,18 @@ static void *run(void *context) {
     return NULL;
 }
 static int stop_and_join(struct md_fs_worker *,int *service_error);
+static int wait_ready(struct md_fs_worker *w) {
+    int64_t progress=atomic_load_explicit(&w->startup_progress,memory_order_relaxed);
+    for (;;) {
+        /* EVENT_WAIT: only the ready FD publishes completion. A completed
+         * startup stage renews the stall deadline without waking the caller. */
+        int r=(int)md_event_wait_fd(w->ready,POLLIN,progress+30000000000LL);
+        if (r!=-ETIMEDOUT) return r;
+        int64_t next=atomic_load_explicit(&w->startup_progress,memory_order_relaxed);
+        if (next<=progress) return r;
+        progress=next;
+    }
+}
 int md_fs_worker_start(const char *store, const char *endpoint, const char *admit, struct md_task_registry *tasks, struct md_fd_exchanges *exchanges,
         const struct md_fs_worker_launch *launch, struct md_fs_worker **out) {
     struct md_fs_worker *w = calloc(1, sizeof(*w));
@@ -359,11 +373,10 @@ int md_fs_worker_start(const char *store, const char *endpoint, const char *admi
     if (!error) error=md_queue_signal_open(&w->done);
     if (!error) error=md_resource_wakeup_create_pipe(w->wake.reader,w->wake.writer,&w->wakeup);
     if (error) goto failed;
+    atomic_init(&w->startup_progress,md_event_now());
     error = pthread_create(&w->thread, NULL, run, w);
     if (error) { error = -error; goto failed; }
-    /* EVENT_WAIT: worker publishes namespace/listener readiness; deadline fails
-     * startup. The guardian bounds teardown if kernel filesystem IO is stuck. */
-    error = (int)md_event_wait_fd(w->ready, POLLIN, md_event_now() + 30000000000LL);
+    error = wait_ready(w);
     if (error >= 0) { pthread_mutex_lock(&w->lock); error = w->error; pthread_mutex_unlock(&w->lock); }
     if (error < 0) {
         int join_error=stop_and_join(w,NULL);

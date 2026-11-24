@@ -212,7 +212,6 @@ static void terminal_cleanup_broker(void) {
     assert(mkdtemp(temporary));
     pid_t owner=fork();
     if (!owner) {
-        alarm(15);
         char store[PATH_MAX]; assert(realpath(temporary,store));
         assert(strlcat(store,"/store",sizeof(store))<sizeof(store));
         struct md_inode_store *inodes=NULL;
@@ -252,9 +251,10 @@ static void terminal_cleanup_broker(void) {
         assert(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
         listener=syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,SECCOMP_FILTER_FLAG_NEW_LISTENER,&program);
         assert(listener>=0);
-        md_broker_listen(broker,listener); md_broker_resumed(broker,child);
-        /* EVENT_WAIT: admitted work remains blocked by the fixture's table
-         * turn throughout shutdown; the alarm fails missing admission. */
+        md_broker_listen(broker,listener);
+        md_broker_resumed(broker,child);
+        /* EVENT_WAIT: the held table turn keeps the request admitted until
+         * cleanup; the component runner owns the fixture's hang watchdog. */
         while (atomic_load_explicit(&channel->state,memory_order_acquire)==MD_ENTRY_REQUEST) sched_yield();
         assert(atomic_load(&channel->state)==MD_ENTRY_RUNNING && md_broker_task_active(broker,child));
         cleanup();
@@ -2664,7 +2664,7 @@ static void native_capture(void) {
     puts("PASS native capture: exact OFD, duplicate slots, partial rollback and denied-copy fallback");
     fflush(stdout);
     child=fork(); assert(child>=0);
-    if (!child) { alarm(10); native_capture_owner(); native_capture_retained(); fflush(stdout); _exit(0); }
+    if (!child) { native_capture_owner(); native_capture_retained(); fflush(stdout); _exit(0); }
     assert(waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status));
 }
 int __wrap_md_debugger_active(struct md_debugger *d) {
@@ -4003,9 +4003,10 @@ static void signal_wait_preparation(void) {
     puts("PASS signal wait preparation: pending arrival before/after park copy cannot lose its wake");
 }
 static void signal_execution_admission(void) {
-    for (unsigned reset=0;reset<2;++reset) {
+    int saved_fd=fd_ready; fd_ready=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC); assert(fd_ready>=0);
+    for (unsigned interrupted=0;interrupted<2;++interrupted) for (unsigned reset=0;reset<2;++reset) {
         struct thread t={.pid=123,.phase=SIGNAL_ENTRY,.kernel_stopped=1,
-            .signals.actions=md_signal_actions_new()};
+            .signals.actions=md_signal_actions_new(),.signals.return_pending=interrupted};
         assert(t.signals.actions);
         struct signal_control *owner=calloc(1,sizeof(*owner)); assert(owner);
         struct md_signal_entry packet={.pending=1};
@@ -4020,6 +4021,7 @@ static void signal_execution_admission(void) {
         assert(!md_signal_actions_commit(t.signals.actions,SIGALRM,&action));
         signal_entries_progress();
         assert(t.signals.control==owner && t.phase==SIGNAL_ENTRY);
+        assert(t.signals.return_pending==(int)interrupted);
         /* The handler acknowledges entry after the global scan but before its
          * syscall is admitted. No ptrace stop is needed to retire the packet. */
         atomic_store_explicit(&packet.pending,0,memory_order_release);
@@ -4028,10 +4030,26 @@ static void signal_execution_admission(void) {
         assert(!t.signals.control && t.phase==IDLE && !signal_entries);
         assert(!signal_entry_published(&t));
         signal_execution_checkpoint(&t);
+        assert(!t.signals.return_pending);
+        uint64_t wakes;
+        if (interrupted) assert(read(fd_ready,&wakes,sizeof(wakes))==sizeof(wakes) && wakes==1);
+        assert(read(fd_ready,&wakes,sizeof(wakes))==-1 && errno==EAGAIN);
         assert(!md_signal_actions_read(t.signals.actions,SIGALRM,&action));
         assert(action.handler==(reset ? (uintptr_t)SIG_DFL : 0x1234));
         md_signal_actions_release(t.signals.actions);
     }
+    /* A failed kernel frame has not consumed the interrupted wait. */
+    struct thread failed={.pid=123,.phase=SIGNAL_ENTRY,.signals.actions=md_signal_actions_new(),
+        .signals.return_pending=1};
+    struct signal_control *rollback=calloc(1,sizeof(*rollback)); assert(rollback && failed.signals.actions);
+    assert(!md_signal_actions_commit(failed.signals.actions,SIGALRM,&(struct md_kernel_action){.handler=0x1234}));
+    rollback->signal=SIGALRM; rollback->entry_wait_view=(struct md_signal_wait_view){
+        .active=1,.saved=MD_SIGNAL_SYS_BIT,.temporary=0};
+    failed.signals.control=rollback;
+    signal_entry_complete(&failed,1);
+    assert(failed.signals.return_pending && failed.signals.wait_view.active
+        && failed.signals.wait_view.saved==MD_SIGNAL_SYS_BIT && !failed.signals.control);
+    md_signal_actions_release(failed.signals.actions);
     struct thread t={.pid=123,.phase=IDLE,.memory=md_memory_new()};
     struct signal_control *owner=calloc(1,sizeof(*owner));
     assert(t.memory && owner);
@@ -4046,7 +4064,8 @@ static void signal_execution_admission(void) {
     assert(!md_resource_order_start(&next) && !md_resource_order_complete(&next));
     signal_execution_checkpoint(&t);
     md_memory_release(t.memory);
-    puts("PASS signal execution checkpoint: handler acknowledgement and sigreturn retirement without kernel stops");
+    close(fd_ready); fd_ready=saved_fd;
+    puts("PASS signal execution checkpoint: interrupted wait, handler acknowledgement and sigreturn retirement");
 }
 static void fd_native_admission(void) {
     assert(!debugger);
@@ -9100,7 +9119,6 @@ int main(void) {
     nonblocking_socket_admission();
     socket_control_lengths();
     resident_receive_admission();
-    alarm(30);
     event_completion();
     lost_stop_delivery();
     orphan_loan_retirement();
