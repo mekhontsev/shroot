@@ -567,9 +567,24 @@ static void buffer_result_begin(struct thread *t,int direct) {
         t->fs.open.fd,md_fs_buffer_open_object(&t->fs.open),flags&O_CLOEXEC));
 }
 
+static struct user_pt_regs *buffer_replay_registers(struct thread *t,struct user_pt_regs *scratch) {
+    if (!t->entry.execution) return &t->execution.registers;
+    /* A resident call retains its request, not a Base register frame. The
+     * stopped adapter owns the stack and continuation for this delivery. */
+    *scratch=t->fs.registers;
+    const struct seccomp_data *call=&t->execution.request;
+    scratch->pc=call->instruction_pointer;
+    scratch->regs[8]=call->nr;
+    memcpy(scratch->regs,call->args,sizeof(call->args));
+    return scratch;
+}
+
 static void buffer_result_replay(struct thread *t) {
+    if (t->entry.control && entry_require_stop(t,MD_CONTEXT_DESCRIPTOR,0,buffer_result_replay)) return;
     t->fs.result_replay=0;
-    struct user_pt_regs regs=t->execution.registers;
+    struct user_pt_regs regs;
+    const struct user_pt_regs *original=buffer_replay_registers(t,&regs);
+    if (original!=&regs) regs=*original;
     regs.pc=RAW_GATE-4;
     if (set_registers(t->pid,&regs)) {
         t->phase=RESULT_REPLAY_ENTRY; resume(t->pid,0);
@@ -1069,7 +1084,8 @@ int fs_result_exit(struct thread *t,pid_t pid) {
         /* The gate supplies SVC, never an instruction from a patched
          * application page. Restore the original context before kernel
          * seccomp so IP- and argument-dependent rules see that call. */
-        if (!set_registers(pid,&t->execution.registers)) return 1;
+        struct user_pt_regs scratch;
+        if (!set_registers(pid,buffer_replay_registers(t,&scratch))) return 1;
         t->phase=RESULT_REPLAY_EXIT; resume(pid,0); return 1;
     }
     if (t->phase==RESULT_REPLAY_EXIT) {

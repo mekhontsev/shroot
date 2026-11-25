@@ -8911,6 +8911,20 @@ static void execution_completion(void) {
 static void execution_register_boundary(void) {
     struct thread t={.execution.stack=0x8000,.execution.registers={.pc=0x1004,.sp=0x2000,.pstate=0xa0000000}};
     for (unsigned i=0;i<31;++i) t.execution.registers.regs[i]=UINT64_C(0xf000000000000000)+i;
+    struct user_pt_regs replay;
+    assert(buffer_replay_registers(&t,&replay)==&t.execution.registers);
+    struct md_entry_channel channel={0};
+    t.entry.execution=&channel;
+    t.fs.registers=(struct user_pt_regs){.pc=0x7004,.sp=0xb000,.pstate=0x40000000};
+    for (unsigned i=0;i<31;++i) t.fs.registers.regs[i]=UINT64_C(0xd000000000000000)+i;
+    t.execution.request=(struct seccomp_data){.nr=SYS_openat,.instruction_pointer=0x3004};
+    for (unsigned i=0;i<6;++i) t.execution.request.args[i]=UINT64_C(0xc000000000000000)+i;
+    assert(buffer_replay_registers(&t,&replay)==&replay);
+    assert(replay.pc==t.execution.request.instruction_pointer && replay.regs[8]==SYS_openat);
+    assert(replay.sp==t.fs.registers.sp && replay.pstate==t.fs.registers.pstate);
+    for (unsigned i=0;i<31;++i) if (i!=8)
+        assert(replay.regs[i]==(i<6 ? t.execution.request.args[i] : t.fs.registers.regs[i]));
+    t.entry.execution=NULL;
     struct md_interception_abi saved=abi;
     abi.dispatch=0x4000; abi.done_entry=0x5000;
     struct md_guest_execution call={.number=SYS_recvmsg,.policy=MD_DISPATCH_PATHS|MD_DISPATCH_NETWORK_SCOPED,

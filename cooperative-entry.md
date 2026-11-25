@@ -875,6 +875,11 @@ transport. No second cooperative FD-delivery channel is introduced. An accepted
 mutation is never retried because its result delivery was interrupted. Ordinary
 blocking calls continue to wait in their guest thread, not in the shared worker.
 
+When an inherited host filter must admit FD delivery, a captured guest filter
+does not replace that check. For a non-direct filesystem result the kernel sees
+the original syscall number, arguments and instruction pointer. A resident
+adapter supplies its parked continuation; it need not have a Base register frame.
+
 The FD request has a distinct pending state: speculative worker scans never
 execute it. The listener matches task, sequence, number and all six arguments
 before adoption. Pending FD requests retain whether an older native effect still
