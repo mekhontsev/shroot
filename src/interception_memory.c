@@ -341,6 +341,10 @@ uintptr_t md_memory_buffer_address(struct md_interception_memory *s, const struc
     struct md_buffer_span span;
     if (!s || md_buffer_span(b,&span)) return 0;
     if (b->pool==s->buffers) return s->buffer_base ? s->buffer_base+span.offset : 0;
+    if (b->pool==md_memory_readonly_buffers(s)) {
+        uintptr_t base=md_memory_readonly_base(s);
+        return base ? base+span.offset : 0;
+    }
     for (const struct channel_block *p=s->channels;p;p=p->next)
         if (p->buffers==b->pool) return p->base+span.offset;
     return 0;

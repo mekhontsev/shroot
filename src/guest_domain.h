@@ -38,7 +38,7 @@
     X(fcntl, 1, F_OFD_SETLK) X(fcntl, 1, F_OFD_SETLKW) \
     X(prlimit64, 0, 0) \
     X(prctl, 0, PR_SET_NAME) \
-    X(prctl, 0, PR_GET_NAME) X(prctl, 0, PR_GET_SECCOMP)
+    X(prctl, 0, PR_GET_NAME)
 
 /* CLONE_FS-owned root context. Registry pins do not count as task owners. */
 struct md_guest_domain;

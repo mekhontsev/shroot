@@ -117,11 +117,15 @@ static void readonly_inputs(void) {
     assert(md_memory_readonly_prepare(memory,2,page)==-EALREADY);
     assert(!md_memory_readonly_mapped(memory,0x100000,md_buffers_size(pool)));
     assert(md_memory_readonly_mapped(memory,0x200000,md_buffers_size(pool))==-EALREADY);
+    struct md_interception_buffer loan={0};
+    assert(!md_buffers_take(pool,&loan));
+    uintptr_t address=md_memory_buffer_address(memory,&loan); assert(address==0x100000);
     assert(md_memory_mapping_observe(memory,0x100000,page));
     assert(!md_memory_readonly_intersects(memory,0x100000-page,page));
     assert(md_memory_readonly_intersects(memory,0,page+0x100000));
     struct md_interception_memory *child=md_memory_fork(memory,0),*exec=md_memory_new_image(memory);
     assert(child && exec && md_memory_readonly_base(child)==0x100000);
+    assert(md_memory_buffer_address(child,&loan)==address && !md_memory_buffer_address(exec,&loan));
     assert(!md_memory_readonly_base(exec) && !md_memory_readonly_buffers(exec));
     struct md_mapping_change change={0};
     assert(!md_memory_mapping_prepare(memory,&change,MD_MAPPING_UNMAP,0x100000,page,0,0,0));
@@ -134,8 +138,7 @@ static void readonly_inputs(void) {
         MREMAP_MAYMOVE|MREMAP_DONTUNMAP,0));
     md_memory_mapping_finish(child,&change,0x300000);
     assert(!md_memory_readonly_base(child));
-    struct md_interception_buffer loan={0};
-    assert(!md_buffers_take(pool,&loan));
+    assert(!md_memory_buffer_address(memory,&loan) && !md_memory_buffer_address(child,&loan));
     md_memory_release(memory); md_memory_release(child); md_memory_release(exec);
     struct md_buffer_span span; assert(!md_buffer_span(&loan,&span));
     assert(span.size==page && !md_buffer_release(&loan));

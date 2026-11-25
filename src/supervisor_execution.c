@@ -56,6 +56,7 @@
 #include "supervisor_fs.h"
 #include "supervisor_identity.h"
 #include "supervisor_internal.h"
+#include "task_status.h"
 #include "supervisor_io.h"
 #include "supervisor_memory.h"
 #include "supervisor_notifications.h"
@@ -146,7 +147,7 @@ static long checkpoint_native_trace(int request, pid_t pid, void *address, void 
 
 int checkpoint_restricted(pid_t pid) {
     struct thread *t=find_thread(pid);
-    if (!t) return 1;
+    if (!t || opaque_launch_filter) return 1;
     if (!t->seccomp.application_filter) return 0;
     /* Do not emulate checkpoints already admitted by every kernel filter.
      * Portable entry after exec alone does not establish helper admission. */
@@ -265,6 +266,7 @@ int machine_observe(struct thread *t,uintptr_t pc,long number) {
 }
 
 int machine_native_entry(struct thread *t,const struct seccomp_data *request,unsigned long *cookie) {
+    if (opaque_launch_filter) return 0;
     if (t->entry.blocked || t->debug.options || md_memory_exposed(t->memory)) return 0;
     struct md_svc_registry *registry=md_memory_svc(t->memory);
     int entry=md_svc_machine_native_entry(registry,request->instruction_pointer,request->nr);
@@ -2427,15 +2429,18 @@ void execution_checkpoint_event(struct thread *t,pid_t pid) {
             CHECK(listener == -1);
             listener = duplicate_fd(pid, (int)regs.regs[0]); CHECK(listener >= 0);
             if (broker) md_broker_listen(broker, listener);
+            if (launch_seccomp_clear && md_task_seccomp_filters(pid)==1)
+                t->seccomp.runtime_filters=1;
         }
         t->ready = 1;
-        t->entry.registration_revoked=!!(t->seccomp.application_filter || t->entry.blocked);
+        t->entry.registration_revoked=effective_filter(t) || t->entry.blocked;
         regs.regs[0]=t->entry.registration_revoked ? 0 : MD_INTERCEPTION_COOPERATIVE;
-        if (broker && !t->entered && (!t->entry.registration_revoked
+        if (broker && !opaque_launch_filter && !t->entered && (!t->entry.registration_revoked
                 || (t->seccomp.application_filter && md_seccomp_policy_entry_checkpoint(t->seccomp.policy)>=0))
                 && !t->debug.options && !md_memory_exposed(t->memory))
             regs.regs[0]|=MD_INTERCEPTION_MACHINE;
         if (statistics) regs.regs[0]|=MD_INTERCEPTION_STATISTICS;
+        if (t->seccomp.runtime_filters) regs.regs[0]|=MD_INTERCEPTION_SELECTOR_INPUTS;
         if (md_host_logical_sigsys()) regs.regs[0]|=MD_INTERCEPTION_HOST_POLICY;
         if (!set_registers(pid, &regs)) return;
         describe_process(pid, 0);

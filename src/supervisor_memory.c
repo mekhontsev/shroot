@@ -27,6 +27,7 @@
 #include "proc_file.h"
 #include "received_fds.h"
 #include "resource_order.h"
+#include "seccomp_capture.h"
 #include "seccomp_install.h"
 #include "seccomp_policy.h"
 #include "supervisor_actors.h"
@@ -446,15 +447,18 @@ void memory_buffer_control(struct thread *t,const struct supervisor_control_requ
         SUPERVISOR_TRACE("PROBE buffer-mapping pid=%d bytes=%llu result=%ld\n",t->pid,control->args[1],result);
         break;
     case MD_BUFFER_READONLY_MAPPED:
-        if ((t->entered || t->phase!=IDLE) && !(t->seccomp.preflight && t->phase==DISPATCHING
-                && t->seccomp.install && md_resource_order_state(&t->seccomp.install->memory)==MD_RESOURCE_ORDER_RUNNING)) break;
+        if (t->entered || t->phase!=IDLE) break;
         result=md_memory_readonly_mapped(t->memory,control->args[0],control->args[1]);
         break;
     case MD_BUFFER_READONLY_INSTALL:
         if (control->args[0] || control->args[1] || t->memory_op.buffer_mapping || !t->seccomp.preflight
                 || t->phase!=DISPATCHING || !t->seccomp.install
                 || md_resource_order_state(&t->seccomp.install->memory)!=MD_RESOURCE_ORDER_RUNNING
-                || !md_memory_readonly_buffers(t->memory) || md_memory_readonly_base(t->memory)) break;
+                || md_memory_readonly_base(t->memory)) break;
+        if (!md_memory_readonly_buffers(t->memory)) {
+            result=md_memory_readonly_prepare(t->memory,MD_SECCOMP_IMAGE_SLOTS,sizeof(struct md_seccomp_image));
+            if (result) break;
+        }
         buffer_mapping_begin(t,r); return;
     case MD_BUFFER_CHANNEL_INSTALL:
         if (control->args[0] || control->args[1] || t->memory_op.buffer_mapping) break;
@@ -1067,7 +1071,7 @@ void memory_start(struct thread *t) {
         if (shared) {
             if (error) {
                 memory_kernel_release(t,error); t->phase=IDLE; entry_complete(t,error);
-            } else if (t->memory_op.backing_pending && !t->seccomp.application_filter) {
+            } else if (t->memory_op.backing_pending && !effective_filter(t)) {
                 memory_entry_context(t);
             } else {
                 uint64_t args[6]; memcpy(args,call->args,sizeof(args));
@@ -1172,7 +1176,7 @@ int memory_capture_begin(struct thread *t,const struct user_pt_regs *returned) {
     /* Optional backing capture must not add clone/sendmsg requirements to an
      * already successful mmap. A filter can kill, not merely reject, the
      * helper's creation. Retain the ordinary memory path in that domain. */
-    if (t->seccomp.application_filter || !t->memory_op.backing_pending || (long)returned->regs[0]<0
+    if (effective_filter(t) || !t->memory_op.backing_pending || (long)returned->regs[0]<0
             || t->memory_op.change.backing || t->memory_op.change.restrictions
             || t->execution.request.nr!=SYS_mmap || (t->execution.request.args[3]&MAP_ANONYMOUS)
             || (t->execution.request.args[3]&MAP_TYPE)!=MAP_PRIVATE || !md_memory_private_access(t->memory)) return 0;
@@ -1267,7 +1271,7 @@ int entry_fence_admission(struct thread *t,const struct user_pt_regs *r,int stat
     if (filter) {
         int group=md_seccomp_filter_flags(call.nr,call.args[1])&SECCOMP_FILTER_FLAG_TSYNC;
         for (struct thread *p=threads;p;p=p->next) if (p->pid
-                && (p==t || (group && p->tgid==t->tgid)) && !p->seccomp.application_filter) {
+                && (p==t || (group && p->tgid==t->tgid)) && !effective_filter(p)) {
             unrestricted=1; break;
         }
     }

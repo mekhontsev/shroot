@@ -2,12 +2,18 @@
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <stddef.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <linux/netlink.h>
 #include <linux/capability.h>
@@ -17,7 +23,88 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* getuid ignores its arguments, but seccomp sees them. Only tag the test call
+ * so that installing the policy cannot change the launcher's own uid queries. */
+#define POLICY_UID_TAG 0x51a77001UL
+
+static int check_policy(int denied) {
+    int mode=prctl(PR_GET_SECCOMP,0,0,0,0), published=-1, filters=-1;
+    FILE *status=fopen("/proc/self/status","r");
+    if (!status) { perror("policy status"); return 1; }
+    char line[256];
+    while (fgets(line,sizeof(line),status)) {
+        (void)sscanf(line,"Seccomp: %d",&published);
+        (void)sscanf(line,"Seccomp_filters: %d",&filters);
+    }
+    int error=ferror(status);
+    if (fclose(status) || error || mode!=published || filters<0
+            || (mode!=0 && mode!=SECCOMP_MODE_FILTER) || (!!mode!=!!filters) || (denied && !mode)) {
+        fprintf(stderr,"policy view: prctl=%d status=%d filters=%d denied=%d\n",mode,published,filters,denied);
+        return 1;
+    }
+    errno=0;
+    long priority=syscall(SYS_getpriority,PRIO_PROCESS,0);
+    if (denied ? priority!=-1 || errno!=EACCES : priority<0) {
+        fprintf(stderr,"getpriority: result=%ld errno=%d denied=%d\n",priority,errno,denied); return 1;
+    }
+    long uid=syscall(SYS_getuid,0L,0L,0L,0L,0L,0L);
+    if (uid<0) { perror("getuid control"); return 1; }
+    for (unsigned i=0;i<34;++i) {
+        unsigned long tag=i==32 ? POLICY_UID_TAG : 0;
+        errno=0;
+        long result=syscall(SYS_getuid,tag,0L,0L,0L,0L,0L);
+        int expect_denial=tag && denied;
+        if (expect_denial ? result!=-1 || errno!=EACCES : result!=uid) {
+            fprintf(stderr,"getuid: iteration=%u result=%ld errno=%d denied=%d\n",
+                    i,result,errno,expect_denial); return 1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc>=3 && (!strcmp(argv[1],"exec-nnp") || !strcmp(argv[1],"exec-deny-priority"))) {
+        if (prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0)<0) { perror("set no_new_privs"); return 1; }
+        if (!strcmp(argv[1],"exec-deny-priority")) {
+            struct sock_filter code[]={
+                BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getpriority,3,0),
+                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getuid,0,3),
+                BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,args[0])),
+                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,POLICY_UID_TAG,0,1),
+                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EACCES),
+                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)
+            };
+            struct sock_fprog program={sizeof(code)/sizeof(*code),code};
+            if (prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&program)<0) { perror("install test policy"); return 1; }
+        }
+        execv(argv[2],argv+2); perror("exec policy test"); return 1;
+    }
+    if (argc==2 && (!strcmp(argv[1],"priority-allowed") || !strcmp(argv[1],"priority-denied"))) {
+        if (prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0)!=1) { fputs("no_new_privs was not inherited\n",stderr); return 1; }
+        int denied=!strcmp(argv[1],"priority-denied");
+        if (check_policy(denied)) return 1;
+        if (denied) {
+            struct sock_filter allow=BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW);
+            struct sock_fprog suffix={1,&allow};
+            if (prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&suffix)<0) { perror("extend test policy"); return 1; }
+            if (check_policy(denied)) return 1;
+            int fd=open(argv[0],O_RDONLY|O_CLOEXEC);
+            char header[4];
+            if (fd<0) { perror("open executable under stacked policy"); return 1; }
+            if (read(fd,header,sizeof(header))!=sizeof(header) || memcmp(header,"\177ELF",4) || close(fd)) {
+                fputs("no executable descriptor under stacked policy\n",stderr); return 1;
+            }
+            int ep=epoll_create1(EPOLL_CLOEXEC), ready=eventfd(1,EFD_CLOEXEC);
+            struct epoll_event watch={.events=EPOLLIN,.data.u64=42}, event={0};
+            if (ep<0 || ready<0 || epoll_ctl(ep,EPOLL_CTL_ADD,ready,&watch)<0
+                    || epoll_pwait(ep,&event,1,0,NULL)!=1 || !(event.events&EPOLLIN)
+                    || event.data.u64!=42 || close(ready) || close(ep)) {
+                fputs("epoll readiness lost under stacked policy\n",stderr); return 1;
+            }
+        }
+        puts(argv[1]); return 0;
+    }
     if (argc==2 && !strcmp(argv[1],"external-folders")) {
         const char *rw="/mnt/android/Work",*ro="/mnt/android/Read only";
         int wd=open(rw,O_RDONLY|O_DIRECTORY),rd=open(ro,O_RDONLY|O_DIRECTORY);

@@ -530,7 +530,7 @@ static void outgoing_begin(struct thread *t, const struct user_pt_regs *regs) {
     if (!error) { owner=calloc(1,sizeof(*owner)); if (!owner) error=-ENOMEM; }
     if (!error) {
         *owner=(struct outgoing_owner){.caller=t->pid,.input=input,
-            .brokered=t->seccomp.application_filter,
+            .brokered=effective_filter(t),
             .options=((struct md_task_outgoing_frame *)span.data)->options,.destination={.anchor=-1}};
         if (regs) owner->continuation=*regs;
         owner->options.brokered=owner->brokered || t->entry.execution!=NULL;
@@ -834,7 +834,7 @@ static void receive_begin(struct thread *t, const struct user_pt_regs *regs,unsi
     if (!error) { owner=calloc(1,sizeof(*owner)); if (!owner) error=-ENOMEM; }
     if (!error) {
         *owner=(struct receive_owner){.caller=t->pid,
-            .brokered=t->seccomp.application_filter,
+            .brokered=effective_filter(t),
             .request=((struct md_task_receive_frame *)span.data)->input};
         if (regs) owner->continuation=*regs;
         if (command==MD_BUFFER_NETWORK_DATA) {

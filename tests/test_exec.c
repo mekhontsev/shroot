@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_filter_count.h"
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>
@@ -21,8 +22,7 @@ extern char **environ;
 static int filters(void) {
     FILE *f = fopen("/proc/self/status", "r");
     assert(f);
-    char line[256]; int count = -1;
-    while (fgets(line, sizeof(line), f)) if (sscanf(line, "Seccomp_filters: %d", &count) == 1) break;
+    int count=backing_filter_count(f);
     fclose(f);
     assert(count > 0);
     return count;

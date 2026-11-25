@@ -366,6 +366,22 @@ focused entry fixture does not certify those independent workflows.
 
 ## Admission Limits
 
+At launch, `no_new_privs` alone does not disable lazy entry. If it is set
+and the inherited seccomp mode is nonzero or unavailable, Shroot retains
+Base. A nested launch can use lazy entry when its outer runtime confirms
+that the entire backing chain consists of its own listener and selectors.
+Only successful selector installs from peer-read-only inputs extend that
+chain. An unknown or additional filter is not subtracted. Guest
+`PR_GET_SECCOMP` and proc status report the guest mode; when proc hides an
+all-runtime chain, `ShrootBackingFilters` retains the kernel count for diagnostics.
+A later guest filter is not evidence about the inherited policy.
+The launch-policy controls check both an ordinary syscall and an
+argument-specific denial at a warmed SVC site before and after a guest
+ALLOW filter. The unrestricted control must independently record lazy
+completions for a lazy profile to pass. With `--statistics`,
+`SHROOT_ENTRY_ADMISSION` records this decision separately from completed
+lazy calls; a successful program exit is not evidence that lazy entry ran.
+
 Arbitrary self-modifying code, externally writable aliases, simultaneous
 debugger ownership and SVE/SME/MTE/PAC/BTI are not certified by these tests.
 Frame, guard and code-pool alignment covers 4/16/64 KiB pages; actual device

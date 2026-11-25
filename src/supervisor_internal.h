@@ -100,6 +100,17 @@ extern int socket_events;
 extern struct md_namespace_broker *broker;
 extern struct md_task_registry *tasks;
 extern struct md_identity launch_identity;
+extern int opaque_launch_filter;
+extern int launch_seccomp_clear;
+static inline int effective_filter(const struct thread *t) {
+    return opaque_launch_filter || t->seccomp.application_filter;
+}
+static inline unsigned private_filter_prefix(const struct thread *t) {
+    return t && t->ready && t->entered && !effective_filter(t) ? t->seccomp.runtime_filters : 0;
+}
+static inline int filter_chain_captured(const struct thread *t) {
+    return !opaque_launch_filter && t->seccomp.policy;
+}
 extern uid_t native_uid;
 extern int virtual_identity;
 extern struct md_admission admission;

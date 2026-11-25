@@ -567,6 +567,7 @@ int filter_revoke_entry(struct thread *t,const struct seccomp_data *call) {
 }
 
 int filter_entry_eligible(const struct thread *t) {
+    if (opaque_launch_filter) return 0;
     if (!t->seccomp.application_filter) return 1;
     const struct md_svc_registry *registry=md_memory_svc(t->memory);
     return registry && md_seccomp_policy_entry_compatible(t->seccomp.policy,registry->image)
@@ -623,6 +624,7 @@ static void filter_install_resume(struct thread *t,const struct user_pt_regs *re
 
 int filter_entry_map(struct thread *t,const struct user_pt_regs *regs,
         void (*complete)(struct thread *,const struct user_pt_regs *)) {
+    if (opaque_launch_filter) return 0;
     struct md_svc_registry *registry=md_memory_svc(t->memory);
     if (!registry || !(registry->pause_reasons&MD_SVC_PAUSE_FILTER) || !t->seccomp.policy
             || !md_seccomp_policy_entry_compatible(t->seccomp.policy,registry->image)

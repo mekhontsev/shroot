@@ -283,6 +283,9 @@ struct supervisor_execution_state {
 struct supervisor_seccomp_state {
     int length;
     int application_filter;
+    /* Compare this confirmed prefix with a fresh task snapshot before
+     * reporting no guest filter. Zero means no provenance, not no filters. */
+    unsigned runtime_filters;
     struct md_seccomp_policy *policy;
     struct md_seccomp_policy *admission_policy;
     int admission_policy_valid;

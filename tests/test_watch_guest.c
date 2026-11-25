@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "test_filter_count.h"
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>
@@ -45,9 +46,7 @@ static void create(const char *name) {
     int fd = open(name, O_CREAT | O_EXCL | O_RDWR, 0600); CHECK(fd >= 0); CHECK(!close(fd));
 }
 static int filter_count(FILE *status) {
-    rewind(status);
-    char line[256]; int count = -1;
-    while (fgets(line, sizeof(line), status)) if (sscanf(line, "Seccomp_filters: %d", &count) == 1) break;
+    int count=backing_filter_count(status);
     CHECK(!ferror(status) && count > 0); return count;
 }
 static int filters(void) {

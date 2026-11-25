@@ -1479,8 +1479,11 @@ Stock glibc/musl signal storms and real document-portal shutdown exercise
 the integrated owner. Device execution remains 6.12/4 KiB, not a 5.15 claim.
 Inherited no_new_privs is a credential restriction, not a seccomp filter. With
 that flag set, an active or unreadable seccomp mode selects restricted service
-checkpoints; mode zero retains normal admission. `test_native_suite.py` covers
-no_new_privs alone. `test_capabilities` verifies denied required syscalls
+checkpoints; mode zero requires a matching proc status snapshot. A nested
+guest need not count the parent runtime's confirmed private selectors as
+application filters. Native-only probes still consult the backing chain.
+`test_native_suite.py` checks both no_new_privs alone and inherited denials.
+`test_capabilities` verifies denied required syscalls
 produce admission errors instead of falling through a rejected marker.
 
 Bootstrap supplies both exact program/interpreter FDs in one admission before

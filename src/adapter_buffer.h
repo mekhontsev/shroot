@@ -60,6 +60,7 @@ static inline int md_adapter_buffer_shared(unsigned long command) {
 #ifndef MD_USE_LIBC
 int md_adapter_buffer_install(void);
 int md_adapter_readonly_install(void);
+int md_adapter_readonly_require(void);
 int md_adapter_buffer_ready(void);
 long md_adapter_buffer_take(void);
 struct md_adapter_input md_adapter_buffer_begin(unsigned command,unsigned long argument);

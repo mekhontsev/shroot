@@ -558,7 +558,7 @@ int interrupted_metadata_event(struct thread *t,int status,const struct rusage *
      * cancellation must retain the same metadata replay as the original SVC;
      * it is not an application's interruptible native wait. */
     if (site) regs.pc=site->direct.svc;
-    if (t->seccomp.application_filter) {
+    if (effective_filter(t)) {
         struct seccomp_data call=syscall_description(&regs); call.instruction_pointer+=4;
         uint32_t decision;
         CHECK(!md_seccomp_policy_eval(admission_policy(t),&call,&decision));

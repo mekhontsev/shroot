@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "ofd_order.h"
+#include "task_status.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/kcmp.h>
@@ -32,7 +33,7 @@ static int comparison(struct md_ofd_orders *q,int fd) {
     /* An inherited filter may kill kcmp instead of returning an errno. Never
      * probe it in a filtered owner. Coarser ordering preserves cursor safety;
      * it does not claim that separate opens share an open description. */
-    if (prctl(PR_GET_SECCOMP,0,0,0,0)==0) {
+    if (prctl(PR_GET_SECCOMP,0,0,0,0)==0 && md_task_backing_seccomp_filters(gettid(),NULL)==0) {
         long same=syscall(SYS_kcmp,getpid(),getpid(),KCMP_FILE,fd,fd);
         if (!same) { q->comparison=KCMP; return 0; }
         if (same>=0) return -EIO;

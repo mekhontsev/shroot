@@ -290,6 +290,10 @@ class Suite:
                 record = json.loads(line.removeprefix('SVC_RUNTIME_STATS '))
                 evidence['processes'].append(record)
                 evidence['completed'] += record['completed']
+            elif line.startswith('SHROOT_ENTRY_ADMISSION '):
+                record = json.loads(line.removeprefix('SHROOT_ENTRY_ADMISSION '))
+                if record not in evidence.setdefault('admission', []):
+                    evidence['admission'].append(record)
 
     def finish(self):
         coverage_error = None
@@ -305,6 +309,8 @@ class Suite:
             if self.report['passed'] and evidence is not None:
                 if not evidence['completed']:
                     coverage_error = 'No completed lazy SVC calls; Base-only execution is not a pass'
+                    if evidence.get('admission'):
+                        coverage_error += ': ' + json.dumps(evidence['admission'])
                 elif any(item['unknown'] for item in evidence['processes']):
                     coverage_error = 'Lazy SVC entry reported an unknown outcome'
                 if coverage_error:

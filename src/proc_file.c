@@ -15,6 +15,7 @@
 #include "fs_anchor.h"
 #include "mount_policy.h"
 #include "signal_view.h"
+#include "task_status.h"
 #include <linux/magic.h>
 #include <dirent.h>
 #include <errno.h>
@@ -35,6 +36,7 @@ struct md_proc_file {
     pid_t tracer;
     int process_state;
     int process_inspectable;
+    unsigned filter_prefix;
     struct md_signal_status signals;
     struct md_proc_syscall_view syscall;
     int syscall_known;
@@ -495,6 +497,9 @@ static pid_t process_number(struct md_pid_namespace *view, long native) {
     pid_t number=md_pid_identity_number(id,view);
     md_pid_identity_release(id); return number;
 }
+void md_proc_file_filter_prefix(struct md_proc_file *f,unsigned prefix) {
+    if (!f->content && f->kind==MD_PROC_FILE_STATUS) f->filter_prefix=prefix;
+}
 static void process_status_line(struct md_proc_file *f, FILE *out, const char *line) {
     if (f->signals.known || f->signals.blocked_known) {
         static const char *const names[]={"SigBlk:","SigPnd:","SigCgt:","SigIgn:","ShdPnd:"};
@@ -622,6 +627,9 @@ static int process_content(struct md_proc_file *f) {
             line=end+1;
         }
     } else if (f->kind==MD_PROC_FILE_STATUS) {
+        int private_only=f->filter_prefix && md_status_decimal(source,"Seccomp:")==2
+            && md_status_decimal(source,"Seccomp_filters:")==f->filter_prefix;
+        int publish_backing=private_only && !strstr(source,"\nShrootBackingFilters:");
         int have_namespace_fields=strstr(source,"\nNSpid:")!=NULL;
         char *tgid_line=strstr(source,"\nTgid:");
         pid_t tgid=tgid_line ? (pid_t)strtol(tgid_line+6,NULL,10) : f->node.process;
@@ -629,7 +637,14 @@ static int process_content(struct md_proc_file *f) {
         while (*line) {
             char *end=strchr(line,'\n');
             if (!end) { error=-EIO; break; }
-            char saved=end[1]; end[1]=0; process_status_line(f,out,line); end[1]=saved; line=end+1;
+            char saved=end[1]; end[1]=0;
+            if (private_only && !strncmp(line,"Seccomp:",8)) {
+                if (publish_backing) fprintf(out,"ShrootBackingFilters:\t%u\n",f->filter_prefix);
+                fputs("Seccomp:\t0\n",out);
+            }
+            else if (private_only && !strncmp(line,"Seccomp_filters:",16)) fputs("Seccomp_filters:\t0\n",out);
+            else process_status_line(f,out,line);
+            end[1]=saved; line=end+1;
         }
         /* CONFIG_PID_NS is optional on the host. The mounted guest proc view
          * still publishes its own namespace identity fields. */

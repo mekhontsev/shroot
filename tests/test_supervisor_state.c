@@ -2201,6 +2201,20 @@ static void machine_context_admission(void) {
     assert(!md_buffers_create_readonly(1,128,&pool));
     assert(!md_memory_snapshot_publish(t.memory,md_seccomp_policy_identity(t.seccomp.policy),pool,0x200000));
     assert(machine_discovery(&t));
+    /* A captured guest ALLOW chain says nothing about an opaque parent. */
+    t.execution.request.nr=SYS_openat;
+    assert(filter_chain_captured(&t) && !buffer_result_needs_replay(&t,0));
+    opaque_launch_filter=1;
+    assert(effective_filter(&t) && !filter_chain_captured(&t) && !machine_discovery(&t));
+    assert(buffer_result_needs_replay(&t,0) && !buffer_result_needs_replay(&t,1));
+    t.execution.request.nr=SYS_getuid;
+    assert(!buffer_result_needs_replay(&t,0));
+    t.seccomp.application_filter=0;
+    assert(effective_filter(&t) && !machine_discovery(&t));
+    opaque_launch_filter=0;
+    assert(!effective_filter(&t));
+    t.seccomp.application_filter=1;
+    assert(machine_discovery(&t));
     const long mapping_calls[]={SYS_mmap,SYS_munmap,SYS_mprotect,SYS_mremap};
     for (unsigned i=0;i<sizeof(mapping_calls)/sizeof(*mapping_calls);++i) {
         __u64 args[]={0x200000,4096,4096,MAP_FIXED,0x400000,0};

@@ -405,9 +405,7 @@ void buffer_setup(struct thread *t, const struct seccomp_notif *q) {
         : (sizeof(union md_adapter_frame)+page-1)/page*page
             *(MD_ADAPTER_BUFFER_SLOTS+MD_ADAPTER_CONTROL_SLOTS+MD_ADAPTER_CHANNEL_SLOTS);
     struct seccomp_notif_resp reply={.id=q->id};
-    int preparing=readonly && t->seccomp.preflight && t->phase==DISPATCHING && t->seccomp.install
-        && md_resource_order_state(&t->seccomp.install->memory)==MD_RESOURCE_ORDER_RUNNING;
-    if (!t->ready || (!preparing && (t->entered || t->phase!=IDLE))
+    if (!t->ready || t->entered || t->phase!=IDLE
             || q->data.instruction_pointer!=RAW_GATE || q->data.args[1]!=size
             || q->data.args[2]>1 || q->data.args[3] || q->data.args[4] || q->data.args[5]) reply.error=-EPERM;
     else if (readonly) reply.error=md_memory_readonly_prepare(t->memory,MD_SECCOMP_IMAGE_SLOTS,sizeof(struct md_seccomp_image));
@@ -545,13 +543,16 @@ int direct_addfd(const struct thread *t, const struct md_fs_buffer_frame *frame)
         && !frame->reply.result.selectors && t->fs.open.completion.kind==MD_OPEN_READY;
 }
 
+static int buffer_result_needs_replay(const struct thread *t,int direct) {
+    /* A captured suffix can admit its own gate, never an unknown prefix. */
+    return !direct && effective_filter(t) && !filter_chain_captured(t)
+        && md_broker_filesystem_call(t->execution.request.nr);
+}
+
 static void buffer_result_begin(struct thread *t,int direct) {
     struct seccomp_data call={.nr=direct ? SYS_fstat : SYS_gettid,.arch=AUDIT_ARCH_AARCH64,
         .instruction_pointer=direct ? t->execution.request.instruction_pointer : abi.buffer_admit};
-    /* Captured policies retain the owned publication gate across TSYNC. Only
-     * an uncaptured inherited policy needs original-site result admission. */
-    int replay=!direct && !t->seccomp.policy && t->seccomp.application_filter
-        && md_broker_filesystem_call(t->execution.request.nr);
+    int replay=buffer_result_needs_replay(t,direct);
     t->fs.result_replay=replay;
     if (replay) {
         struct md_buffer_span span;
@@ -921,7 +922,7 @@ void fs_buffer_control(struct thread *t,const struct supervisor_control_request 
 int direct_begin(struct thread *t) {
     long nr=t->execution.request.nr;
     int status=nr!=SYS_openat;
-    if (!t->endpoint[0] || t->fs.direct || t->fs.buffer.pool || t->seccomp.application_filter
+    if (!t->endpoint[0] || t->fs.direct || t->fs.buffer.pool || effective_filter(t)
             || t->debug.options || t->debug.call_active || t->debug.step_call
             || (status ? nr!=SYS_unlinkat && nr!=SYS_renameat && nr!=SYS_renameat2
                 && nr!=SYS_linkat && nr!=SYS_mkdirat : nr!=SYS_openat)) return 0;

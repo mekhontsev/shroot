@@ -40,7 +40,7 @@ static long execute_files(const struct md_fs *fs,const struct md_guest_execution
     if (nr==SYS_ppoll || nr==SYS_pselect6 || nr==SYS_rt_sigsuspend) return md_poll_call(nr,args,call->prepared);
     if (nr==SYS_seccomp || nr==SYS_prctl) {
         md_cooperative_revoke();
-        long result=md_adapter_readonly_install();
+        long result=md_adapter_readonly_require();
         return result || !(call->policy&MD_DISPATCH_FILTER_SELECTORS)
             ? result : md_fd_filter_prepare_sandbox();
     }

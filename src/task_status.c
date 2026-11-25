@@ -114,11 +114,8 @@ long md_task_umask(int tid) {
     RAW1(close,fd);
     return result;
 }
-static long status_decimal(int tid,const char *field) {
-    char text[2048];
-    long result=task_status(tid,text,sizeof(text));
-    if (result<0) return result;
-    for (char *p=text;*p;++p) {
+long md_status_decimal(const char *text,const char *field) {
+    for (const char *p=text;*p;++p) {
         if ((p!=text && p[-1]!='\n') || !md_prefix(p,field)) continue;
         p+=md_length(field);
         while (*p==' ' || *p=='\t') ++p;
@@ -131,7 +128,28 @@ static long status_decimal(int tid,const char *field) {
     }
     return -ENOTSUP;
 }
+static long status_decimal(int tid,const char *field) {
+    char text[2048];
+    long result=task_status(tid,text,sizeof(text));
+    return result<0 ? result : md_status_decimal(text,field);
+}
 long md_task_parent(int tid) { return status_decimal(tid,"PPid:"); }
+long md_task_seccomp_filters(int tid) { return status_decimal(tid,"Seccomp_filters:"); }
+long md_task_backing_seccomp_filters(int tid,long *visible) {
+    char text[4096];
+    if (visible) *visible=-1;
+    long result=task_status(tid,text,sizeof(text));
+    if (result<0) return result;
+    if ((size_t)result==sizeof(text)-1) return -EOVERFLOW;
+    long mode=md_status_decimal(text,"Seccomp:");
+    long count=md_status_decimal(text,"Seccomp_filters:");
+    if (count<0 || (mode!=0 && mode!=2) || !!mode!=!!count) return -EIO;
+    result=md_status_decimal(text,"ShrootBackingFilters:");
+    if (result==-ENOTSUP) result=count;
+    if (result<count) return -EIO;
+    if (visible) *visible=count;
+    return result;
+}
 long md_task_core_dumping(int tid) {
     long value=status_decimal(tid,"CoreDumping:");
     return value>1 ? -EIO : value;

@@ -36,6 +36,7 @@
 #include "ipc_namespace.h"
 #include "ipc_origins.h"
 #include "launch_identity.h"
+#include "task_status.h"
 #include "launch_registry.h"
 #include "linux_abi.h"
 #include "mount_copy_service.h"
@@ -135,6 +136,8 @@ int socket_events=-1;
 struct md_namespace_broker *broker;
 struct md_task_registry *tasks;
 struct md_identity launch_identity;
+int opaque_launch_filter;
+int launch_seccomp_clear;
 uid_t native_uid;
 int virtual_identity;
 struct md_admission admission = {.source = -1};
@@ -831,7 +834,17 @@ int main(int argc, char **argv) {
     launch_identity.no_new_privs = (unsigned)inherited_no_new_privs;
     /* no_new_privs is a credential property, not evidence of an installed
      * filter. An unavailable mode query must retain restricted admission. */
-    int inherited_restricted = inherited_no_new_privs && prctl(PR_GET_SECCOMP, 0, 0, 0, 0) != 0;
+    int mode = inherited_no_new_privs ? prctl(PR_GET_SECCOMP, 0, 0, 0, 0) : 0;
+    int query_errno = mode<0 ? errno : 0;
+    long visible=-1;
+    launch_seccomp_clear = mode==0 && md_task_backing_seccomp_filters(gettid(),&visible)==0;
+    if (inherited_no_new_privs) {
+        opaque_launch_filter = mode != 0 || visible != 0;
+        if (opaque_launch_filter && (statistics || diagnostics))
+            fprintf(stderr, "SHROOT_ENTRY_ADMISSION {\"reason\":\"opaque-inherited-policy\","
+                "\"noNewPrivs\":%d,\"seccompMode\":%d,\"queryErrno\":%d}\n",
+                inherited_no_new_privs, mode, query_errno);
+    }
     CHECK(argument < argc);
     CHECK(!image_layout_prepare(argv[argument]));
     struct md_process_signals inherited;
@@ -871,7 +884,6 @@ int main(int argc, char **argv) {
 #endif
     thread(leader)->born = 1;
     thread(leader)->signals.pending=md_signal_pending_new(); CHECK(thread(leader)->signals.pending);
-    thread(leader)->seccomp.application_filter=inherited_restricted;
     close(channel[1]);
     int *keep = malloc((owners.count + 2) * sizeof(*keep)); CHECK(keep);
     keep[0] = signal_fd; keep[1] = channel[0];

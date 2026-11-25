@@ -168,6 +168,12 @@ int process_limit_call(struct thread *t,const struct seccomp_data *call,struct u
 int identity_call(struct thread *t,const struct seccomp_data *call,struct user_pt_regs *r, unsigned long cookie) {
     if (call->instruction_pointer == RAW_GATE) return 0;
     long nr = call->nr, value;
+    if (nr==SYS_prctl && call->args[0]==PR_GET_SECCOMP) {
+        unsigned prefix=private_filter_prefix(t);
+        if (prefix && md_task_seccomp_filters(t->pid)==(long)prefix) {
+            return_value(t,r,0); return 1;
+        }
+    }
     if (nr==SYS_prctl && ((int)call->args[0]==PR_GET_DUMPABLE || (int)call->args[0]==PR_SET_DUMPABLE)) {
         value=(int)call->args[0]==PR_GET_DUMPABLE ? md_process_dumpable(t->resources.access)
             : md_process_set_dumpable(t->resources.access,call->args[1]);

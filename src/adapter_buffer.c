@@ -26,11 +26,6 @@ int md_adapter_readonly_install(void) {
     size_t stride=(sizeof(struct md_seccomp_image)+md_page_size-1)/md_page_size*md_page_size;
     size_t size=stride*MD_SECCOMP_IMAGE_SLOTS;
     long fd=RAW3(prctl,MD_GUEST_BUFFER,size,1);
-    if (fd==-EMFILE) {
-        long result=md_guest_buffer_control(MD_BUFFER_READONLY_INSTALL,0,0);
-        if (!result) readonly_enabled=1;
-        return (int)result;
-    }
     if (fd<0) return (int)fd;
     long base=RAW6(mmap,NULL,size,PROT_READ,MAP_SHARED,fd,0);
     long closed=RAW1(close,fd);
@@ -38,6 +33,14 @@ int md_adapter_readonly_install(void) {
     long result=closed<0 ? closed : md_guest_buffer_control(MD_BUFFER_READONLY_MAPPED,base,size);
     if (result<0) RAW2(munmap,base,size);
     else readonly_enabled=1;
+    return (int)result;
+}
+int md_adapter_readonly_require(void) {
+    if (readonly_enabled) return 0;
+    /* After guest entry, infrastructure must not borrow an application FD.
+     * The mapping owner prepares and publishes the immutable input together. */
+    long result=md_guest_buffer_control(MD_BUFFER_READONLY_INSTALL,0,0);
+    if (!result) readonly_enabled=1;
     return (int)result;
 }
 long md_adapter_buffer_take(void) {

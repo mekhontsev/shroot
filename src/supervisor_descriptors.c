@@ -635,7 +635,7 @@ int fd_close_compact(struct thread *t,unsigned long cookie,const struct ptrace_s
     } else {
         /* Only our own filter can encode the descriptor. An application TRACE
          * cookie is not authority, even if it happens to match this encoding. */
-        if (t->seccomp.application_filter || !(cookie&MD_INTERCEPT_CLOSE)) return 0;
+        if (effective_filter(t) || !(cookie&MD_INTERCEPT_CLOSE)) return 0;
         number=(int)(cookie&MD_INTERCEPT_CLOSE_MAX);
     }
     int ready=md_fd_order_begin(t->resources.files,&t->descriptors.order,fd_wakeup);
@@ -697,7 +697,7 @@ int fd_native_classify(struct thread *t,const struct seccomp_data *call,unsigned
         native=pure
             && (!md_control_epoll_from_object(object) || (nr==SYS_epoll_pwait && !(int)call->args[3]));
         probe=pure && !native && nr==SYS_epoll_pwait && t->phase==IDLE
-            && !call->args[4] && !t->seccomp.application_filter
+            && !call->args[4] && !effective_filter(t)
             && !t->machine.syscall_exit && !t->machine.retry_svc;
         md_fd_object_release(object);
     } else native=poll ? md_fd_origins_native_poll(&turn) : md_fd_origins_exclusive(&turn)
@@ -741,7 +741,7 @@ int fd_native_io(struct thread *t,const struct ptrace_syscall_info *info) {
      * Retain its exit across TSYNC: interrupting a blocked read would restart
      * it at that site under a newer policy. Resident native calls use the
      * admitted gate and have no exit observer. */
-    if (t->phase==IDLE && t->seccomp.application_filter) {
+    if (t->phase==IDLE && effective_filter(t)) {
         uint64_t args[6]; memcpy(args,call.args,sizeof(args));
         if (md_execution_native_context(call.nr,args)==MD_CONTEXT_WAIT)
             t->phase=NATIVE_WAIT;

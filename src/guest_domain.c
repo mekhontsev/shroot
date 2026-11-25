@@ -305,7 +305,7 @@ int md_domain_native_call(long nr, const unsigned long a[6]) {
     case SYS_seccomp: case SYS_getresuid: case SYS_getresgid: return 1;
     case SYS_sendto: return !a[4];
     case SYS_prctl: return a[0] == PR_SET_DUMPABLE || a[0] == PR_GET_DUMPABLE || a[0] == PR_SET_SECCOMP
-        || a[0] == PR_SET_NO_NEW_PRIVS || a[0] == PR_GET_NO_NEW_PRIVS;
+        || a[0] == PR_SET_NO_NEW_PRIVS || a[0] == PR_GET_NO_NEW_PRIVS || a[0] == PR_GET_SECCOMP;
     default: return 0;
     }
 }

@@ -658,7 +658,7 @@ static void readiness_begin(struct thread *t,const struct user_pt_regs *r) {
     if (error) { buffer_reply(t,error); return; }
     if (r) o->continuation=*r;
     for (unsigned n=0;n<READINESS_QUEUES;++n) o->loans[n].number=-1;
-    if (!t->seccomp.policy && (t->execution.request.nr==SYS_epoll_pwait || t->execution.request.nr==SYS_epoll_pwait2
+    if (!filter_chain_captured(t) && (t->execution.request.nr==SYS_epoll_pwait || t->execution.request.nr==SYS_epoll_pwait2
             || t->execution.request.nr==SYS_epoll_ctl)) {
         /* Reuse the admitted call for ADDFD, not an unrelated service syscall
          * which an application filter may deny. The owner validates replay. */
