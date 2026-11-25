@@ -932,10 +932,17 @@ static void memory_entry_context(struct thread *t) {
     CHECK(entry_context(t,MD_CONTEXT_MEMORY));
 }
 
+static int mapping_can_change_source(long nr,unsigned long flags) {
+    if (nr==SYS_mmap) return (flags&(MAP_FIXED|MAP_FIXED_NOREPLACE))==MAP_FIXED;
+    /* SysV attaches reject SHM_REMAP and use MAP_FIXED_NOREPLACE at an
+     * explicit address. They never change an existing mapping. */
+    return nr==SYS_munmap || nr==SYS_mprotect || nr==SYS_mremap;
+}
+
 static int memory_entry_mutation(const struct thread *t,const struct seccomp_data *call) {
     const struct md_svc_registry *machine=md_memory_svc(t->memory);
     return entry_snapshot_change(t,call->nr,call->args)
-        || ((call->nr!=SYS_mmap || (call->args[3]&MAP_FIXED))
+        || (mapping_can_change_source(call->nr,call->args[3])
             && md_svc_registry_intersects(machine,call->args[0],call->args[1]))
         || (call->nr==SYS_mremap && (call->args[3]&MREMAP_FIXED)
             && md_svc_registry_intersects(machine,call->args[4],call->args[2]));
@@ -965,7 +972,7 @@ void memory_start(struct thread *t) {
         int error=0, noexec=0;
         struct md_svc_registry *machine=md_memory_svc(t->memory);
         if (machine && !shared) {
-            if (nr!=SYS_mmap || (call->args[3]&MAP_FIXED))
+            if (mapping_can_change_source(nr,call->args[3]))
                 error=md_svc_registry_unpatch(machine,t->pid,call->args[0],call->args[1]);
             if (!error && nr==SYS_mremap && (call->args[3]&MREMAP_FIXED))
                 error=md_svc_registry_unpatch(machine,t->pid,call->args[4],call->args[2]);
@@ -1091,10 +1098,7 @@ void memory_begin(struct thread *t,const struct seccomp_data *call,const struct 
 
 static int entry_snapshot_change(const struct thread *t,long nr,const __u64 *args) {
     if (!md_memory_snapshots_valid(t->memory)) return 0;
-    if (nr==SYS_shmat && (args[2]&SHM_REMAP))
-        return md_memory_snapshot_intersects(t->memory,0,SIZE_MAX);
-    if (nr!=SYS_mmap && nr!=SYS_munmap && nr!=SYS_mprotect && nr!=SYS_mremap) return 0;
-    if ((nr!=SYS_mmap || (args[3]&MAP_FIXED))
+    if (mapping_can_change_source(nr,args[3])
             && md_memory_snapshot_intersects(t->memory,args[0],args[1])) return 1;
     return nr==SYS_mremap && (args[3]&MREMAP_FIXED)
         && md_memory_snapshot_intersects(t->memory,args[4],args[2]);

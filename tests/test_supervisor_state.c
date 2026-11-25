@@ -2210,8 +2210,16 @@ static void machine_context_admission(void) {
     }
     __u64 args[]={0x400000,4096,4096,MREMAP_MAYMOVE|MREMAP_FIXED,0x200000,0};
     assert(entry_snapshot_change(&t,SYS_mremap,args));
-    args[2]=SHM_REMAP;
-    assert(entry_snapshot_change(&t,SYS_shmat,args));
+    __u64 fixed[]={0x200000,4096,PROT_READ,MAP_FIXED_NOREPLACE,0,0};
+    assert(!entry_snapshot_change(&t,SYS_mmap,fixed));
+    fixed[3]|=MAP_FIXED;
+    assert(!entry_snapshot_change(&t,SYS_mmap,fixed));
+    fixed[3]=MAP_FIXED;
+    assert(entry_snapshot_change(&t,SYS_mmap,fixed));
+    __u64 attach[]={1,0x200000,0,0,0,0};
+    assert(!entry_snapshot_change(&t,SYS_shmat,attach));
+    attach[2]=SHM_REMAP;
+    assert(!entry_snapshot_change(&t,SYS_shmat,attach));
     assert(!entry_snapshot_change(&t,SYS_read,args));
     struct thread child=t;
     child.memory=md_memory_fork(t.memory,0); assert(child.memory);
