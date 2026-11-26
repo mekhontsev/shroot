@@ -7,6 +7,9 @@ unmodified binaries on the host kernel. The same native runtime works in
 Termux, under an Android app's own UID, and as an ordinary user on ARM64 Linux.
 Workloads include systemd, sandboxed Chromium and k3s.
 
+Shroot stands for *Supervisor-Hosted Root*. Here, *root* means the root of the
+guest filesystem, not root privileges on the host.
+
 Use the `shroot` CLI for your own environments or the [`libshroot` C API](embedding.md)
 to add Linux to another application. Both manage the same stores; neither
 requires Java or an Android service.
@@ -21,14 +24,15 @@ requires Java or an Android service.
 
 ## Install In Termux
 
-Run these commands in **aarch64 Termux** to install or upgrade Shroot directly
-from the [latest GitHub release](https://github.com/mekhontsev/shroot/releases/latest):
+In **aarch64 Termux**, use the Termux `.deb` package from the
+[latest GitHub release](https://github.com/mekhontsev/shroot/releases/latest),
+not the generic Android `.tar.gz` archive. To install or upgrade:
 
 ```sh
 url="https://github.com/mekhontsev/shroot/releases/latest/download"
 pkg=shroot-termux-aarch64.deb
 curl -fLO "$url/$pkg" && curl -fLO "$url/$pkg.sha256" &&
-  sha256sum -c "$pkg.sha256" && apt install "./$pkg"
+  sha256sum -c "$pkg.sha256" && PATH="$PREFIX/bin:$PATH" apt install "./$pkg"
 ```
 
 No root, extra APK or APT repository is needed. Environments stay in
