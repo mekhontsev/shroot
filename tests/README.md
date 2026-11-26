@@ -86,8 +86,8 @@ case adds a fourth guest and checks all 12 launches across the four innermost
 Base/lazy combinations. The 272 cases do not all run in the fourth guest.
 
 These are functional results, not first-level timing guarantees. The RPC
-fixture completed 10,000 consecutive descriptor exchanges in one run (465 s
-for the fixture). Fourth-level launches took 37-68 s each; qualification used
+fixture checks 1,000 consecutive descriptor exchanges at every depth; its
+separate `stress` mode runs 100,000. Fourth-level launches took 37-68 s each; qualification used
 longer test deadlines and a longer filesystem-worker startup deadline in the
 measurement build. These checks do not cover nested execution on 16 KiB pages
 or the full distribution GUI/container matrix.

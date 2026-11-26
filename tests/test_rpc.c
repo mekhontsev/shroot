@@ -1463,7 +1463,7 @@ int main(int argc, char **argv) {
     request_contract(); result_contract(); engine_buffers(); value_transport(); peer_transport();
     captured_authentication(); exchange_retirement(); transport_contract();
     semantics(argv[0]); directories(argv[0]); lost_directory_reply(); concurrent(); contention(); reentrant(); malformed(); idle(); lost_reply();
-    reply_lifetime(); watch_delivery(); descriptor_stress(10000);
+    reply_lifetime(); watch_delivery(); descriptor_stress(1000);
     puts("PASS filesystem service fixture (explicit RPC, not guest syscall integration)");
     return 0;
 }
