@@ -1758,23 +1758,6 @@ static void filter_result(struct thread *caller,long result) {
     regs.regs[0]=result;
     assert(!filter_observed(caller,&regs));
 }
-static void filter_status_sources(void) {
-    struct md_seccomp_status v;
-    const char *clear="Seccomp:\t0\nSeccomp_filters:\t0\n";
-    assert(!md_status_seccomp(clear,&v) && !v.visible && !v.backing && !v.host_filtered);
-    assert(!md_status_seccomp("Seccomp: 2\nSeccomp_filters: 3\n",&v)
-        && v.visible==3 && v.backing==3 && v.host_filtered);
-    const char *projected="Seccomp: 0\nSeccomp_filters: 0\nShrootBackingFilters: 3\n";
-    char status[256];
-    assert(!md_status_seccomp(projected,&v) && !v.visible && v.backing==3 && v.host_filtered);
-    snprintf(status,sizeof(status),"%sShrootHostSeccomp: 0\n",projected);
-    assert(!md_status_seccomp(status,&v) && !v.visible && v.backing==3 && !v.host_filtered);
-    snprintf(status,sizeof(status),"%sShrootHostSeccomp: 2\n",projected);
-    assert(!md_status_seccomp(status,&v) && !v.visible && v.backing==3 && v.host_filtered);
-    assert(md_status_seccomp("Seccomp: 0\nSeccomp_filters: 1\n",&v)<0);
-    assert(md_status_seccomp("Seccomp: 2\nSeccomp_filters: 3\nShrootBackingFilters: 2\n",&v)<0);
-    assert(md_status_seccomp("Seccomp: 0\nSeccomp_filters: 0\nShrootHostSeccomp: 0\n",&v)<0);
-}
 static void filter_publication(void) {
     struct thread *saved=threads;
     struct thread outside={.pid=3,.tgid=3};
@@ -9185,7 +9168,6 @@ int main(void) {
     debug_host_exit();
     cancel_stopped_child();
     cancellation_owner_boundary();
-    filter_status_sources();
     filter_publication();
     filter_listener_ownership();
     trace_policy_admission();

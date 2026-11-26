@@ -624,8 +624,7 @@ kernel duplication or table-owned export without inventing mount provenance;
 nofollow sources without stable backing use ordered mapped result delivery.
 Directory enumeration also uses mapped copy acknowledgement. Its temporary
 `ofd_order` entry owns a retained description, compares aliases with `F_DUPFD_QUERY`
-or safely admitted self-kcmp,
-and orders read/seek across broker, mapped and RPC requests. No permanent data-FD
+when available, and orders read/seek across broker, mapped and RPC requests. No permanent data-FD
 mirror or cursor database is maintained. Synchronous reads with no active
 reservation allocate nothing. `test_ofd_order` also denies `F_DUPFD_QUERY` and
 makes kcmp fatal: active operations on one inode share an ordering queue without

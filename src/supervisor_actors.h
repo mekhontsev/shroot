@@ -14,7 +14,6 @@ struct task_action {
     enum md_task_call_boundary boundary;
     int selector_number;
     unsigned selector_instructions;
-    unsigned filter_prefix;
     int pid_filter;
     int number;
     struct thread *requester, *actor;

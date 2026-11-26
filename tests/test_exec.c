@@ -19,14 +19,6 @@
 #include <unistd.h>
 
 extern char **environ;
-static int filters(void) {
-    FILE *f = fopen("/proc/self/status", "r");
-    assert(f);
-    int count=backing_filter_count(f);
-    fclose(f);
-    assert(count > 0);
-    return count;
-}
 struct resource_snapshot { unsigned long mapped; unsigned descriptors; };
 static struct resource_snapshot resources(void) {
     FILE *f = fopen("/proc/self/maps", "r");

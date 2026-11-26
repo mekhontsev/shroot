@@ -59,7 +59,7 @@ def launch_controls(suite, build, store, entry):
             assert item['getpriorityErrno'] == item['taggedGetuidErrno'] == expected_errno, (policy, item)
     # Setting NNP alone does not change the inherited filter chain. Compare
     # the actual launch observations rather than assuming a host filter count.
-    fields = ('seccompMode', 'queryErrno', 'visibleFilters', 'backingFilters', 'hostFiltered')
+    fields = ('seccompMode', 'queryErrno')
     direct = controls['direct']['admission']
     for policy in ('exec-nnp', 'default-nnp') if entry else ('exec-nnp',):
         observed = controls[policy]['admission']

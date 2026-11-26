@@ -420,12 +420,15 @@ The suite covers directory/name events, rename cookies, file-data events,
 read/readv/FIONREAD boundaries, concurrent readers, dup/fcntl, queued SCM_RIGHTS
 through recvmsg/recvmmsg, descriptor reuse, EINTR/SA_RESTART and 64 execs with
 constant filter count. The complete glibc/musl suite runs again with dumpability
-disabled. The filter-count observer retains its own proc FD across exec, avoiding
-new selectors introduced by the measurement itself. `receive-filtered` forbids
-further seccomp installation and rejects MSG_PEEK with an application filter:
-the denial must preserve both the queued message and descriptor table. An allowed
-receive then publishes all three rights with no filter growth, checks watch/pipe
-IO, closes every alias and verifies pipe EOF and exact retained-channel ownership.
+disabled. A test-only observer outside the runtime checks the sending task's
+filter count across exec, without opening a guest proc FD to take the measurement.
+`receive-filtered` runs in Base and Lazy. A guest filter denies further
+filter installation and `MSG_PEEK`. The denied peek leaves the queue,
+descriptor table and both filter counts unchanged. Receiving an inotify FD
+for the first time can install one private selector; receiving it again at
+the same number via `recvmmsg` must install none. The guest still sees only
+its own filter. Both deliveries must carry the tagged message, a readable
+inotify event and working pipe aliases; closing the last writer must give EOF.
 Churn checks 7,680 distinct duplicate targets without unbounded filter
 growth. An aggregate interception counter detects accidental ordinary-read tracing
 in the unsaturated case. Two independent observers receive a third launch's

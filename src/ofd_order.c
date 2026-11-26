@@ -1,20 +1,16 @@
 #define _GNU_SOURCE
 #include "ofd_order.h"
-#include "task_status.h"
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/kcmp.h>
 #include <stdatomic.h>
 #include <stdlib.h>
-#include <sys/prctl.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 #ifndef F_DUPFD_QUERY
 #define F_DUPFD_QUERY 1027
 #endif
-enum comparison { UNKNOWN, QUERY, KCMP, INODE };
+enum comparison { UNKNOWN, QUERY, INODE };
 struct md_ofd_orders { atomic_uint refs; pthread_mutex_t lock; struct md_ofd_entry *first; enum comparison comparison; };
 struct md_ofd_entry {
     struct md_ofd_entry *next;
@@ -30,15 +26,8 @@ static int comparison(struct md_ofd_orders *q,int fd) {
     if (result==1) { q->comparison=QUERY; return 0; }
     if (result>=0) return -EIO;
     if (errno!=EINVAL && errno!=ENOSYS && errno!=EPERM && errno!=EACCES) return -errno;
-    /* An inherited filter may kill kcmp instead of returning an errno. Never
-     * probe it in a filtered owner. Coarser ordering preserves cursor safety;
-     * it does not claim that separate opens share an open description. */
-    if (prctl(PR_GET_SECCOMP,0,0,0,0)==0 && md_task_backing_seccomp_filters(gettid(),NULL)==0) {
-        long same=syscall(SYS_kcmp,getpid(),getpid(),KCMP_FILE,fd,fd);
-        if (!same) { q->comparison=KCMP; return 0; }
-        if (same>=0) return -EIO;
-        if (errno!=ENOSYS && errno!=EPERM && errno!=EACCES) return -errno;
-    }
+    /* A shared queue orders operations; it does not merge their offsets.
+     * No potentially fatal host probe is needed for correct ordering. */
     q->comparison=INODE; return 0;
 }
 int md_ofd_orders_new(struct md_ofd_orders **out) {
@@ -81,10 +70,9 @@ int md_ofd_order_begin(struct md_ofd_orders *q, int fd, int reserve,
         if (q->comparison==INODE) {
             if (entry->device==st.st_dev && entry->inode==st.st_ino) break;
         } else {
-            long same=q->comparison==QUERY ? fcntl(fd,F_DUPFD_QUERY,entry->fd)
-                : syscall(SYS_kcmp,getpid(),getpid(),KCMP_FILE,fd,entry->fd);
+            int same=fcntl(fd,F_DUPFD_QUERY,entry->fd);
             if (same<0) { error=-errno; break; }
-            if (q->comparison==QUERY ? same!=0 : same==0) break;
+            if (same) break;
         }
     }
     if (!error && !entry && reserve) {

@@ -46,7 +46,7 @@ def main():
     try:
         command("mkdir -p " + directory + "/rootfs/bin " + directory + "/rootfs/tmp")
         controls = ("watch_queue", "watch_read", "watch_activation")
-        binaries = ["bootstrap", "supervisor", "run", "service", "watch_guest", "watch_launch", "watch_store", *controls]
+        binaries = ["bootstrap", "supervisor", "run", "service", "capabilities", "watch_guest", "watch_launch", "watch_store", *controls]
         if args.contracts:
             binaries.extend(("test_inodes", "test_import", "test_rpc"))
         for name in binaries:
@@ -73,18 +73,20 @@ def main():
             command("timeout 60 " + executable(name))
         command("timeout 30 " + executable('service') + " --import "
                 + directory + "/rootfs " + directory + "/store --preserve-ownership")
-        output = command("timeout 60 " + runner + " --statistics --store "
+        observe = executable('capabilities') + " --observe-filters "
+        output = command("timeout 60 " + observe + runner + " --statistics --store "
                 + directory + "/store --home /tmp --cwd / -- /bin/watch /tmp/test")
         assert "MD_SUPERVISOR " in output, "Supervisor statistics are missing"
         reads = sum(map(int, re.findall(r"MD_SYSCALL nr=63 trace=(\d+)", output)))
         assert reads < 1000, "Ordinary reads acquired a process-wide interception path"
         command("timeout 60 " + runner + " --store "
                 + directory + "/store -- /bin/watch protected /tmp/protected")
-        command("timeout 60 " + runner + " --store "
+        command("timeout 60 " + observe + runner + " --store "
                 + directory + "/store -- /bin/watch protected-all /tmp/protected-all")
-        command("timeout 60 " + runner + " --store "
-                + directory + "/store -- /bin/watch receive-filtered")
-        command("timeout 60 " + runner + " --store "
+        for entry in (0, 1):
+            command("timeout 60 " + observe + runner + f" --env SHROOT_MACHINE_ENTRY={entry} --store "
+                    + directory + "/store -- /bin/watch receive-filtered")
+        command("timeout 60 " + observe + runner + " --store "
                 + directory + "/store -- /bin/watch churn")
         command("timeout 60 " + executable('watch_launch') + " "
                 + shlex.quote(runner_path) + " " + directory + "/store --user " + shlex.quote(args.user))

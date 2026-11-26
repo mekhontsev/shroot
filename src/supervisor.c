@@ -138,7 +138,6 @@ struct md_task_registry *tasks;
 struct md_identity launch_identity;
 int launch_kernel_filtered;
 int launch_original_entry;
-int launch_seccomp_clear;
 int machine_entry_requested;
 uid_t native_uid;
 int virtual_identity;
@@ -844,24 +843,18 @@ int main(int argc, char **argv) {
      * environment. This does not grant native effects or capture its filter. */
     int mode = prctl(PR_GET_SECCOMP, 0, 0, 0, 0);
     int query_errno = mode<0 ? errno : 0;
-    struct md_seccomp_status view={.visible=-1};
-    long backing=-1;
-    if (mode==0 || statistics || diagnostics)
-        backing=md_task_backing_seccomp_filters(gettid(),&view);
-    launch_seccomp_clear = mode==0 && backing==0 && view.visible==0;
-    int observed=mode==SECCOMP_MODE_FILTER || (mode==0 && backing>=0 && view.visible==0);
-    launch_kernel_filtered=!observed || mode==SECCOMP_MODE_FILTER || view.host_filtered;
+    int observed=mode==SECCOMP_MODE_DISABLED || mode==SECCOMP_MODE_FILTER;
+    launch_kernel_filtered=mode!=SECCOMP_MODE_DISABLED;
     launch_original_entry=!observed || (!machine_entry_requested && launch_kernel_filtered);
     if (statistics || diagnostics)
         fprintf(stderr, "SHROOT_ENTRY_ADMISSION {\"requestedMode\":\"%s\",\"admittedMode\":\"%s\","
             "\"reason\":\"%s\",\"noNewPrivs\":%d,"
-            "\"seccompMode\":%d,\"queryErrno\":%d,\"visibleFilters\":%ld,\"backingFilters\":%ld,\"hostFiltered\":%s}\n",
+            "\"seccompMode\":%d,\"queryErrno\":%d}\n",
             !entry_option ? "default" : machine_entry_requested ? "lazy" : "base",
             machine_entry_admitted() ? "lazy" : "base",
             !machine_entry_requested ? "base-requested" :
                 launch_original_entry ? "unobserved-launch-policy" : "launch-admitted",
-            inherited_no_new_privs,mode,query_errno,view.visible,backing,
-            backing<0 ? "null" : view.host_filtered ? "true" : "false");
+            inherited_no_new_privs,mode,query_errno);
     CHECK(argument < argc);
     CHECK(!image_layout_prepare(argv[argument]));
     struct md_process_signals inherited;

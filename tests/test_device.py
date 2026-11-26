@@ -131,7 +131,8 @@ def main():
         check("explicit Unix routes survive exec and environment replacement", "timeout 60 " + root
               + "/md-sockets-test routes " + root + "/rootfs",
               contains="PASS socket routes: independent connections, shell/exec/env-i, credentials, SCM_RIGHTS and shared mmap")
-        check("namespace signal, stack and exec regressions", "timeout 90 " + namespace
+        observe = root + "/md-capabilities-test --observe-filters "
+        check("namespace signal, stack and exec regressions", "timeout 90 " + observe + namespace
               + "/usr/bin/md-exec-fixture", contains=["PASS posix_spawn file actions, cwd and full signal mask", "PASS 64 execs"])
         check("namespace path and descriptor extended attributes", "timeout 45 " + namespace
               + "/usr/bin/md-xattrs-fixture /tmp/md-ns-xattrs",
@@ -197,7 +198,7 @@ def main():
               + shlex.quote("/bin/cat /etc/md-guest-fixture | /usr/bin/wc -c"), contains="12\n")
         check("guest regression fixture", "timeout 30 " + launch + "/usr/bin/md-fixture",
               contains="PASS inherited Unix socket")
-        check("exec inheritance and signal/pointer regressions", "timeout 30 " + launch + "/usr/bin/md-exec-fixture",
+        check("exec inheritance and signal/pointer regressions", "timeout 30 " + observe + launch + "/usr/bin/md-exec-fixture",
               contains="PASS 64 execs")
         check("file metadata and notifications", "timeout 20 " + launch + "/usr/bin/md-files-fixture",
               contains="PASS atomic rename flags and inotify namespace mapping")

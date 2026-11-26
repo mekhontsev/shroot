@@ -342,7 +342,6 @@ void cooperative_routes_publish(struct thread *t) {
     if (!t->entry.buffer.pool) return;
     unsigned flags=(t->process_op.filter ? MD_ROUTE_PID : 0)|(t->signals.host ? MD_ROUTE_SIGNALS : 0);
     if (!checkpoint_restricted(t->pid)) flags|=MD_ROUTE_ADMITTED_KERNEL;
-    if (launch_kernel_filtered) flags|=MD_ROUTE_HOST_FILTERED;
     if (t->signals.native_query) flags|=MD_ROUTE_NATIVE_SIGNAL_QUERY;
     uint64_t revision=md_fd_selector_revision(t->descriptors.selector);
     if (t->entry.selectors==t->descriptors.selector && t->entry.selector_revision==revision && t->entry.route_flags==flags) return;
@@ -2444,8 +2443,6 @@ void execution_checkpoint_event(struct thread *t,pid_t pid) {
             CHECK(listener == -1);
             listener = duplicate_fd(pid, (int)regs.regs[0]); CHECK(listener >= 0);
             if (broker) md_broker_listen(broker, listener);
-            if (launch_seccomp_clear && md_task_backing_seccomp_filters(pid,NULL)==1)
-                t->seccomp.runtime_filters=1;
         }
         t->ready = 1;
         t->entry.registration_revoked=entry_needs_policy(t) || t->entry.blocked;
@@ -2455,7 +2452,6 @@ void execution_checkpoint_event(struct thread *t,pid_t pid) {
                 && !t->debug.options && !md_memory_exposed(t->memory))
             regs.regs[0]|=MD_INTERCEPTION_MACHINE;
         if (statistics) regs.regs[0]|=MD_INTERCEPTION_STATISTICS;
-        if (t->seccomp.runtime_filters) regs.regs[0]|=MD_INTERCEPTION_SELECTOR_INPUTS;
         if (md_host_logical_sigsys()) regs.regs[0]|=MD_INTERCEPTION_HOST_POLICY;
         if (!set_registers(pid, &regs)) return;
         describe_process(pid, 0);

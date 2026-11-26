@@ -598,8 +598,7 @@ context until worker completion, independently of task lifetime.
 Mapped directory reads prepare records without advancing their OFD. The same
 acknowledgement commits its next cookie or leaves its old position unchanged.
 `ofd_order` retains only active descriptions, matching aliases with native
-`F_DUPFD_QUERY`, or self-kcmp when no inherited seccomp filter can terminate the
-owner. Without safe exact comparison, it conservatively orders active operations
+`F_DUPFD_QUERY` when available. Without exact comparison, it conservatively orders active operations
 on the same native inode. This is ordering, not fabricated descriptor identity:
 each operation retains its own captured FD and cursor.
 Broker, mapped and RPC directory read/seek operations share those turns. Ordinary

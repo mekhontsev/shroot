@@ -93,7 +93,7 @@ void md_cooperative_revoke(void);
 extern uintptr_t md_cooperative_registration;
 
 enum { MD_INTERCEPTION_COOPERATIVE=1, MD_INTERCEPTION_MACHINE=2, MD_INTERCEPTION_STATISTICS=4,
-    MD_INTERCEPTION_HOST_POLICY=8, MD_INTERCEPTION_SELECTOR_INPUTS=16 };
+    MD_INTERCEPTION_HOST_POLICY=8 };
 /* Returns admitted entry capabilities, or a negative errno. */
 int md_interception_install(int inherited);
 int md_cooperative_routes_init(const struct md_interception_abi *);

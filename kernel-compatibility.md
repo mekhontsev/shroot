@@ -47,9 +47,9 @@ kernel dependency or work to ordinary native-backed IO.
 
 Directory cursor ordering in `ofd_order` optionally uses `fcntl(F_DUPFD_QUERY)`
 (Linux 6.10+) for exact local open-description comparison. An unsupported or
-denied command retains self-kcmp only in an unfiltered owner; inherited seccomp
-may terminate kcmp rather than return an errno. Otherwise active operations on
-the same native inode share a conservative queue, retaining their individual
+denied command uses inode ordering without probing kcmp: a guest-visible
+unfiltered state cannot establish permission to issue that syscall. Active
+operations on the same native inode then share a queue, retaining their individual
 descriptors and offsets. This adds no work to ordinary data reads/writes or to a
 synchronous directory operation when no asynchronous reservation exists.
 `test_ofd_order` covers exact and forced-conservative admission, aliasing,
@@ -1483,13 +1483,11 @@ Stock glibc/musl signal storms and real document-portal shutdown exercise
 the integrated owner. Device execution remains 6.12/4 KiB, not a 5.15 claim.
 Launch mode is independent of inherited `no_new_privs`. A reported filter is
 a supported launch environment on either platform; it is not evidence that
-a native operation is permitted. Filtered hosts retain kernel checks for
-native effects, including scalar identity reads before namespace translation.
-An unreadable mode retains restricted admission; mode zero requires a
-matching proc status snapshot. Guest mode and filter
-count describe only the current guest's chain, including after a nested
-launch. Native-only probes use the backing count, not the guest count;
-known runtime selectors do not by themselves imply an external host policy.
+a native operation is permitted. Scalar identity reads preserve the native
+result before namespace translation, independently of the reported mode.
+An unreadable mode retains restricted admission. Guest mode and filter count
+describe only the current guest's chain, including after a nested launch.
+They do not identify the launcher or authorize optional native probes.
 `test_native_suite.py` checks both no_new_privs alone and inherited denials.
 `test_capabilities` verifies denied required syscalls
 produce admission errors instead of falling through a rejected marker.

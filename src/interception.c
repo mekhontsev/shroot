@@ -177,10 +177,7 @@ int md_interception_install(int inherited) {
     if (!result) md_fd_client_enable();
     if (listener >= 0) RAW1(close, listener);
     if (!result) result=md_adapter_buffer_install();
-    /* Without an immutable input pool, selectors still work but are not
-     * certified as a private chain for descendant launches. */
-    if (!result && (capabilities&MD_INTERCEPTION_SELECTOR_INPUTS))
-        (void)md_adapter_readonly_install();
     if (!result && (capabilities&MD_INTERCEPTION_HOST_POLICY)) result=host_signal_install(inherited);
+    else if (!result) (void)md_adapter_readonly_install(); /* Optional immutable input for FD selectors. */
     return result ? (int)result : capabilities;
 }

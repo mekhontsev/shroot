@@ -284,7 +284,6 @@ struct supervisor_seccomp_state {
     int length;
     int guest_filter_count;
     /* Evidence about backing selectors, independent of the guest ABI. */
-    unsigned runtime_filters;
     struct md_seccomp_policy *policy;
     struct md_seccomp_policy *admission_policy;
     int admission_policy_valid;

@@ -5,7 +5,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/filter.h>
-#include <linux/kcmp.h>
 #include <linux/seccomp.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -60,8 +59,7 @@ static void orders(int coarse) {
     int fd=open(".",O_RDONLY|O_DIRECTORY|O_CLOEXEC), other=open(".",O_RDONLY|O_DIRECTORY|O_CLOEXEC);
     int alias=dup(fd), event=eventfd(0,EFD_NONBLOCK|EFD_CLOEXEC);
     assert(fd>=0 && other>=0 && alias>=0 && event>=0);
-    int exact=!coarse && (fcntl(fd,1027,fd)==1 || (prctl(PR_GET_SECCOMP,0,0,0,0)==0
-        && !syscall(SYS_kcmp,getpid(),getpid(),KCMP_FILE,fd,fd)));
+    int exact=!coarse && fcntl(fd,1027,fd)==1;
     struct md_resource_wakeup *wake=NULL; assert(!md_resource_wakeup_create(event,&wake));
     for (unsigned i=0;i<100;++i) {
         struct md_ofd_order a={0}, b={0}, c={0}, d={0};

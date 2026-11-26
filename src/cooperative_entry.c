@@ -327,20 +327,18 @@ static enum md_entry_outcome invoke_identified(struct md_entry_client *client,lo
          * through the admitted effect gate, without a second notification. */
         call->effect=native_effect; outcome=MD_ENTRY_NATIVE_CALL; goto done;
     }
-    if (c && md_identity_view_index(call->number)>=0 &&
-            (atomic_load_explicit(&c->routes.flags,memory_order_acquire)&MD_ROUTE_HOST_FILTERED)) {
-        /* Only translate a successful read. The calling thread presents the
-         * same number and all six arguments to its host, including arguments
-         * ignored by Linux but observable by an inherited compatible filter. */
+    if (c && md_identity_view_index(call->number)>=0) {
+        /* Translate a successful identity read, never an errno. A guest-visible
+         * empty chain says nothing about the enclosing layer's native result. */
         long native=md_raw(call->number,call->args[0],call->args[1],call->args[2],
             call->args[3],call->args[4],call->args[5]);
         if (native<0) {
             call->result=native;
             return finish(client,call,MD_ENTRY_COMPLETED);
         }
+        if (md_identity_view_read(&c->identity,call->number,&call->result))
+            return finish(client,call,MD_ENTRY_COMPLETED);
     }
-    if (c && md_identity_view_read(&c->identity,call->number,&call->result))
-        return finish(client,call,MD_ENTRY_COMPLETED);
     if (c && tid>0 && call->number==SYS_uname) {
         struct utsname names;
         unsigned idle=0;

@@ -33,12 +33,14 @@ static int check_view(const char *path,int count) {
     FILE *status=fopen(path,"r");
     if (!status) { perror("policy status"); return 1; }
     char line[256];
+    int private_fields=0;
     while (fgets(line,sizeof(line),status)) {
+        if (!strncmp(line,"ShrootBackingFilters:",21) || !strncmp(line,"ShrootHostSeccomp:",18)) private_fields++;
         (void)sscanf(line,"Seccomp: %d",&published);
         (void)sscanf(line,"Seccomp_filters: %d",&filters);
     }
     int error=ferror(status);
-    if (fclose(status) || error || mode!=published || filters!=count
+    if (fclose(status) || error || private_fields || mode!=published || filters!=count
             || mode!=(count ? SECCOMP_MODE_FILTER : 0)) {
         fprintf(stderr,"policy view %s: prctl=%d status=%d filters=%d expected=%d\n",path,mode,published,filters,count);
         return 1;

@@ -77,7 +77,7 @@ void md_proc_file_pid_view(struct md_proc_file *,struct md_pid_namespace *);
 void md_proc_file_process_state(struct md_proc_file *,const struct md_identity *,struct md_pid_namespace *,pid_t tracer,int inspectable,
     const struct md_process_limits *);
 struct md_signal_status;
-void md_proc_file_seccomp(struct md_proc_file *,int guest_count,unsigned private_prefix);
+void md_proc_file_seccomp(struct md_proc_file *,int guest_count);
 void md_proc_file_signal_state(struct md_proc_file *,const struct md_signal_status *);
 struct md_proc_syscall_view {
     long number;

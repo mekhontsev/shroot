@@ -45,38 +45,24 @@ static struct inotify_event *one(int fd, unsigned mask, const char *name) {
 static void create(const char *name) {
     int fd = open(name, O_CREAT | O_EXCL | O_RDWR, 0600); CHECK(fd >= 0); CHECK(!close(fd));
 }
-static int filter_count(FILE *status) {
-    int count=backing_filter_count(status);
-    CHECK(!ferror(status) && count > 0); return count;
-}
-static int filters(void) {
-    FILE *status = fopen("/proc/self/status", "r"); CHECK(status);
-    int count=filter_count(status);
-    CHECK(!fclose(status)); return count;
-}
-static int exec_watch(int fd, int status_fd, int round, int expected) {
+static int exec_watch(int fd, int round, int expected) {
     one(fd, IN_CREATE, "exec-event");
     CHECK(!unlink("exec-event"));
     /* Exec may close infrastructure and change the lowest free slot. Reuse an
      * exact selector to test filter retention, not the incidental FD layout. */
     int transient = fcntl(fd,F_DUPFD_CLOEXEC,64); CHECK(transient == 64);
     CHECK(!close(transient));
-    /* The observer is a typed proc FD too. Retain it across exec so measuring
-     * filter growth cannot itself activate a different descriptor class. */
-    CHECK(fcntl(status_fd,F_GETFD)==0);
-    FILE *status=fdopen(status_fd,"r"); CHECK(status);
-    int count=filter_count(status);
+    int count=filters();
     if (expected && count!=expected)
         fprintf(stderr,"watch exec round=%d filters=%d expected=%d transient=%d\n",round,count,expected,transient);
     if (expected) CHECK(count == expected);
-    if (!round) { CHECK(!fclose(status) && !close(fd)); puts("PASS inherited watch and stable filters across 64 execs"); return 0; }
+    if (!round) { CHECK(!close(fd)); puts("PASS inherited watch and stable filters across 64 execs"); return 0; }
     create("exec-event");
-    char descriptor[24], observer[24], remaining[24], installed[24];
+    char descriptor[24], remaining[24], installed[24];
     snprintf(descriptor, sizeof(descriptor), "%d", fd);
-    snprintf(observer, sizeof(observer), "%d", status_fd);
     snprintf(remaining, sizeof(remaining), "%d", round - 1);
     snprintf(installed, sizeof(installed), "%d", count);
-    execl("/bin/watch", "watch", "exec", descriptor, observer, remaining, installed, (char *)NULL);
+    execl("/bin/watch", "watch", "exec", descriptor, remaining, installed, (char *)NULL);
     CHECK(0); return 1;
 }
 static volatile sig_atomic_t interrupted;
@@ -93,29 +79,43 @@ static void *read_thread(void *context) {
     CHECK(e->mask == IN_CREATE && strlen(e->name) < sizeof(r->name));
     strcpy(r->name, e->name); return NULL;
 }
-static void transfer_fds(int socket, const int *fds, unsigned count) {
+static void transfer_fds(int socket, const int *fds, unsigned count, char value) {
     CHECK(count && count<=3);
     union { struct cmsghdr align; char bytes[CMSG_SPACE(3*sizeof(int))]; } control = {0};
-    char value = 1; struct iovec vector = {&value, 1};
+    struct iovec vector = {&value, 1};
     struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1, .msg_control = control.bytes,
         .msg_controllen = CMSG_SPACE(count*sizeof(int))};
     struct cmsghdr *h = CMSG_FIRSTHDR(&message);
     h->cmsg_level = SOL_SOCKET; h->cmsg_type = SCM_RIGHTS; h->cmsg_len = CMSG_LEN(count*sizeof(int));
     memcpy(CMSG_DATA(h), fds, count*sizeof(int)); CHECK(sendmsg(socket, &message, 0) == 1);
 }
-static void transfer(int socket, int fd) { transfer_fds(socket,&fd,1); }
-static int receive_fd(int socket, int batch) {
-    union { struct cmsghdr align; char bytes[CMSG_SPACE(sizeof(int))]; } control = {0};
-    char value; struct iovec vector = {&value, 1};
-    struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1, .msg_control = control.bytes, .msg_controllen = sizeof(control)};
+static void transfer(int socket, int fd) { transfer_fds(socket,&fd,1,1); }
+static void receive_fds(int socket, int *fds, unsigned count, int batch, char expected) {
+    CHECK(count && count<=3);
+    union { struct cmsghdr align; char bytes[CMSG_SPACE(3*sizeof(int))]; } control = {0};
+    char value=0; struct iovec vector = {&value, 1};
+    struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1, .msg_control = control.bytes,
+        .msg_controllen = CMSG_SPACE(count*sizeof(int))};
     if (batch) {
         struct mmsghdr messages[] = {{.msg_hdr = message}};
         CHECK(recvmmsg(socket, messages, 1, MSG_CMSG_CLOEXEC, NULL) == 1 && messages[0].msg_len == 1);
         message = messages[0].msg_hdr;
     } else CHECK(recvmsg(socket, &message, MSG_CMSG_CLOEXEC) == 1);
     struct cmsghdr *h = CMSG_FIRSTHDR(&message);
-    CHECK(h && h->cmsg_level == SOL_SOCKET && h->cmsg_type == SCM_RIGHTS && h->cmsg_len == CMSG_LEN(sizeof(int)));
-    int fd; memcpy(&fd, CMSG_DATA(h), sizeof(fd)); return fd;
+    CHECK(value==expected && !(message.msg_flags&MSG_CTRUNC) && message.msg_controllen==CMSG_SPACE(count*sizeof(int)));
+    CHECK(h && h->cmsg_level == SOL_SOCKET && h->cmsg_type == SCM_RIGHTS && h->cmsg_len == CMSG_LEN(count*sizeof(int)));
+    memcpy(fds,CMSG_DATA(h),count*sizeof(int));
+    for (unsigned i=0;i<count;++i) CHECK(fds[i]>=0 && fcntl(fds[i],F_GETFD)==FD_CLOEXEC);
+}
+static int receive_fd(int socket, int batch) {
+    int fd; receive_fds(socket,&fd,1,batch,1); return fd;
+}
+static int guest_filters(FILE *status) {
+    char line[256]; int count=-1;
+    CHECK(!fseek(status,0,SEEK_SET));
+    while (fgets(line,sizeof(line),status) && sscanf(line,"Seccomp_filters: %d",&count)!=1) {}
+    CHECK(!ferror(status) && count>=0);
+    return count;
 }
 static unsigned descriptor_count(void) {
     DIR *directory=opendir("/proc/self/fd"); CHECK(directory);
@@ -132,10 +132,14 @@ static int receive_filtered(void) {
     if (!sender) {
         CHECK(!close(sockets[1]) && !close(pipefd[0]));
         int watch=inotify_init1(IN_NONBLOCK|IN_CLOEXEC); CHECK(watch>=0);
-        int fds[]={pipefd[1],watch,pipefd[1]}; transfer_fds(sockets[0],fds,3);
+        CHECK(inotify_add_watch(watch,"/tmp",IN_CREATE)>0);
+        int fds[]={pipefd[1],watch,pipefd[1]};
+        transfer_fds(sockets[0],fds,3,1); transfer_fds(sockets[0],fds,3,2);
         CHECK(!close(watch) && !close(pipefd[1]) && !close(sockets[0])); _exit(0);
     }
     CHECK(!close(sockets[0]) && !close(pipefd[1]));
+    int status; CHECK(waitpid(sender,&status,0)==sender && WIFEXITED(status) && !WEXITSTATUS(status));
+    FILE *guest=fopen("/proc/self/status","r"); CHECK(guest && guest_filters(guest)==0);
     struct sock_filter code[]={
         BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
         BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_seccomp,0,1),
@@ -149,8 +153,10 @@ static int receive_filtered(void) {
     struct sock_fprog program={sizeof(code)/sizeof(*code),code};
     CHECK(!prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0));
     CHECK(!syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program));
+    CHECK(guest_filters(guest)==1);
     int installed=filters();
     CHECK(syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&program)==-1 && errno==EPERM);
+    CHECK(guest_filters(guest)==1 && filters()==installed);
     union { struct cmsghdr align; char bytes[CMSG_SPACE(3*sizeof(int))]; } control={0};
     int fds[]={-1,-1,-1}; memcpy(CMSG_DATA(&control.align),fds,sizeof(fds));
     char byte=0; struct iovec vector={&byte,1};
@@ -161,18 +167,31 @@ static int receive_filtered(void) {
     memcpy(fds,CMSG_DATA(&control.align),sizeof(fds));
     CHECK(fds[0]==-1 && fds[1]==-1 && fds[2]==-1);
     for (unsigned i=0;i<1024;++i) CHECK(fcntl((int)i,F_GETFD)==previous[i]);
-    CHECK(recvmsg(sockets[1],&message,MSG_CMSG_CLOEXEC)==1 && byte==1 && !(message.msg_flags&MSG_CTRUNC));
-    struct cmsghdr *header=CMSG_FIRSTHDR(&message);
-    CHECK(header && header->cmsg_level==SOL_SOCKET && header->cmsg_type==SCM_RIGHTS
-        && header->cmsg_len==CMSG_LEN(sizeof(fds)) && message.msg_controllen==CMSG_SPACE(sizeof(fds)));
-    memcpy(fds,CMSG_DATA(header),sizeof(fds));
-    for (unsigned i=0;i<3;++i) CHECK(fds[i]>=0 && fcntl(fds[i],F_GETFD)==FD_CLOEXEC);
-    CHECK(fds[0]!=fds[1] && fds[0]!=fds[2] && fds[1]!=fds[2]);
-    CHECK(read(fds[1],buffer.bytes,sizeof(buffer.bytes))==-1 && errno==EAGAIN);
-    CHECK(write(fds[0],"a",1)==1 && write(fds[2],"b",1)==1);
-    char payload[2]; CHECK(read(pipefd[0],payload,sizeof(payload))==2 && !memcmp(payload,"ab",2));
-    for (unsigned i=0;i<3;++i) CHECK(!close(fds[i]));
-    CHECK(filters()==installed);
+    CHECK(guest_filters(guest)==1 && filters()==installed);
+    int watch_slot=-1, observed[2];
+    for (int round=0;round<2;++round) {
+        receive_fds(sockets[1],fds,3,round,(char)(round+1));
+        CHECK(fds[0]!=fds[1] && fds[0]!=fds[2] && fds[1]!=fds[2]);
+        observed[round]=filters();
+        if (!round) {
+            /* Only the inotify FD may need a selector at its destination. */
+            CHECK(observed[0]==installed || observed[0]==installed+1);
+            watch_slot=fds[1];
+        } else {
+            if (fds[1]!=watch_slot || observed[1]!=observed[0])
+                fprintf(stderr,"repeated receive: watch FD %d -> %d, filters %d -> %d\n",
+                    watch_slot,fds[1],observed[0],observed[1]);
+            CHECK(fds[1]==watch_slot && observed[1]==observed[0]);
+        }
+        CHECK(guest_filters(guest)==1);
+        CHECK(read(fds[1],buffer.bytes,sizeof(buffer.bytes))==-1 && errno==EAGAIN);
+        create("/tmp/received-event");
+        one(fds[1],IN_CREATE,"received-event"); CHECK(!unlink("/tmp/received-event"));
+        CHECK(write(fds[0],"a",1)==1 && write(fds[2],"b",1)==1);
+        char payload[2]; CHECK(read(pipefd[0],payload,sizeof(payload))==2 && !memcmp(payload,"ab",2));
+        for (unsigned i=0;i<3;++i) CHECK(!close(fds[i]));
+        CHECK(filters()==observed[round]);
+    }
     unsigned channels=0;
     for (unsigned i=0;i<1024;++i) {
         int flags=fcntl((int)i,F_GETFD);
@@ -183,10 +202,11 @@ static int receive_filtered(void) {
         ++channels;
     }
     CHECK(channels==1 && !close(sockets[1]));
-    int status; CHECK(waitpid(sender,&status,0)==sender && WIFEXITED(status) && !WEXITSTATUS(status));
     CHECK(read(pipefd[0],&byte,1)==0 && !close(pipefd[0]));
+    CHECK(!fclose(guest));
     CHECK(descriptor_count()==before+channels);
-    puts("PASS sandboxed receive: denied peek preserves queue and FDs, prepared rights need no new filter, final pipe EOF");
+    printf("PASS sandboxed receive: denied peek, watch FD %d reused, filters %d/%d/%d, guest=1, inotify events and pipe EOF\n",
+        watch_slot,installed,observed[0],observed[1]);
     return 0;
 }
 static int shared(const char *mode, const char *directory) {
@@ -312,8 +332,8 @@ int main(int argc, char **argv) {
         CHECK(!prctl(PR_SET_DUMPABLE, 0));
         argv[1] = argv[2]; argc = 2;
     }
-    if (argc == 6 && !strcmp(argv[1], "exec"))
-        return exec_watch(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
+    if (argc == 5 && !strcmp(argv[1], "exec"))
+        return exec_watch(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]));
     if (argc == 4 && !strcmp(argv[1], "shared")) return shared(argv[2], argv[3]);
     if (argc == 3 && !strcmp(argv[1], "protected")) {
         CHECK(!mkdir(argv[2], 0700) && !chdir(argv[2]));
@@ -483,8 +503,7 @@ int main(int argc, char **argv) {
         fd = inotify_init1(IN_NONBLOCK); CHECK(fd >= 0);
         CHECK(inotify_add_watch(fd, ".", IN_CREATE) > 0);
         create("exec-event");
-        int observer=open("/proc/self/status",O_RDONLY); CHECK(observer>=0);
-        return exec_watch(fd, observer, 64, 0);
+        return exec_watch(fd, 64, 0);
     }
     CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) && !WEXITSTATUS(status));
     return 0;

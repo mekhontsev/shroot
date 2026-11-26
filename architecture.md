@@ -459,7 +459,9 @@ These interfaces describe filters installed by the guest, not Android policy or
 Shroot's own syscall selectors. Within a guest, fork inherits the caller's
 chain, exec preserves it, and successful TSYNC copies the caller's new chain
 to its peers. Shroot enforces those filters on guest syscalls in both Base and
-Lazy. A guest-visible zero does not mean the host permits a syscall.
+Lazy. A nested runtime reads the same interfaces as any other guest process:
+there is no separate channel describing the outer filter stack. A guest-visible
+zero does not mean the host permits a syscall.
 On Android and Linux alike, the launcher is responsible for supplying a
 Lazy-compatible host policy, as Android's zygote does. Select Base when a
 host policy requires the original guest SVC sites. An inherited filter does

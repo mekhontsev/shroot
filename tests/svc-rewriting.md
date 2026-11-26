@@ -371,10 +371,8 @@ compatible inherited filter and `no_new_privs` do not disable Lazy. A
 launcher needing original SVC sites selects Base. An unavailable policy
 observation retains the original-site path.
 Guest `PR_GET_SECCOMP` and proc status start at zero and count only guest
-installations. `ShrootBackingFilters` carries the count reported by the
-enclosing environment, not independent proof of the physical chain.
-`ShrootHostSeccomp` distinguishes inherited restrictions from known private
-selectors. Neither field contributes to the guest's filter count.
+installations. Tests for selector leaks use an observer outside the runtime
+under test; guest status is not a measurement of the kernel's stack.
 A later guest filter is not evidence about the inherited policy. When a
 guest filter does not depend on the instruction address, a native fallback
 in a movable SVC pool uses that filter directly. Reusing the address after

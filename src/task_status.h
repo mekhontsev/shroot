@@ -10,10 +10,6 @@ long md_task_umask_fd(int fd);
 long md_task_umask(int tid);
 long md_task_signal_dispositions(int tid, uint64_t *caught, uint64_t *ignored);
 long md_task_parent(int tid);
-struct md_seccomp_status { long visible,backing; int host_filtered; };
-int md_status_seccomp(const char *snapshot,struct md_seccomp_status *);
-/* One complete snapshot; a projected mode never authorizes a native probe. */
-long md_task_backing_seccomp_filters(int tid,struct md_seccomp_status *);
 long md_status_decimal(const char *snapshot,const char *field);
 /* 0/1 from the kernel, or a negative error when not observable. */
 long md_task_core_dumping(int tid);

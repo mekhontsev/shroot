@@ -1033,7 +1033,6 @@ static int publish_birth(struct thread *t,pid_t child,unsigned event) {
     c->process_op.filter=t->process_op.filter;
     int prior=t->seccomp.admission_policy_valid && !(t->process_op.cloning&CLONE_THREAD);
     c->seccomp.guest_filter_count=prior ? t->seccomp.admission_guest_filter_count : t->seccomp.guest_filter_count;
-    c->seccomp.runtime_filters=t->seccomp.runtime_filters;
     md_seccomp_policy_replace(&c->seccomp.policy,prior ? t->seccomp.admission_policy : t->seccomp.policy);
     c->signals.host=t->signals.host; c->signals.host_blocked=t->signals.host_blocked;
     if (t->signals.pending) {
@@ -1283,7 +1282,6 @@ void task_exec_event(struct thread *t,pid_t pid,unsigned event) {
             t->debug.step_call=former->debug.step_call;
             t->process_op.filter=former->process_op.filter;
             t->seccomp.guest_filter_count=former->seccomp.guest_filter_count;
-            t->seccomp.runtime_filters=former->seccomp.runtime_filters;
             md_seccomp_policy_replace(&t->seccomp.policy,NULL);
             t->seccomp.policy=former->seccomp.policy; former->seccomp.policy=NULL;
             md_signal_actions_release(t->signals.actions);

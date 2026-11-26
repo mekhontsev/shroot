@@ -437,14 +437,6 @@ static void task_action_call_complete(long result,int retry) {
         if (result==-ESRCH) loan_close_lost(owner,owner->native.effect,owner->native.result);
         else if (!retry) result=loan_close_finish(owner,result);
     } else if (!owner->capture && !result && !retry) {
-        /* TSYNC copies the installer's chain, not each peer's old count.
-         * The thread-only retry cannot publish provenance to a sibling. */
-        if (owner->filter_prefix && md_task_backing_seccomp_filters(actor->pid,NULL)==(long)owner->filter_prefix+1) {
-            for (struct thread *p=threads;p;p=p->next)
-                if (p->pid && p->tgid==actor->tgid && (!owner->filter.thread_only || p==actor)
-                        && p->seccomp.runtime_filters && !effective_filter(p))
-                    p->seccomp.runtime_filters=owner->filter_prefix+1;
-        }
         if (owner->pid_filter) {
             for (struct thread *peer=threads;peer;peer=peer->next)
                 if (peer->pid && peer->tgid==actor->tgid) peer->process_op.filter=1;
@@ -577,13 +569,8 @@ static void task_action_call_start(struct task_action *owner) {
         if (error) { task_action_boundary_failed(error,error==-EAGAIN); return; }
         capture->started=1; actor->kernel_stopped=0; return;
     }
-    owner->filter_prefix=0;
-    int error=-EAGAIN;
-    if (actor->seccomp.runtime_filters && !effective_filter(actor) && md_memory_readonly_base(actor->memory)
-            && md_task_backing_seccomp_filters(actor->pid,NULL)==(long)actor->seccomp.runtime_filters) {
-        error=md_buffers_take(md_memory_readonly_buffers(actor->memory),&owner->buffer);
-        if (!error) owner->filter_prefix=actor->seccomp.runtime_filters;
-    }
+    int error=md_memory_readonly_base(actor->memory)
+        ? md_buffers_take(md_memory_readonly_buffers(actor->memory),&owner->buffer) : -EAGAIN;
     if (error==-EAGAIN) error=md_buffers_take_reserved(md_memory_buffers(actor->memory),&owner->buffer);
     struct md_buffer_span span;
     if (!error) error=md_buffer_span(&owner->buffer,&span);

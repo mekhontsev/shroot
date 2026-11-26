@@ -7,6 +7,8 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
 #include <sys/prctl.h>
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
@@ -46,7 +48,52 @@ static int execute(const char *supervisor, const char *bootstrap, int denied, in
     return WEXITSTATUS(status);
 }
 
+static int observe_filters(char **command) {
+    int pair[2], enabled=1;
+    assert(!socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair));
+    assert(!setsockopt(pair[0], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)));
+    pid_t child=fork(); assert(child>=0);
+    if (!child) {
+        close(pair[0]);
+        assert(dup2(pair[1],STDIN_FILENO)==STDIN_FILENO);
+        close(pair[1]);
+        execvp(command[0],command);
+        _exit(126);
+    }
+    close(pair[1]);
+    for (;;) {
+        union { struct cmsghdr align; char bytes[CMSG_SPACE(sizeof(struct ucred))]; } control;
+        char comm[16]={0};
+        struct iovec io={comm,sizeof(comm)};
+        struct msghdr msg={.msg_iov=&io,.msg_iovlen=1,.msg_control=control.bytes,.msg_controllen=sizeof(control.bytes)};
+        ssize_t n=recvmsg(pair[0],&msg,0);
+        if (n<0 && errno==EINTR) continue;
+        if (!n) break;
+        assert(n==sizeof(comm) && !comm[15] && !(msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)));
+        struct cmsghdr *c=CMSG_FIRSTHDR(&msg);
+        assert(c && c->cmsg_level==SOL_SOCKET && c->cmsg_type==SCM_CREDENTIALS && c->cmsg_len==CMSG_LEN(sizeof(struct ucred)));
+        struct ucred cred; memcpy(&cred,CMSG_DATA(c),sizeof(cred));
+        char path[64], line[256], name[32]={0}; int count=-1;
+        snprintf(path,sizeof(path),"/proc/%d/status",cred.pid);
+        FILE *f=fopen(path,"r"); assert(f);
+        while (fgets(line,sizeof(line),f)) {
+            (void)sscanf(line,"Name: %31s",name);
+            if (sscanf(line,"Seccomp_filters: %d",&count)==1) break;
+        }
+        if (strcmp(name,comm))
+            fprintf(stderr,"filter observer: sender %d is %s, expected %s\n",cred.pid,name,comm);
+        assert(!strcmp(name,comm));
+        assert(!fclose(f) && count>0);
+        assert(send(pair[0],&count,sizeof(count),MSG_NOSIGNAL)==sizeof(count));
+    }
+    close(pair[0]);
+    int status;
+    assert(waitpid(child,&status,0)==child);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 128+WTERMSIG(status);
+}
+
 int main(int argc, char **argv) {
+    if (argc>=3 && !strcmp(argv[1],"--observe-filters")) return observe_filters(argv+2);
     assert(argc == 3 && md_launch_identity(getuid(), geteuid(), getgid(), getegid()));
     assert(md_launch_identity(0, 0, 0, 0));
     assert(md_launch_identity(2000, 2000, 2000, 2000));

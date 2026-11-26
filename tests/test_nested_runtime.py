@@ -126,6 +126,11 @@ def main():
                                for line in result.stdout.splitlines() if line.startswith('SVC_RUNTIME_STATS ')]
                     assert sum(row['completed'] for row in records) > 0, (
                         'No inner Lazy completions with an outer Base launch', records)
+                if args.depth == 2:
+                    case = nested_command([None]) + ['priority-denied']
+                    run([str(build / 'client-guest'), 'exec-deny-priority', *case])
+                    inner = case.index('/runtime/libshroot_guest_run.so')
+                    run([*case[:inner], '/bin/client-guest', 'exec-deny-priority', *case[inner:]])
                 for entries in itertools.product(entries_to_test, repeat=args.depth-1):
                     nested = nested_command(entries)
                     run(nested + ['exit42'], expected=42)
