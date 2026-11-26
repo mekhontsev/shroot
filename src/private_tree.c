@@ -8,6 +8,15 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+int md_private_directory_for_removal(int pinned, mode_t mode) {
+    if (!S_ISDIR(mode)) return -ENOTDIR;
+    if ((mode&07777)!=0700) {
+        char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",pinned);
+        if (chmod(proc,0700)) return -errno;
+    }
+    int fd=openat(pinned,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC);
+    return fd<0 ? -errno : fd;
+}
 int md_private_tree_discard(int parent, const char *name) {
     int ref=openat(parent,name,O_PATH|O_NOFOLLOW|O_CLOEXEC);
     if (ref<0) return errno==ENOENT ? 0 : -errno;
@@ -15,12 +24,8 @@ int md_private_tree_discard(int parent, const char *name) {
     if (fstat(ref,&st)) { int r=-errno; close(ref); return r; }
     if (!S_ISDIR(st.st_mode)) { close(ref); return unlinkat(parent,name,0) ? -errno : 0; }
     /* Mode-000 directories still belong to the exclusively retained tree. */
-    if ((st.st_mode&07777)!=0700) {
-        char proc[64]; snprintf(proc,sizeof(proc),"/proc/self/fd/%d",ref);
-        if (chmod(proc,0700)) { int r=-errno; close(ref); return r; }
-    }
-    int fd=openat(ref,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC); close(ref);
-    if (fd<0) return -errno;
+    int fd=md_private_directory_for_removal(ref,st.st_mode); close(ref);
+    if (fd<0) return fd;
     DIR *dir=fdopendir(fd);
     if (!dir) { int r=-errno; close(fd); return r; }
     int r=0;

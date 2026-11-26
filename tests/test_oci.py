@@ -1065,6 +1065,7 @@ sys.stdin.read()
         directory = objects / ('b' * 32)
         directory.mkdir()
         (directory / 'leaf').write_bytes(b'uncommitted leaf')
+        directory.chmod(0)
         outside = self.root / 'outside'
         outside.write_bytes(b'outside')
         link = objects / ('c' * 32)

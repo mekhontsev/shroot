@@ -1717,6 +1717,47 @@ static void native_birth_recovery(void) {
     }
     puts("PASS native birth SIGKILL: preparation/effect/publication, retained contents and exclusive orphan collection");
 }
+static void detached_maintenance(void) {
+    char directory[PATH_MAX]; path(directory,"offline-gc");
+    struct md_inode_store *s=store("offline-gc",1), *busy=NULL;
+    CHECK(!md_inode_mkdir(s,-1,"old",0700));
+    int live=md_inode_create(s,-1,"keep",0600), dead=md_inode_create(s,-1,"old/dead",0600);
+    CHECK(live>=0 && dead>=0);
+    put(live,"keep"); put(dead,"held");
+    CHECK(!md_inode_link(s,-1,"keep",-1,"alias",0));
+    CHECK(!md_inode_link(s,-1,"keep",-1,"old/last-link",0));
+    CHECK(!md_inode_unlink(s,-1,"old/last-link",0));
+    int solo=md_inode_create(s,-1,"solo",0600); CHECK(solo>=0);
+    CHECK(!md_inode_link(s,-1,"solo",-1,"old-name",0));
+    CHECK(!md_inode_unlink(s,-1,"old-name",0) && !close(solo));
+    CHECK(!md_inode_link(s,-1,"old/dead",-1,"old/dead-link",0));
+    CHECK(!md_inode_unlink(s,-1,"old/dead-link",0));
+    struct mdi_node node;
+    CHECK(!mdi_fd(s,dead,&node));
+    struct stat raw;
+    CHECK(!fstatat(s->objects,node.backing,&raw,AT_SYMLINK_NOFOLLOW));
+    CHECK(!md_inode_unlink(s,-1,"old/dead",0));
+    CHECK(!md_inode_unlink(s,-1,"old",AT_REMOVEDIR));
+    struct stat before=state(s,"keep",2),st;
+    CHECK(md_inode_store_open_exclusive(directory,&busy)==-EBUSY && !busy);
+    content(dead,"held");
+    CHECK(!md_inode_fstat(s,dead,&st) && !st.st_nlink);
+    CHECK(!close(dead) && !close(live)); md_inode_store_close(s);
+    for (int pass=0;pass<2;++pass) {
+        CHECK(!md_inode_store_open_exclusive(directory,&s));
+        struct md_inode_audit audit;
+        CHECK(!md_inode_audit(s,&audit) && !audit.detached && !audit.untracked);
+        CHECK(fstatat(s->objects,node.backing,&st,AT_SYMLINK_NOFOLLOW)<0 && errno==ENOENT);
+        st=state(s,"alias",2);
+        CHECK(st.st_dev==before.st_dev && st.st_ino==before.st_ino);
+        live=md_inode_open(s,-1,"keep",O_RDONLY,0); CHECK(live>=0);
+        content(live,"keep"); CHECK(!close(live));
+        solo=md_inode_open(s,-1,"solo",O_RDONLY,0); CHECK(solo>=0);
+        char name[32];
+        CHECK(!md_inode_path(s,solo,name,sizeof(name)) && !strcmp(name,"/solo"));
+        CHECK(!close(solo)); md_inode_store_close(s);
+    }
+}
 static void native_birth_acl(void) {
     struct md_inode_store *s=store("native-birth-acl",1);
     struct md_identity ids=md_identity_new(0,0); s->identity=&ids;
@@ -2003,7 +2044,7 @@ int main(int argc, char **argv) {
         backing_cache(); recent_cache_keys(); mutation_cache(); directory_publication(); membership_queries();
         directory_name_cost(); counter_audit(); retained_journal(); ++executed;
     }
-    if (!selected || !strcmp(selected,"recovery")) { crash_recovery(); ++executed; }
+    if (!selected || !strcmp(selected,"recovery")) { crash_recovery(); detached_maintenance(); ++executed; }
     CHECK(executed && (!selected || executed==1));
     puts("PASS inode-store fixture (hierarchical model, not guest syscall integration)");
     return 0;

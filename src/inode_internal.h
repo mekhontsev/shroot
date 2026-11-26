@@ -293,6 +293,7 @@ int mdi_sources_open(struct md_inode_store *);
 /* Caller owns exclusive maintenance or an unpublished store. No live lower
  * store or ordinary open description may depend on untracked physical bodies. */
 int mdi_discard_untracked_backings(struct md_inode_store *);
+int mdi_retire_detached_objects(struct md_inode_store *);
 int mdi_source_register(struct md_inode_store *, int objects, int *source);
 int mdi_import_shared(struct md_inode_store *, int source, const char *backing, struct mdi_node *);
 int mdi_backing_directory(struct md_inode_store *, const struct mdi_node *);

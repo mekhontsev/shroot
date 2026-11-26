@@ -336,7 +336,7 @@ this local testing helper, not of User-mode Shroot.
 
 Between distribution batches, stop the owned guests and use the native image
 helper's `maintain STORE` under the store's current executor to reclaim unused
-projections and untracked physical allocations. A live owner must still fail
+projections, detached objects and untracked physical allocations. A live owner must still fail
 with EBUSY. Do not delete a borrowed mountpoint as if it were a disposable copy:
 it exposes the original installed data. Restore access only after maintenance
 finishes, retaining the same journal.

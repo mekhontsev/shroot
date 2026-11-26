@@ -445,23 +445,10 @@ int md_image_layers_finish(struct md_inode_store *s, int preserve) {
     if (!r) r = mdi_sql(s, preserve ? "INSERT INTO properties VALUES('image-users',1)"
         : "INSERT INTO properties VALUES('image-users',0)");
     if (!r) r = mdi_sql(s, "DROP TABLE temp.image_metadata");
-    /* No guest owns this unpublished namespace. Drop unreachable metadata and
-     * lower dependencies now; runtime open-unlinked objects are never compacted. */
-    if (!r) r = mdi_sql(s, "CREATE TEMP TABLE image_live(object TEXT PRIMARY KEY);"
-        "INSERT INTO image_live WITH RECURSIVE tree(object) AS (SELECT '" MDI_ROOT "' UNION "
-        "SELECT n.object FROM names n JOIN tree t ON n.parent=t.object) SELECT object FROM tree;"
-        "DELETE FROM file_paths;"
-        "DELETE FROM names WHERE parent NOT IN image_live;"
-        "DELETE FROM backings WHERE object NOT IN image_live;"
-        "DELETE FROM inode_acls WHERE object NOT IN image_live;"
-        "DELETE FROM file_capabilities WHERE object NOT IN image_live;"
-        "DELETE FROM objects WHERE object NOT IN image_live;"
-        "INSERT INTO file_paths SELECT o.object,n.parent,n.name,o.name_count>1 "
-            "FROM objects o JOIN names n ON n.object=o.object WHERE o.kind!=16384 GROUP BY o.object;"
-        "DELETE FROM sources WHERE NOT EXISTS (SELECT 1 FROM objects "
+    if (!r) r=mdi_retire_detached_objects(s);
+    if (!r) r = mdi_sql(s, "DELETE FROM sources WHERE NOT EXISTS (SELECT 1 FROM objects "
             "WHERE objects.source=sources.id AND objects.scope=sources.scope) "
-            "AND NOT EXISTS(SELECT 1 FROM inode_channels c WHERE c.source=sources.id AND c.scope=sources.scope);"
-        "DROP TABLE image_live");
+            "AND NOT EXISTS(SELECT 1 FROM inode_channels c WHERE c.source=sources.id AND c.scope=sources.scope)");
     s->sync_requested=1;
     r=mdi_commit(s,r);
     if (!r) {

@@ -264,9 +264,9 @@ short namespace transaction lock. Source directories retain their own parent-roo
 leases. Exclusive offline maintenance fails with EBUSY while an owner retains the
 store. These leases protect cooperating live operations; they do not replace a
 persistent image-dependency catalog or prevent external filesystem deletion.
-`maintain STORE` collects unused projection views and untracked local backings
-through this exclusive gate. It retains shared sources, allocation reserves and
-ordinary detached logical objects; it is not a full live garbage collector.
+`maintain STORE` collects unused projections. In an idle writable store it
+retires objects no longer reachable from the root and then removes untracked
+local backings. It preserves shared sources, sealed catalogues and allocation reserves.
 Ordinary store admission and guest IO do not run this scan.
 `remove STORE` and `remove-layer LAYER` are exclusive offline operations. Their
 caller must first verify persistent dependents. A successful admission renames

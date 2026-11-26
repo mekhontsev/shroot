@@ -89,8 +89,8 @@ materialization at shared-source boundaries. Native leaf nodes are not cached.
 `inode_overlay_native.c` owns writable-upper eligibility and atomic publication
 of shared native leaves into their upper/merged catalogue projections.
 `inode_view.c` owns retained namespace projections within one store transaction
-domain; `inode_maintenance.c` collects untracked backing objects only under
-exclusive maintenance or before a store is published.
+domain; `inode_maintenance.c` retires unreachable namespace objects and collects
+untracked backings during exclusive maintenance or before a store is published.
 Their private contract is in
 `inode_internal.h`. Callers use the explicit dirfd-based `inode_store.h` API.
 Format 17 uses WAL and includes durable allocation inventory,
@@ -786,9 +786,11 @@ independent of OCI parsing and launch-local directory attachments.
   gate. A live owner causes EBUSY before any maintenance; ordinary `prepare`
   and guest syscalls do not perform this scan. Shared source bodies and allocated
   reserves remain referenced and are retained.
-  There is no live garbage collector for ordinary detached objects. Removing metadata while another process
-  holds an FD would break descriptor lookup. Long-lived stores can therefore
-  accumulate unreachable backing data; live reclamation remains unsupported.
+  For a writable store, once only its ordinary namespace remains, maintenance
+  follows names from the root and retires unreachable objects. Metadata retirement
+  is committed and checkpointed before native bodies are unlinked; an interrupted
+  sweep can be retried. Sealed stores retain their catalogue. There is no live
+  collection: unlinking the last name cannot invalidate an open descriptor.
 
 SQLite supplies database transactions, not Linux filesystem semantics. References:
 [atomic commit](https://www.sqlite.org/atomiccommit.html),
