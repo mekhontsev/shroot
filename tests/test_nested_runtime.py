@@ -2,6 +2,7 @@
 """Exercise guest tracing and nested runtime with the same native helpers."""
 import argparse
 import itertools
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -44,10 +45,13 @@ def main():
     print(f'HOST uid={os.getuid()} gid={os.getgid()} kernel={os.uname().release} '
           f'machine={os.uname().machine} page_size={os.sysconf("SC_PAGE_SIZE")}', flush=True)
 
-    def run(argv, expected=0):
+    def run(argv, expected=0, *, capture=False):
         print('RUN', *map(str, argv), flush=True)
         started = time.monotonic()
-        result = subprocess.run(argv, timeout=None if args.external_watchdog else 60)
+        output = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) if capture else {}
+        result = subprocess.run(argv, timeout=None if args.external_watchdog else 60, **output)
+        if capture:
+            print(result.stdout, end='', flush=True)
         assert result.returncode == expected, result
         print(f'PASS exit={result.returncode} elapsed={time.monotonic() - started:.3f}s', flush=True)
         return result
@@ -85,7 +89,7 @@ def main():
             command = cli + ['exec', str(root / 'outer'), '--env', 'SHROOT_MACHINE_ENTRY=' + entry]
             if args.diagnostics:
                 command += ['--diagnostics']
-            if args.statistics:
+            if args.statistics and args.case != 'nested':
                 command += ['--statistics']
             if args.case == 'debugger':
                 for scenario in scenarios:
@@ -98,20 +102,32 @@ def main():
                 # native policy rejects syscall -1 outside the runtime.
                 run(command + ['--', '/bin/signal_checkpoint', '--syscall-stop-restore'])
             else:
-                for entries in itertools.product(entries_to_test, repeat=args.depth-1):
+                def nested_command(entries, *, inner_stats_only=False):
                     nested = command + ['--user', str(os.getuid()) + ':' + str(os.getgid()),
                                         '--bind-create', str(root), '/nested']
+                    if args.statistics and not inner_stats_only:
+                        nested += ['--statistics']
                     for level, inner in enumerate(entries, start=1):
                         nested += ['--', '/runtime/libshroot_guest_run.so']
                         if args.diagnostics:
                             nested += ['--diagnostics']
-                        if args.statistics:
+                        if (level == len(entries) if inner_stats_only else args.statistics):
                             nested += ['--statistics']
-                        nested += ['--store', f'/nested/level-{level}', '--env',
-                                   'SHROOT_MACHINE_ENTRY=' + inner]
-                        if level < args.depth-1:
+                        nested += ['--store', f'/nested/level-{level}']
+                        if inner is not None:
+                            nested += ['--env', 'SHROOT_MACHINE_ENTRY=' + inner]
+                        if level < len(entries):
                             nested += ['--bind-create', '/nested', '/nested']
-                    nested += ['--env', "LIBSHROOT_TEST=retained ' value", '--', '/bin/client-guest']
+                    return nested + ['--env', "LIBSHROOT_TEST=retained ' value", '--', '/bin/client-guest']
+
+                if args.depth == 2 and entry == '0' and '1' in entries_to_test:
+                    result = run(nested_command([None], inner_stats_only=True) + ['priority-baseline'], capture=True)
+                    records = [json.loads(line.removeprefix('SVC_RUNTIME_STATS '))
+                               for line in result.stdout.splitlines() if line.startswith('SVC_RUNTIME_STATS ')]
+                    assert sum(row['completed'] for row in records) > 0, (
+                        'No inner Lazy completions with an outer Base launch', records)
+                for entries in itertools.product(entries_to_test, repeat=args.depth-1):
+                    nested = nested_command(entries)
                     run(nested + ['exit42'], expected=42)
                     run(nested + ['fork-exec', 'exit42'], expected=42)
                     run(nested + ['fork-exec', "spaces ' ; $(false)"])

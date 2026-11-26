@@ -37,6 +37,12 @@ static int readonly_data(const struct md_view_mount *mount,int fd) {
     if (fstat(fd,&st)) return -errno;
     return special(st.st_mode) ? 0 : -EROFS;
 }
+static int native_access(const struct md_view_mount *mount,int fd,const struct md_fs_request *q) {
+    if (q->flags & ~(AT_SYMLINK_NOFOLLOW | MD_AT_EACCESS) || q->mode & ~(R_OK | W_OK | X_OK)) return -EINVAL;
+    int error=(q->mode&W_OK) ? readonly_data(mount,fd) : 0;
+    if (error) return error;
+    return syscall(SYS_faccessat2,fd,"",q->mode,AT_EMPTY_PATH|q->flags) ? -errno : 0;
+}
 static int device_open(const struct md_view_mount *mount, int flags, mode_t mode) {
     return !(flags&O_PATH) && (S_ISCHR(mode) || S_ISBLK(mode))
         && (md_mount_policy_flags(&mount->policy)&MD_MOUNT_NODEV) ? -EACCES : 0;
@@ -316,9 +322,7 @@ static int descriptor(struct md_filesystem *fs, const struct md_fs_request *q,
     case MD_FS_IOCTL:
         r=md_view_readonly(p->mount) && md_filesystem_ioctl_writes(q->mode) ? -EROFS : -EXDEV; break;
     case MD_FS_ACCESS:
-        if (q->flags&~MD_AT_EACCESS || q->mode&~(R_OK|W_OK|X_OK)) r=-EINVAL;
-        else if ((q->mode&W_OK) && (r=readonly_data(p->mount,p->fd))) break;
-        else if (syscall(SYS_faccessat2,p->fd,"",q->mode,AT_EMPTY_PATH|q->flags)) r=-errno;
+        r=native_access(p->mount,p->fd,q);
         break;
     case MD_FS_XATTR_OBJECT:
         r = md_view_readonly(p->mount) && (q->mode==MD_FS_XATTR_SET || q->mode==MD_FS_XATTR_REMOVE)
@@ -533,9 +537,7 @@ static void native(struct md_filesystem *fs, const struct md_fs_request *q,
         break;
     }
     case MD_FS_ACCESS:
-        if (q->flags & ~(AT_SYMLINK_NOFOLLOW | MD_AT_EACCESS) || q->mode & ~(R_OK | W_OK | X_OK)) r = -EINVAL;
-        else if ((q->mode&W_OK) && (r=readonly_data(a->mount,a->fd))) break;
-        else if (syscall(SYS_faccessat2, a->fd, "", q->mode, AT_EMPTY_PATH | q->flags)) r = -errno;
+        r=native_access(a->mount,a->fd,q);
         break;
     case MD_FS_CREATE: case MD_FS_OPEN: case MD_FS_OPEN_IMAGE: {
         int flags = q->operation == MD_FS_CREATE ? O_RDWR | O_CREAT | O_EXCL

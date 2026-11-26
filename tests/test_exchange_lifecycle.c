@@ -41,7 +41,7 @@ static void replay(struct experiment *x,unsigned length) {
         assert(atomic_load(&c.state)==MD_ENTRY_NATIVE);
     }
     unsigned done=0,expected;
-    int notify_a=0,sleeping_b=0;
+    int notify_a=0,sleeping_b=0,unannounced=0;
     for (unsigned i=0;i<length;++i) {
         enum event e=x->path[i];
         enum md_entry_outcome outcome=MD_ENTRY_UNKNOWN;
@@ -58,7 +58,8 @@ static void replay(struct experiment *x,unsigned length) {
             if (notify_a && atomic_load(&c.sleeping) && sleeping_b) {
                 ++x->late_wake;
                 atomic_store(&c.sleeping,0);
-                REQUIRE(md_entry_prepare_reply_wait(&c,0,&expected) && expected==MD_ENTRY_REQUEST);
+                REQUIRE(md_entry_prepare_reply_wait(&c,0,&unannounced,&expected)==MD_REPLY_FUTEX
+                        && expected==MD_ENTRY_REQUEST);
             }
             break;
         case TAKE_A:
@@ -87,7 +88,7 @@ static void replay(struct experiment *x,unsigned length) {
             REQUIRE(c.sequence==b && !c.input.sequence);
             break;
         case ARM_B:
-            sleeping_b=md_entry_prepare_reply_wait(&c,0,&expected);
+            sleeping_b=md_entry_prepare_reply_wait(&c,0,&unannounced,&expected)==MD_REPLY_FUTEX;
             REQUIRE(sleeping_b==!(done&BIT(REPLY_B)));
             break;
         case ADMIT_B: {

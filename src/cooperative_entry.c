@@ -80,14 +80,18 @@ static void capture_paths(struct md_entry_channel *c,const struct md_entry_call 
 enum { CONT_CONTROL, CONT_CHANNEL, CONT_SEQUENCE, CONT_FLAGS };
 enum { CALL_NATIVE=1, CALL_DESCRIPTOR=2, CALL_NATIVE_SENT=4, CALL_KIND_SHIFT=3,
     CALL_BEGIN=MD_ENTRY_EXECUTION_BEGIN<<CALL_KIND_SHIFT };
-static enum md_entry_outcome progress(struct md_entry_client *,struct md_entry_call *);
+static enum md_entry_outcome progress(struct md_entry_client *,struct md_entry_call *,int);
 static enum md_entry_outcome publish(struct md_entry_client *,struct md_entry_call *);
 static enum md_entry_outcome task_execute(struct md_entry_client *,struct md_entry_call *);
+static void wake_listener(void) {
+    long result=md_entry_notify_listener(md_guest_buffer_admit);
+    if (result) md_die("entry wake acknowledgement",result);
+}
 static void wake_owner(struct md_entry_channel *c) {
     if (md_entry_control_request(c->call.reserved) && c->control_target>0
             && (atomic_load_explicit(&c->routes.flags,memory_order_acquire)&MD_ROUTE_ADMITTED_KERNEL)
             && !md_entry_wakeup_send(c->control_target,c->owner)) return;
-    md_guest_buffer_admit(MD_ENTRY_WAKE);
+    wake_listener();
 }
 extern long md_guest_buffer_control_kernel(unsigned,unsigned long,unsigned long);
 static struct md_entry_channel *continuation(struct md_entry_client *client,struct md_entry_call *call) {
@@ -110,7 +114,7 @@ static enum md_entry_outcome resume_kernel(struct md_entry_client *client,struct
     if (md_entry_withdraw_fd(c)) {
         return finish(client,call,MD_ENTRY_COMPLETED);
     }
-    return progress(client,call);
+    return progress(client,call,0);
 }
 static void worker_fd_result(struct md_entry_channel *c,const struct md_entry_call *call,long result) {
     if (result<0) return;
@@ -131,19 +135,20 @@ static enum md_entry_outcome resume_native(struct md_entry_client *client,struct
         c->call.reserved=MD_ENTRY_EFFECT_DONE;
         call->continuation[CONT_FLAGS]&=~CALL_NATIVE_SENT;
         call->continuation[CONT_SEQUENCE]=c->sequence;
-        if (md_entry_publish_request(c,MD_ENTRY_REQUEST)) wake_owner(c);
-        return progress(client,call);
+        int wake=md_entry_publish_request(c,MD_ENTRY_REQUEST);
+        if (wake) wake_owner(c);
+        return progress(client,call,!wake);
     }
     long result;
     if (md_entry_early_native_result(c,&result)) {
-        if (!atomic_load_explicit(&c->awake,memory_order_seq_cst)) md_guest_buffer_admit(MD_ENTRY_WAKE);
+        if (!atomic_load_explicit(&c->awake,memory_order_seq_cst)) wake_listener();
         call->result=result;
         worker_fd_result(c,call,result);
         return finish(client,call,MD_ENTRY_COMPLETED);
     }
     atomic_thread_fence(memory_order_seq_cst);
-    if (!atomic_load_explicit(&c->awake,memory_order_seq_cst)) md_guest_buffer_admit(MD_ENTRY_WAKE);
-    return progress(client,call);
+    if (!atomic_load_explicit(&c->awake,memory_order_seq_cst)) wake_listener();
+    return progress(client,call,0);
 }
 static void native_effect(void *context) {
     struct md_entry_native *native=context,*frame_native=NULL;
@@ -321,6 +326,18 @@ static enum md_entry_outcome invoke_identified(struct md_entry_client *client,lo
          * original policy was checked above; execute only this read-only query
          * through the admitted effect gate, without a second notification. */
         call->effect=native_effect; outcome=MD_ENTRY_NATIVE_CALL; goto done;
+    }
+    if (c && md_identity_view_index(call->number)>=0 &&
+            (atomic_load_explicit(&c->routes.flags,memory_order_acquire)&MD_ROUTE_HOST_FILTERED)) {
+        /* Only translate a successful read. The calling thread presents the
+         * same number and all six arguments to its host, including arguments
+         * ignored by Linux but observable by an inherited compatible filter. */
+        long native=md_raw(call->number,call->args[0],call->args[1],call->args[2],
+            call->args[3],call->args[4],call->args[5]);
+        if (native<0) {
+            call->result=native;
+            return finish(client,call,MD_ENTRY_COMPLETED);
+        }
     }
     if (c && md_identity_view_read(&c->identity,call->number,&call->result))
         return finish(client,call,MD_ENTRY_COMPLETED);
@@ -552,9 +569,9 @@ static enum md_entry_outcome publish(struct md_entry_client *client,struct md_en
         return kernel_call(call);
     } else if (wake)
         wake_owner(c);
-    return progress(client,call);
+    return progress(client,call,!wake);
 }
-static enum md_entry_outcome progress(struct md_entry_client *client,struct md_entry_call *call) {
+static enum md_entry_outcome progress(struct md_entry_client *client,struct md_entry_call *call,int unannounced) {
     struct md_entry_channel *c=continuation(client,call);
     if (!c) return finish(client,call,MD_ENTRY_UNKNOWN);
     unsigned flags=(unsigned)call->continuation[CONT_FLAGS];
@@ -635,7 +652,9 @@ static enum md_entry_outcome progress(struct md_entry_client *client,struct md_e
             continue;
         }
         parked=1;
-        if (md_entry_prepare_reply_wait(c,native_sent,&state)) {
+        enum md_reply_park park=md_entry_prepare_reply_wait(c,native_sent,&unannounced,&state);
+        if (park==MD_REPLY_ENROLL) wake_listener();
+        else if (park==MD_REPLY_FUTEX) {
             /* EVENT_WAIT: exact response or owner closure. Launch teardown
              * terminates the task. Never abandon an accepted output pointer
              * while its worker can still write into the caller's stack. */

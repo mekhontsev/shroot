@@ -1394,7 +1394,7 @@ static void metadata_policy_wait(void) {
     const uint32_t actions[]={SECCOMP_RET_USER_NOTIF,SECCOMP_RET_TRACE|17};
     const unsigned calls[]={SYS_fstat,SYS_newfstatat,SYS_readlinkat,SYS_rt_sigprocmask};
     struct thread t={.pid=123,.phase=IDLE,.ready=1,.entered=1,.memory=md_memory_new(),
-        .seccomp.application_filter=1};
+        .seccomp.guest_filter_count=1};
     assert(t.memory);
     for (unsigned host=0;host<2;++host) for (unsigned a=0;a<2;++a)
         for (unsigned n=0;n<sizeof(calls)/sizeof(*calls);++n) {
@@ -1758,6 +1758,23 @@ static void filter_result(struct thread *caller,long result) {
     regs.regs[0]=result;
     assert(!filter_observed(caller,&regs));
 }
+static void filter_status_sources(void) {
+    struct md_seccomp_status v;
+    const char *clear="Seccomp:\t0\nSeccomp_filters:\t0\n";
+    assert(!md_status_seccomp(clear,&v) && !v.visible && !v.backing && !v.host_filtered);
+    assert(!md_status_seccomp("Seccomp: 2\nSeccomp_filters: 3\n",&v)
+        && v.visible==3 && v.backing==3 && v.host_filtered);
+    const char *projected="Seccomp: 0\nSeccomp_filters: 0\nShrootBackingFilters: 3\n";
+    char status[256];
+    assert(!md_status_seccomp(projected,&v) && !v.visible && v.backing==3 && v.host_filtered);
+    snprintf(status,sizeof(status),"%sShrootHostSeccomp: 0\n",projected);
+    assert(!md_status_seccomp(status,&v) && !v.visible && v.backing==3 && !v.host_filtered);
+    snprintf(status,sizeof(status),"%sShrootHostSeccomp: 2\n",projected);
+    assert(!md_status_seccomp(status,&v) && !v.visible && v.backing==3 && v.host_filtered);
+    assert(md_status_seccomp("Seccomp: 0\nSeccomp_filters: 1\n",&v)<0);
+    assert(md_status_seccomp("Seccomp: 2\nSeccomp_filters: 3\nShrootBackingFilters: 2\n",&v)<0);
+    assert(md_status_seccomp("Seccomp: 0\nSeccomp_filters: 0\nShrootHostSeccomp: 0\n",&v)<0);
+}
 static void filter_publication(void) {
     struct thread *saved=threads;
     struct thread outside={.pid=3,.tgid=3};
@@ -1769,31 +1786,39 @@ static void filter_publication(void) {
     caller.execution.registers.regs[0]=SECCOMP_SET_MODE_FILTER;
     caller.execution.registers.regs[1]=SECCOMP_FILTER_FLAG_TSYNC;
     filter_result(&caller,2);
-    assert(!caller.seccomp.application_filter && !peer.seccomp.application_filter);
+    assert(!caller.seccomp.guest_filter_count && !peer.seccomp.guest_filter_count);
     filter_result(&caller,-EINVAL);
-    assert(!caller.seccomp.application_filter && !peer.seccomp.application_filter);
+    assert(!caller.seccomp.guest_filter_count && !peer.seccomp.guest_filter_count);
     filter_result(&caller,0);
-    assert(caller.seccomp.application_filter && peer.seccomp.application_filter);
-    assert(!outside.seccomp.application_filter && !retired.seccomp.application_filter);
-    caller.seccomp.application_filter=peer.seccomp.application_filter=0;
+    assert(caller.seccomp.guest_filter_count==1 && peer.seccomp.guest_filter_count==1);
+    caller.execution.registers.regs[1]=0;
+    filter_result(&caller,0);
+    assert(caller.seccomp.guest_filter_count==2 && peer.seccomp.guest_filter_count==1);
+    caller.execution.registers.regs[1]=SECCOMP_FILTER_FLAG_TSYNC;
+    filter_result(&caller,peer.pid);
+    assert(caller.seccomp.guest_filter_count==2 && peer.seccomp.guest_filter_count==1);
+    filter_result(&caller,0);
+    assert(caller.seccomp.guest_filter_count==3 && peer.seccomp.guest_filter_count==3);
+    assert(!outside.seccomp.guest_filter_count && !retired.seccomp.guest_filter_count);
+    caller.seccomp.guest_filter_count=peer.seccomp.guest_filter_count=0;
     caller.execution.registers.regs[1]=SECCOMP_FILTER_FLAG_NEW_LISTENER;
     filter_result(&caller,5);
-    assert(caller.seccomp.application_filter && !peer.seccomp.application_filter);
-    caller.seccomp.application_filter=0;
+    assert(caller.seccomp.guest_filter_count && !peer.seccomp.guest_filter_count);
+    caller.seccomp.guest_filter_count=0;
     filter_result(&caller,0);
-    assert(caller.seccomp.application_filter && !peer.seccomp.application_filter);
-    caller.seccomp.application_filter=0; caller.entered=0;
-    filter_result(&caller,5); assert(!caller.seccomp.application_filter);
+    assert(caller.seccomp.guest_filter_count && !peer.seccomp.guest_filter_count);
+    caller.seccomp.guest_filter_count=0; caller.entered=0;
+    filter_result(&caller,5); assert(!caller.seccomp.guest_filter_count);
     caller.entered=1; caller.execution.registers.regs[8]=SYS_prctl;
     caller.execution.registers.regs[0]=PR_SET_SECCOMP; caller.execution.registers.regs[1]=SECCOMP_MODE_STRICT;
-    filter_result(&caller,0); assert(!caller.seccomp.application_filter);
+    filter_result(&caller,0); assert(!caller.seccomp.guest_filter_count);
     caller.execution.registers.regs[1]=SECCOMP_MODE_FILTER;
-    filter_result(&caller,0); assert(caller.seccomp.application_filter && !peer.seccomp.application_filter);
+    filter_result(&caller,0); assert(caller.seccomp.guest_filter_count && !peer.seccomp.guest_filter_count);
     struct md_interception_buffers *pool=NULL;
     assert(!md_buffers_create_readonly(1,sizeof(struct md_seccomp_image),&pool));
     const long outcomes[]={-EINVAL,23,0};
     for (unsigned i=0;i<sizeof(outcomes)/sizeof(*outcomes);++i) {
-        caller.seccomp.application_filter=peer.seccomp.application_filter=0;
+        caller.seccomp.guest_filter_count=peer.seccomp.guest_filter_count=0;
         caller.execution.registers.regs[8]=SYS_seccomp;
         caller.execution.registers.regs[0]=SECCOMP_SET_MODE_FILTER;
         caller.execution.registers.regs[1]=SECCOMP_FILTER_FLAG_TSYNC;
@@ -2134,8 +2159,8 @@ static void memory_observation_routes(void) {
     assert(!memory_observation(&t,&info,&observed,&alias));
     info.instruction_pointer=0x3004; r->disabled=1;
     assert(!memory_observation(&t,&info,&observed,&alias)); r->disabled=0;
-    t.seccomp.application_filter=1;
-    assert(!memory_observation(&t,&info,&observed,&alias)); t.seccomp.application_filter=0;
+    t.seccomp.guest_filter_count=1;
+    assert(!memory_observation(&t,&info,&observed,&alias)); t.seccomp.guest_filter_count=0;
     t.entry.blocked=1;
     assert(!memory_observation(&t,&info,&observed,&alias)); t.entry.blocked=0;
     t.debug.options=1;
@@ -2163,7 +2188,7 @@ static void machine_context_admission(void) {
     assert(!machine_discovery(&t));
     t.seccomp.admission_policy_valid=0;
     for (unsigned i=0;i<4;++i) {
-        t.seccomp.application_filter=i==0; t.entry.blocked=i==1;
+        t.seccomp.guest_filter_count=i==0; t.entry.blocked=i==1;
         t.debug.options=i==2; r->disabled=i==3;
         assert(!machine_discovery(&t) && !machine_context(&t,&info));
         info.instruction_pointer=0x3004;
@@ -2173,7 +2198,7 @@ static void machine_context_admission(void) {
         info.stack_pointer=0x800000;
         assert(machine_context(&t,NULL));
     }
-    t.seccomp.application_filter=t.entry.blocked=0; t.debug.options=0; r->disabled=0;
+    t.seccomp.guest_filter_count=t.entry.blocked=0; t.debug.options=0; r->disabled=0;
     t.entered=0;
     assert(!machine_discovery(&t) && !machine_context(&t,&info));
     t.entered=1;
@@ -2190,7 +2215,7 @@ static void machine_context_admission(void) {
     assert(machine_context(&t,&info));
     t.phase=DISPATCHING;
     assert(!machine_context(&t,&info) && !machine_context(&t,NULL));
-    t.phase=IDLE; t.seccomp.application_filter=1;
+    t.phase=IDLE; t.seccomp.guest_filter_count=1;
     struct sock_filter code[]={BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)};
     struct sock_fprog program={1,code};
     assert(!md_seccomp_policy_capture(NULL,&program,&t.seccomp.policy));
@@ -2204,16 +2229,22 @@ static void machine_context_admission(void) {
     /* A captured guest ALLOW chain says nothing about an opaque parent. */
     t.execution.request.nr=SYS_openat;
     assert(filter_chain_captured(&t) && !buffer_result_needs_replay(&t,0));
-    opaque_launch_filter=1;
+    machine_entry_requested=0;
+    assert(!machine_entry_admitted() && !machine_discovery(&t) && filter_chain_captured(&t));
+    machine_entry_requested=1;
+    launch_kernel_filtered=1;
+    launch_original_entry=1;
     assert(effective_filter(&t) && !filter_chain_captured(&t) && !machine_discovery(&t));
     assert(buffer_result_needs_replay(&t,0) && !buffer_result_needs_replay(&t,1));
     t.execution.request.nr=SYS_getuid;
     assert(!buffer_result_needs_replay(&t,0));
-    t.seccomp.application_filter=0;
+    t.seccomp.guest_filter_count=0;
     assert(effective_filter(&t) && !machine_discovery(&t));
-    opaque_launch_filter=0;
+    launch_original_entry=0;
+    assert(effective_filter(&t) && machine_discovery(&t) && !filter_chain_captured(&t));
+    launch_kernel_filtered=0;
     assert(!effective_filter(&t));
-    t.seccomp.application_filter=1;
+    t.seccomp.guest_filter_count=1;
     assert(machine_discovery(&t));
     const long mapping_calls[]={SYS_mmap,SYS_munmap,SYS_mprotect,SYS_mremap};
     for (unsigned i=0;i<sizeof(mapping_calls)/sizeof(*mapping_calls);++i) {
@@ -2249,7 +2280,7 @@ static void machine_context_admission(void) {
     puts("PASS policy entry admission: published view, exact image, fork/exec and mapping mutation scope");
 }
 static void native_alias_routing(void) {
-    struct thread t={.pid=123,.entered=1,.seccomp.application_filter=1,.memory=md_memory_new()};
+    struct thread t={.pid=123,.entered=1,.seccomp.guest_filter_count=1,.memory=md_memory_new()};
     assert(t.memory);
     struct md_svc_registry *r=md_svc_registry_new(0x1000000,0x4000,0x5000); assert(r);
     assert(!md_memory_svc_set(t.memory,r));
@@ -4137,7 +4168,7 @@ static void fd_native_retirement(void) {
         if (mode==1) peer=md_fd_origins_fork(files,1);
         if (mode==3) assert(!md_fd_origins_abandon_range(files,5,5));
         if (mode==4 && operation) t.debug.options=PTRACE_O_TRACEEXEC;
-        if (mode==5) t.seccomp.application_filter=1;
+        if (mode==5) t.seccomp.guest_filter_count=1;
         /* Abandoning an ordinary origin removes it; it is not an uncertain
          * infrastructure slot. Close remains metadata-free, flags do not. */
         int direct=mode==0 || mode==5 || (!setfd && mode==3);
@@ -4227,7 +4258,7 @@ static void duplicate_prepared_admission(void) {
         assert(!fd_duplicate_prepared(&t,&call,MD_INTERCEPT_PROC));
         t.debug.options=PTRACE_O_TRACEEXEC;
         assert(!fd_duplicate_prepared(&t,&call,MD_INTERCEPT_DISPATCH)); t.debug.options=0;
-        t.seccomp.application_filter=1;
+        t.seccomp.guest_filter_count=1;
         assert(fd_duplicate_prepared(&t,&call,MD_INTERCEPT_DISPATCH));
         fd_expected_resume=PTRACE_SYSCALL; fd_resume_calls=0;
         checkpoints.trace=shared ? no_trace : fd_resume_trace; thread_index[t.pid%THREAD_BUCKETS]=&t;
@@ -4395,7 +4426,7 @@ static void process_signal_admission(void) {
     for (unsigned i=0;i<sizeof(calls)/sizeof(*calls);++i) {
         struct md_entry_channel channel={.call={.number=calls[i],.reserved=MD_ENTRY_EXECUTION_BEGIN}};
         struct thread caller={.pid=123,.tgid=123,.born=1,.signals.host=host,
-            .seccomp.application_filter=restricted};
+            .seccomp.guest_filter_count=restricted};
         struct thread target={.pid=456,.tgid=456,.born=1,.signals.host=host};
         struct md_pid_namespace *space=md_pid_namespace_new(NULL,NULL); assert(space);
         struct md_pid_identity *identity=NULL;
@@ -4691,7 +4722,7 @@ static void adapter_native_receipts(void) {
     for (unsigned retained=0;retained<2;++retained) {
         local.call=(struct md_entry_request){.number=SYS_gettid};
         owner=(struct thread){.pid=123,.entry={.control=&local,.admission=1},
-            .seccomp.application_filter=1};
+            .seccomp.guest_filter_count=1};
         thread_index[owner.pid%THREAD_BUCKETS]=&owner;
         if (retained) {
             owner.phase=DISPATCHING;
@@ -5179,7 +5210,7 @@ static void native_ioctl_route(void) {
     for (unsigned worker=0;worker<2;++worker) for (unsigned i=0;i<sizeof(calls)/sizeof(*calls);++i) {
         filesystem=worker ? (struct md_fs_worker *)(uintptr_t)1 : NULL;
         int watch=worker && calls[i].watch;
-        struct thread t={.pid=123,.phase=IDLE,.ready=1,.seccomp.application_filter=1};
+        struct thread t={.pid=123,.phase=IDLE,.ready=1,.seccomp.guest_filter_count=1};
         t.resources.files=md_fd_origins_new(); assert(t.resources.files);
         struct user_pt_regs regs={0}; regs.regs[8]=calls[i].nr; regs.regs[0]=5;
         regs.regs[1]=calls[i].command; regs.regs[2]=1;
@@ -7744,7 +7775,7 @@ static void checkpoint_admission(void) {
     assert(checkpoint_restricted(t.pid));
     thread_index[t.pid%THREAD_BUCKETS]=&t;
     assert(!checkpoint_restricted(t.pid));
-    t.seccomp.application_filter=1; assert(checkpoint_restricted(t.pid));
+    t.seccomp.guest_filter_count=1; assert(checkpoint_restricted(t.pid));
     struct md_svc_registry *r=md_svc_registry_new(0x1000000,0x4000,0x5000); assert(r);
     uint64_t image=r->image;
     if (resident) assert(!md_memory_svc_set(t.memory,r));
@@ -7799,7 +7830,7 @@ static long checkpoint_barrier_trace(int request,pid_t pid,void *address,void *d
 }
 static void checkpoint_quiescence(void) {
     checkpoint_broker_observation=1;
-    struct thread t={.pid=123,.seccomp.application_filter=1};
+    struct thread t={.pid=123,.seccomp.guest_filter_count=1};
     thread_index[t.pid%THREAD_BUCKETS]=&t;
     struct md_task_checkpoints saved=checkpoints;
     checkpoints=(struct md_task_checkpoints){.trace=checkpoint_barrier_trace,
@@ -8912,14 +8943,21 @@ static void execution_register_boundary(void) {
     struct thread t={.execution.stack=0x8000,.execution.registers={.pc=0x1004,.sp=0x2000,.pstate=0xa0000000}};
     for (unsigned i=0;i<31;++i) t.execution.registers.regs[i]=UINT64_C(0xf000000000000000)+i;
     struct user_pt_regs replay;
-    assert(buffer_replay_registers(&t,&replay)==&t.execution.registers);
+    t.execution.request=(struct seccomp_data){.nr=SYS_openat,.instruction_pointer=0x3004};
+    for (unsigned i=0;i<6;++i) t.execution.request.args[i]=UINT64_C(0xc000000000000000)+i;
+    struct user_pt_regs visible=t.execution.registers;
+    buffer_replay_request(&t,0x4000,&replay);
+    assert(replay.regs[8]==SYS_openat && replay.pc==0x4000);
+    assert(replay.sp==visible.sp && replay.pstate==visible.pstate);
+    for (unsigned i=0;i<31;++i) if (i!=8)
+        assert(replay.regs[i]==(i<6 ? t.execution.request.args[i] : visible.regs[i]));
+    assert(buffer_replay_visible(&t,&replay)==&t.execution.registers);
+    assert(!memcmp(&visible,&t.execution.registers,sizeof(visible)));
     struct md_entry_channel channel={0};
     t.entry.execution=&channel;
     t.fs.registers=(struct user_pt_regs){.pc=0x7004,.sp=0xb000,.pstate=0x40000000};
     for (unsigned i=0;i<31;++i) t.fs.registers.regs[i]=UINT64_C(0xd000000000000000)+i;
-    t.execution.request=(struct seccomp_data){.nr=SYS_openat,.instruction_pointer=0x3004};
-    for (unsigned i=0;i<6;++i) t.execution.request.args[i]=UINT64_C(0xc000000000000000)+i;
-    assert(buffer_replay_registers(&t,&replay)==&replay);
+    assert(buffer_replay_visible(&t,&replay)==&replay);
     assert(replay.pc==t.execution.request.instruction_pointer && replay.regs[8]==SYS_openat);
     assert(replay.sp==t.fs.registers.sp && replay.pstate==t.fs.registers.pstate);
     for (unsigned i=0;i<31;++i) if (i!=8)
@@ -9086,6 +9124,7 @@ static void signal_sender_credentials(void) {
 }
 int main(void) {
     setvbuf(stdout,NULL,_IOLBF,0);
+    machine_entry_requested=1;
     native_uid=getuid();
     md_page_size=(size_t)sysconf(_SC_PAGESIZE);
     signal_sender_credentials();
@@ -9146,6 +9185,7 @@ int main(void) {
     debug_host_exit();
     cancel_stopped_child();
     cancellation_owner_boundary();
+    filter_status_sources();
     filter_publication();
     filter_listener_ownership();
     trace_policy_admission();

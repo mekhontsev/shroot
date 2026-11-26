@@ -476,12 +476,33 @@ static void cancellation_custody(void) {
     }
     puts("PASS native effect custody: cancel before claim reads nothing; after claim exactly one byte is consumed");
 }
+static void unclaimed_park(void) {
+    for (unsigned kind=MD_ENTRY_SYSCALL;kind<=MD_ENTRY_TRANSFER_DONE;++kind) {
+        struct md_entry_channel c={.sequence=2,.receipt=1,.call={.reserved=kind}};
+        enum md_entry_owner owner=md_entry_request_owner(kind);
+        atomic_store(md_entry_owner_awake(&c,owner),1);
+        int unannounced=!md_entry_publish_request(&c,MD_ENTRY_REQUEST);
+        assert(unannounced);
+        unsigned state;
+        assert(md_entry_prepare_reply_wait(&c,0,&unannounced,&state)==MD_REPLY_ENROLL);
+        assert(!unannounced && state==MD_ENTRY_REQUEST && c.sequence==2 && c.receipt==1);
+        assert(md_entry_prepare_reply_wait(&c,0,&unannounced,&state)==MD_REPLY_FUTEX);
+        atomic_store(&c.state,MD_ENTRY_RUNNING);
+        unannounced=1;
+        assert(md_entry_prepare_reply_wait(&c,0,&unannounced,&state)==MD_REPLY_FUTEX);
+        md_entry_record_reply(&c,2,MD_ENTRY_COMPLETED,0);
+        assert(md_entry_publish_response(&c,MD_ENTRY_RESPONSE));
+        assert(md_entry_prepare_reply_wait(&c,0,&unannounced,&state)==MD_REPLY_READY);
+    }
+    puts("PASS unclaimed request: enroll once before parking without replaying the operation");
+}
 int main(void) {
     alarm(30); unsigned count=0;
     descriptor_lease();
     string_operands();
     open_admission();
     park_handoff();
+    unclaimed_park();
     cancellation_custody();
     for (int kind=0;kind<11;++kind)
         for (uintptr_t pc=(uintptr_t)md_cooperative_native;pc<=(uintptr_t)md_cooperative_native_end;pc+=4) {

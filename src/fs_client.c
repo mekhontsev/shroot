@@ -138,7 +138,7 @@ int md_fs_result_valid(const struct md_fs_request *request, const struct md_fs_r
 #ifdef MD_USE_LIBC
 long md_fs_receive_reply(int socket, int64_t *delivery_deadline, unsigned timeout_ms,
                           const struct md_fs_request *request, struct md_fs_response *out,
-                          struct md_fs_reply *reply, uint64_t exchange,
+                          struct md_fs_reply_view *reply, uint64_t exchange,
                           int (*deliver)(void *, const void *, size_t), void *context) {
     struct md_fs_rights rights = {0};
     long r; int deferred=0;
@@ -221,7 +221,7 @@ long md_fs_receive_reply(int socket, int64_t *delivery_deadline, unsigned timeou
         .info=reply->info,.size=reply->size,.position=reply->position,.host_path=reply->host_path,
         .proc_namespace=reply->proc_namespace,
         .open_completion={.kind=(enum md_open_kind)reply->open_completion,.control=rights.count>1 ? rights.fd[1] : -1}};
-    if (!md_fs_result_valid(request,&result,reply->data,sizeof(reply->data),rights.count)) {
+    if (!md_fs_result_valid(request,&result,reply->data,capacity,rights.count)) {
         md_fs_close_rights(&rights); return -EPROTO;
     }
     out->delivery = MD_FS_REPLIED; out->result=result;
@@ -246,54 +246,40 @@ long md_fs_public_fd(int fd,unsigned flags) {
 #endif
     return fd;
 }
-long md_fs_call_deliver(const char *name, unsigned timeout_ms,
-        const struct md_fs_request *request, struct md_fs_response *out,
-        int (*deliver)(void *, const void *, size_t), void *context) {
-    if (!out) return -EFAULT;
-    memset(out, 0, sizeof(*out)); out->result.fd = -1;
-    if (!request) return -EFAULT;
-    if (!timeout_ms || timeout_ms > 60000) return -EINVAL;
-#ifndef MD_USE_LIBC
-    (void)name;
-    if (deliver && request->operation!=MD_FS_WATCH_READ && request->operation!=MD_FS_GETDENTS
-            && !md_fs_operation_value(request->operation)) return -EINVAL;
-    /* Guest calls have one transport. Task-affine inputs are captured before
-     * worker execution, without retrying an accepted filesystem operation. */
-    return md_fs_buffer_call(request,out,deliver,context);
-#else
-    if (request->capture[0].path || request->capture[1].path
-            || request->capture[0].flags || request->capture[1].flags) return -ENOTSUP;
-    /* The request is no longer needed after send: reuse its storage for the reply. */
-    union { struct md_fs_packet packet; struct md_fs_reply reply; } wire;
-    memset(&wire.packet,0,offsetof(struct md_fs_packet,data));
-    wire.packet.magic=MD_FS_MAGIC; wire.packet.version=MD_FS_VERSION;
-    wire.packet.operation=request->operation; wire.packet.flags=request->flags; wire.packet.mode=request->mode;
-    wire.packet.capacity=request->capacity; wire.packet.offset=request->offset; wire.packet.resolve=request->resolve;
-    wire.packet.actor=request->actor ? request->actor : md_native_tid(); wire.packet.attributes=request->attributes;
-    if (request->value_size>MD_FS_VALUE_MAX || (request->value_size && !request->value)) return -EINVAL;
-    wire.packet.value_size=request->value_size;
+#ifdef MD_USE_LIBC
+union native_wire { struct md_fs_packet_view packet; struct md_fs_reply_view reply; };
+
+static long native_call(const char *name,unsigned timeout_ms,const struct md_fs_request *request,
+        struct md_fs_response *out,int (*deliver)(void *,const void *,size_t),void *context,
+        union native_wire *wire) {
+    memset(&wire->packet,0,offsetof(struct md_fs_packet,data));
+    wire->packet.magic=MD_FS_MAGIC; wire->packet.version=MD_FS_VERSION;
+    wire->packet.operation=request->operation; wire->packet.flags=request->flags; wire->packet.mode=request->mode;
+    wire->packet.capacity=request->capacity; wire->packet.offset=request->offset; wire->packet.resolve=request->resolve;
+    wire->packet.actor=request->actor ? request->actor : md_native_tid(); wire->packet.attributes=request->attributes;
+    wire->packet.value_size=request->value_size;
     struct md_fs_rights rights = {0};
     size_t length = 0;
     for (unsigned i = 0; i < 2; ++i) {
         if (request->object[i]) {
             if (request->directory[i]!=-1 || !md_fs_object_id_valid(request->object[i])) return -EINVAL;
-            memcpy(wire.packet.object[i],request->object[i],33);
+            memcpy(wire->packet.object[i],request->object[i],33);
         }
         const char *path = request->path[i] ? request->path[i] : "";
         size_t n = 0;
         while (path[n]) { if (n == PATH_MAX-1) return -ENAMETOOLONG; ++n; }
-        memcpy(wire.packet.data + length, path, n+1); wire.packet.length[i] = n+1; length += n+1;
+        memcpy(wire->packet.data + length, path, n+1); wire->packet.length[i] = n+1; length += n+1;
         if (request->directory[i]==AT_FDCWD) {
-            wire.packet.descriptors|=1U<<i;
-            wire.packet.cwd|=1U<<i;
+            wire->packet.descriptors|=1U<<i;
+            wire->packet.cwd|=1U<<i;
         } else if (request->directory[i] < -1) return -EBADF;
         else if (request->directory[i] >= 0) {
-            wire.packet.descriptors |= 1U << i;
+            wire->packet.descriptors |= 1U << i;
             rights.fd[rights.count++] = request->directory[i];
         }
     }
     if (request->value_size) {
-        memcpy(wire.packet.data+length,request->value,request->value_size); length+=request->value_size;
+        memcpy(wire->packet.data+length,request->value,request->value_size); length+=request->value_size;
     }
     struct sockaddr_un address;
     long size = md_fs_address(name, &address); if (size < 0) return size;
@@ -316,9 +302,9 @@ long md_fs_call_deliver(const char *name, unsigned timeout_ms,
     while (!r) {
         long begin=md_fd_control(MD_FD_INPUT,0,request->directory[0],request->directory[1]);
         if (begin<0) { r=begin; break; }
-        if (!begin && wire.packet.cwd) { r=-ENODATA; break; }
-        exchange=(uint64_t)begin; wire.packet.exchange=exchange;
-        r = md_fs_send((int)socket, &wire.packet, length, &rights);
+        if (!begin && wire->packet.cwd) { r=-ENODATA; break; }
+        exchange=(uint64_t)begin; wire->packet.exchange=exchange;
+        r = md_fs_send((int)socket, &wire->packet, length, &rights);
         if (r>=0) out->delivery=MD_FS_UNCONFIRMED;
         if (exchange) {
             long sent=md_fd_control(MD_FD_SENT,exchange,0,0);
@@ -334,7 +320,7 @@ long md_fs_call_deliver(const char *name, unsigned timeout_ms,
         }
         if (r >= 0) {
             r = (size_t)r == length ? md_fs_receive_reply((int)socket, &deadline, timeout_ms,
-                request, out, &wire.reply, exchange,deliver,context) : -EIO;
+                request, out, &wire->reply, exchange,deliver,context) : -EIO;
         }
         break;
     }
@@ -380,6 +366,38 @@ long md_fs_call_deliver(const char *name, unsigned timeout_ms,
     }
     RAW1(close, socket);
     return r;
+}
+#endif
+long md_fs_call_deliver(const char *name, unsigned timeout_ms,
+        const struct md_fs_request *request, struct md_fs_response *out,
+        int (*deliver)(void *, const void *, size_t), void *context) {
+    if (!out) return -EFAULT;
+    memset(out, 0, sizeof(*out)); out->result.fd = -1;
+    if (!request) return -EFAULT;
+    if (!timeout_ms || timeout_ms > 60000) return -EINVAL;
+#ifndef MD_USE_LIBC
+    (void)name;
+    if (deliver && request->operation!=MD_FS_WATCH_READ && request->operation!=MD_FS_GETDENTS
+            && !md_fs_operation_value(request->operation)) return -EINVAL;
+    /* Guest calls have one transport. Task-affine inputs are captured before
+     * worker execution, without retrying an accepted filesystem operation. */
+    return md_fs_buffer_call(request,out,deliver,context);
+#else
+    if (request->capture[0].path || request->capture[1].path
+            || request->capture[0].flags || request->capture[1].flags) return -ENOTSUP;
+    if (request->value_size>MD_FS_VALUE_MAX || (request->value_size && !request->value)) return -EINVAL;
+    /* Send and receive use the same bytes. Ordinary pathname RPC never needs
+     * the maximum value frame on a native thread's (possibly musl) stack. */
+    union { union native_wire view; char bytes[offsetof(struct md_fs_packet,data)+2*PATH_MAX]; } local;
+    size_t size=sizeof(local.bytes)+request->value_size;
+    size_t reply=offsetof(struct md_fs_reply,data)+md_fs_reply_capacity(request->operation);
+    if (size<reply) size=reply;
+    if (size<=sizeof(local.bytes)) return native_call(name,timeout_ms,request,out,deliver,context,&local.view);
+    long memory=RAW6(mmap,NULL,size,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    if (memory<0 && memory>=-4095) return memory;
+    long result=native_call(name,timeout_ms,request,out,deliver,context,(void *)memory);
+    RAW2(munmap,memory,size);
+    return result;
 #endif
 }
 long md_fs_call(const char *name, unsigned timeout_ms,

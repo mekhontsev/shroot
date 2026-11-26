@@ -23,13 +23,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* getuid ignores its arguments, but seccomp sees them. Only tag the test call
- * so that installing the policy cannot change the launcher's own uid queries. */
+/* Linux ignores these arguments, but seccomp sees them. Only tag test calls;
+ * the launcher's own credential and process queries must keep working. */
 #define POLICY_UID_TAG 0x51a77001UL
+static const int policy_ids[]={SYS_getuid,SYS_geteuid,SYS_getgid,SYS_getegid,SYS_getpid,SYS_gettid};
 
-static int check_policy(int denied) {
+static int check_view(const char *path,int count) {
     int mode=prctl(PR_GET_SECCOMP,0,0,0,0), published=-1, filters=-1;
-    FILE *status=fopen("/proc/self/status","r");
+    FILE *status=fopen(path,"r");
     if (!status) { perror("policy status"); return 1; }
     char line[256];
     while (fgets(line,sizeof(line),status)) {
@@ -37,13 +38,18 @@ static int check_policy(int denied) {
         (void)sscanf(line,"Seccomp_filters: %d",&filters);
     }
     int error=ferror(status);
-    if (fclose(status) || error || mode!=published || filters<0
-            || (mode!=0 && mode!=SECCOMP_MODE_FILTER) || (!!mode!=!!filters) || (denied && !mode)) {
-        fprintf(stderr,"policy view: prctl=%d status=%d filters=%d denied=%d\n",mode,published,filters,denied);
+    if (fclose(status) || error || mode!=published || filters!=count
+            || mode!=(count ? SECCOMP_MODE_FILTER : 0)) {
+        fprintf(stderr,"policy view %s: prctl=%d status=%d filters=%d expected=%d\n",path,mode,published,filters,count);
         return 1;
     }
+    return 0;
+}
+static int check_policy(int denied,int count) {
+    if (check_view("/proc/self/status",count) || check_view("/proc/thread-self/status",count)) return 1;
     errno=0;
     long priority=syscall(SYS_getpriority,PRIO_PROCESS,0);
+    int priority_errno=priority==-1 ? errno : 0,tagged_uid_errno=-1;
     if (denied ? priority!=-1 || errno!=EACCES : priority<0) {
         fprintf(stderr,"getpriority: result=%ld errno=%d denied=%d\n",priority,errno,denied); return 1;
     }
@@ -53,42 +59,89 @@ static int check_policy(int denied) {
         unsigned long tag=i==32 ? POLICY_UID_TAG : 0;
         errno=0;
         long result=syscall(SYS_getuid,tag,0L,0L,0L,0L,0L);
+        if (tag) tagged_uid_errno=result==-1 ? errno : 0;
         int expect_denial=tag && denied;
         if (expect_denial ? result!=-1 || errno!=EACCES : result!=uid) {
             fprintf(stderr,"getuid: iteration=%u result=%ld errno=%d denied=%d\n",
                     i,result,errno,expect_denial); return 1;
         }
     }
+    for (size_t i=1;i<sizeof(policy_ids)/sizeof(*policy_ids);++i) {
+        int nr=policy_ids[i];
+        errno=0;
+        long normal=syscall(nr,0L,0L,0L,0L,0L,0L);
+        int normal_errno=normal==-1 ? errno : 0;
+        errno=0;
+        long tagged=syscall(nr,POLICY_UID_TAG,0L,0L,0L,0L,0L);
+        if (normal<0 || (denied ? tagged!=-1 || errno!=EACCES : tagged!=normal)) {
+            fprintf(stderr,"identity %d: normal=%ld errno=%d tagged=%ld errno=%d denied=%d\n",
+                nr,normal,normal_errno,tagged,tagged==-1 ? errno : 0,denied);
+            return 1;
+        }
+    }
+    printf("SHROOT_TEST_POLICY {\"guestFilters\":%d,\"getpriorityErrno\":%d,\"taggedGetuidErrno\":%d}\n",
+        count,priority_errno,tagged_uid_errno);
+    fflush(stdout);
+    return 0;
+}
+
+static int install_priority_policy(int deny) {
+    enum { count=sizeof(policy_ids)/sizeof(*policy_ids), tag=2+count+1, verdict=tag+2 };
+    struct sock_filter code[verdict+2]={
+        BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
+        BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getpriority,verdict-2,0),
+        [tag-1]=BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW),
+        [tag]=BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,args[0])),
+        BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,POLICY_UID_TAG,0,1),
+        BPF_STMT(BPF_RET|BPF_K,deny ? (SECCOMP_RET_ERRNO|EACCES) : SECCOMP_RET_ALLOW),
+        BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)
+    };
+    for (unsigned i=0;i<count;++i)
+        code[2+i]=(struct sock_filter)BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,policy_ids[i],tag-(3+i),0);
+    struct sock_fprog program={sizeof(code)/sizeof(*code),code};
+    if (prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&program)<0) { perror("install test policy"); return 1; }
     return 0;
 }
 
 int main(int argc, char **argv) {
-    if (argc>=3 && (!strcmp(argv[1],"exec-nnp") || !strcmp(argv[1],"exec-deny-priority"))) {
+    if (argc==2 && !strcmp(argv[1],"install-guest-policy")) {
+        if (check_policy(0,0)) return 1;
         if (prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0)<0) { perror("set no_new_privs"); return 1; }
-        if (!strcmp(argv[1],"exec-deny-priority")) {
-            struct sock_filter code[]={
-                BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,nr)),
-                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getpriority,3,0),
-                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,SYS_getuid,0,3),
-                BPF_STMT(BPF_LD|BPF_W|BPF_ABS,offsetof(struct seccomp_data,args[0])),
-                BPF_JUMP(BPF_JMP|BPF_JEQ|BPF_K,POLICY_UID_TAG,0,1),
-                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EACCES),
-                BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW)
-            };
-            struct sock_fprog program={sizeof(code)/sizeof(*code),code};
-            if (prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&program)<0) { perror("install test policy"); return 1; }
+        if (install_priority_policy(1) || check_policy(1,1)) return 1;
+        pid_t child=fork();
+        if (!child) {
+            if (!check_policy(1,1)) execl(argv[0],argv[0],"inherited-guest-policy",(char *)NULL);
+            _exit(1);
         }
+        int status;
+        if (child<0 || waitpid(child,&status,0)!=child || status) return 1;
+        if (install_priority_policy(1) || check_policy(1,2)) return 1;
+        puts(argv[1]); return 0;
+    }
+    if (argc==2 && !strcmp(argv[1],"inherited-guest-policy")) return check_policy(1,1);
+    if (argc==2 && !strcmp(argv[1],"exec-request-lazy")) {
+        if (setenv("SHROOT_MACHINE_ENTRY","1",1)<0) { perror("setenv"); return 1; }
+        execl(argv[0],argv[0],"priority-baseline",(char *)NULL);
+        perror("exec entry control"); return 1;
+    }
+    if (argc>=3 && (!strcmp(argv[1],"exec-nnp") || !strcmp(argv[1],"exec-deny-priority")
+            || !strcmp(argv[1],"exec-allow-priority"))) {
+        if (prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0)<0) { perror("set no_new_privs"); return 1; }
+        if (strcmp(argv[1],"exec-nnp") && install_priority_policy(!strcmp(argv[1],"exec-deny-priority"))) return 1;
         execv(argv[2],argv+2); perror("exec policy test"); return 1;
     }
-    if (argc==2 && (!strcmp(argv[1],"priority-allowed") || !strcmp(argv[1],"priority-denied"))) {
-        if (prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0)!=1) { fputs("no_new_privs was not inherited\n",stderr); return 1; }
+    if (argc==2 && (!strcmp(argv[1],"priority-baseline") || !strcmp(argv[1],"priority-allowed")
+            || !strcmp(argv[1],"priority-denied"))) {
+        if (strcmp(argv[1],"priority-baseline") && prctl(PR_GET_NO_NEW_PRIVS,0,0,0,0)!=1) {
+            fputs("no_new_privs was not inherited\n",stderr); return 1;
+        }
         int denied=!strcmp(argv[1],"priority-denied");
-        if (check_policy(denied)) return 1;
+        if (check_policy(denied,0)) return 1;
         if (denied) {
             struct sock_filter allow=BPF_STMT(BPF_RET|BPF_K,SECCOMP_RET_ALLOW);
             struct sock_fprog suffix={1,&allow};
             if (prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&suffix)<0) { perror("extend test policy"); return 1; }
-            if (check_policy(denied)) return 1;
+            if (check_policy(denied,1)) return 1;
             int fd=open(argv[0],O_RDONLY|O_CLOEXEC);
             char header[4];
             if (fd<0) { perror("open executable under stacked policy"); return 1; }

@@ -66,6 +66,9 @@ static void native_access(const char *root) {
 #endif
             {
                 long expected = __real_md_raw(SYS_faccessat2, dir, (long)names[i], mode, AT_SYMLINK_NOFOLLOW, 0, 0);
+                if (result != expected)
+                    fprintf(stderr, "access %s mode=%d: pinned=%ld faccessat2=%ld\n",
+                            names[i], mode, result, expected);
                 assert(result == expected);
             }
         }

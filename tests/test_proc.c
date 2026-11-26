@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
     snprintf(other, sizeof(other), "%s/moved", argv[1]);
     text_link(path, other);
     CHECK(syscall(SYS_readlinkat, AT_FDCWD, path, (void *)1, 32) == -1 && errno == EFAULT);
-    CHECK(readlink(path, text, 0) == -1 && errno == EINVAL);
+    CHECK(syscall(SYS_readlinkat, AT_FDCWD, path, text, 0) == -1 && errno == EINVAL);
     for (unsigned i = 0; i < 6; ++i) {
         alias(path, sizeof(path), i, dir);
         DIR *listing = opendir(path);

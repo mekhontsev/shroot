@@ -13,7 +13,8 @@
 static void empty_readlink(int fd) {
     char text[32];
     errno=0; assert(readlinkat(fd,"",text,sizeof(text))==-1 && errno==ENOENT);
-    errno=0; assert(readlinkat(fd,"",text,0)==-1 && errno==EINVAL);
+    /* Exercise the kernel ABI: musl substitutes a one-byte buffer for size zero. */
+    errno=0; assert(syscall(SYS_readlinkat,fd,"",text,0)==-1 && errno==EINVAL);
 }
 int test_native_metadata_guest(const char *directory) {
     char path[PATH_MAX];

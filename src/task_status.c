@@ -134,21 +134,30 @@ static long status_decimal(int tid,const char *field) {
     return result<0 ? result : md_status_decimal(text,field);
 }
 long md_task_parent(int tid) { return status_decimal(tid,"PPid:"); }
-long md_task_seccomp_filters(int tid) { return status_decimal(tid,"Seccomp_filters:"); }
-long md_task_backing_seccomp_filters(int tid,long *visible) {
-    char text[4096];
-    if (visible) *visible=-1;
-    long result=task_status(tid,text,sizeof(text));
-    if (result<0) return result;
-    if ((size_t)result==sizeof(text)-1) return -EOVERFLOW;
+int md_status_seccomp(const char *text,struct md_seccomp_status *view) {
     long mode=md_status_decimal(text,"Seccomp:");
     long count=md_status_decimal(text,"Seccomp_filters:");
     if (count<0 || (mode!=0 && mode!=2) || !!mode!=!!count) return -EIO;
-    result=md_status_decimal(text,"ShrootBackingFilters:");
-    if (result==-ENOTSUP) result=count;
-    if (result<count) return -EIO;
-    if (visible) *visible=count;
-    return result;
+    long backing=md_status_decimal(text,"ShrootBackingFilters:");
+    long host=md_status_decimal(text,"ShrootHostSeccomp:");
+    if (backing==-ENOTSUP) {
+        if (host!=-ENOTSUP) return -EIO;
+        backing=count;
+    }
+    if (host==-ENOTSUP) host=backing ? 2 : 0;
+    if (backing<count || (host!=0 && host!=2) || (count && !host) || (host && !backing)) return -EIO;
+    *view=(struct md_seccomp_status){count,backing,host!=0};
+    return 0;
+}
+long md_task_backing_seccomp_filters(int tid,struct md_seccomp_status *view) {
+    char text[4096];
+    long result=task_status(tid,text,sizeof(text));
+    if (result<0) return result;
+    if ((size_t)result==sizeof(text)-1) return -EOVERFLOW;
+    struct md_seccomp_status local;
+    if (!view) view=&local;
+    int error=md_status_seccomp(text,view);
+    return error ? error : view->backing;
 }
 long md_task_core_dumping(int tid) {
     long value=status_decimal(tid,"CoreDumping:");

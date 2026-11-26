@@ -25,6 +25,17 @@ int md_seccomp_capture_prepare(struct md_seccomp_capture *c,struct md_intercepti
     if (!error) error=md_seccomp_policy_capture(parent,local,&next.policy);
     if (!error) {
         struct md_seccomp_image *image=span.data;
+        struct md_seccomp_route portable;
+        if (notification && notification->gates && notification->entry_first && notification->entry_image
+                && notification->internal_gate_count<notification->gate_count
+                && md_seccomp_policy_address_independent(next.policy)) {
+            /* A pool's fallback SVC preserves the syscall number and arguments.
+             * Let the kernel evaluate that call directly: unlike the filter,
+             * the pool's address does not retain its ownership across exec. */
+            portable=*notification;
+            portable.gate_count=portable.internal_gate_count;
+            notification=&portable;
+        }
         int length=md_seccomp_policy_route(next.policy,delegated,count,cookie,image->code,BPF_MAXINSNS,notification);
         if (length<0) error=length;
         else {

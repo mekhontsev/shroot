@@ -10,9 +10,16 @@ import sys
 import tempfile
 import time
 
+
+def process_status(pid):
+    with open(f"/proc/{pid}/status") as stream:
+        return {key: value.strip() for key, _, value in (line.partition(":") for line in stream)}
+
+
 assert os.getuid() == os.geteuid() == 2000
 assert len(sys.argv) in (3, 4) and (len(sys.argv) == 3 or sys.argv[3] == "--fork-renderer")
 fork_renderer = len(sys.argv) == 4 and sys.argv[3] == "--fork-renderer"
+inherited_filters = int(process_status("self")["Seccomp_filters"]) if fork_renderer else None
 host, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 broker, broker_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 dummy, closed = os.pipe()
@@ -118,14 +125,10 @@ try:
         assert ready and all(item is mojo for item in ready), "renderer initialization failed or timed out"
         packet = mojo.recv(4096, socket.MSG_PEEK | socket.MSG_DONTWAIT)
         assert packet, "Mojo readiness was EOF, not renderer initialization"
-        status = {}
-        with open(f"/proc/{renderer}/status") as stream:
-            for line in stream:
-                key, _, value = line.partition(":")
-                status[key] = value.strip()
+        status = process_status(renderer)
         assert status["Uid"].split() == ["2000"] * 4, status
         assert status["NoNewPrivs"] == "1" and status["Seccomp"] == "2", status
-        assert int(status["Seccomp_filters"]) >= 2, status
+        assert int(status["Seccomp_filters"]) > inherited_filters, (inherited_filters, status)
         print("RENDERER_KERNEL", {key: status[key] for key in
               ("Uid", "NoNewPrivs", "Seccomp", "Seccomp_filters", "Threads")}, flush=True)
         print("RENDERER_MOJO", len(packet), packet[:32].hex(), flush=True)

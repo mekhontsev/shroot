@@ -567,8 +567,8 @@ int filter_revoke_entry(struct thread *t,const struct seccomp_data *call) {
 }
 
 int filter_entry_eligible(const struct thread *t) {
-    if (opaque_launch_filter) return 0;
-    if (!t->seccomp.application_filter) return 1;
+    if (launch_original_entry) return 0;
+    if (!t->seccomp.guest_filter_count) return 1;
     const struct md_svc_registry *registry=md_memory_svc(t->memory);
     return registry && md_seccomp_policy_entry_compatible(t->seccomp.policy,registry->image)
         && md_memory_snapshot_address(t->memory,md_seccomp_policy_identity(t->seccomp.policy));
@@ -581,14 +581,14 @@ static int filter_entry_shared_policy(struct thread *t,int *filtered) {
          * its preflight. Only the last installer can publish a stable view. */
         if (p!=t && (p->seccomp.install || p->entry.fence_waiting)) return 0;
         if (!filter_entry_eligible(p) || p->debug.options || md_debugger_traced(debugger,p->pid)) return 0;
-        *filtered|=p->seccomp.application_filter;
+        *filtered|=p->seccomp.guest_filter_count!=0;
     }
     return 1;
 }
 
 void filter_entry_rearm(struct thread *t) {
     struct md_svc_registry *registry=md_memory_svc(t->memory);
-    if (!registry || !(registry->pause_reasons&MD_SVC_PAUSE_FILTER) || !registry->entry_fence_drained
+    if (!machine_entry_admitted() || !registry || !(registry->pause_reasons&MD_SVC_PAUSE_FILTER) || !registry->entry_fence_drained
             || md_memory_exposed(t->memory) || !md_memory_snapshots_valid(t->memory)) return;
     int filtered;
     if (!filter_entry_shared_policy(t,&filtered)) return;
@@ -624,7 +624,7 @@ static void filter_install_resume(struct thread *t,const struct user_pt_regs *re
 
 int filter_entry_map(struct thread *t,const struct user_pt_regs *regs,
         void (*complete)(struct thread *,const struct user_pt_regs *)) {
-    if (opaque_launch_filter) return 0;
+    if (!machine_entry_admitted()) return 0;
     struct md_svc_registry *registry=md_memory_svc(t->memory);
     if (!registry || !(registry->pause_reasons&MD_SVC_PAUSE_FILTER) || !t->seccomp.policy
             || !md_seccomp_policy_entry_compatible(t->seccomp.policy,registry->image)
@@ -778,7 +778,7 @@ static int policy_pending_visit(void *context,const siginfo_t *info) {
 static void policy_admission_retain(struct thread *t,int pending) {
     if (!t->seccomp.admission_policy_valid) {
         t->seccomp.admission_policy=md_seccomp_policy_retain(t->seccomp.policy);
-        t->seccomp.admission_application_filter=t->seccomp.application_filter;
+        t->seccomp.admission_guest_filter_count=t->seccomp.guest_filter_count;
         t->seccomp.admission_policy_valid=1;
     }
     t->seccomp.admission_policy_pending|=pending;
@@ -1025,19 +1025,15 @@ int filter_observed(struct thread *t,const struct user_pt_regs *regs) {
     if (!md_seccomp_filter_committed(flags,result)) {
         filter_entry_rearm(t); filter_install_discard(t); return 0;
     }
-    if (published) {
-        md_seccomp_policy_replace(&t->seccomp.policy,published);
-        if (flags&SECCOMP_FILTER_FLAG_TSYNC)
-            for (struct thread *peer=threads;peer;peer=peer->next)
-                if (peer->pid && peer!=t && peer->tgid==t->tgid) {
-                    md_seccomp_policy_replace(&peer->seccomp.policy,published);
-                }
-        md_seccomp_policy_release(published);
-    }
-    t->seccomp.application_filter=1;
+    int count=++t->seccomp.guest_filter_count;
+    if (published) md_seccomp_policy_replace(&t->seccomp.policy,published);
     if (flags&SECCOMP_FILTER_FLAG_TSYNC)
         for (struct thread *peer=threads;peer;peer=peer->next)
-            if (peer->pid && peer->tgid==t->tgid) peer->seccomp.application_filter=1;
+            if (peer->pid && peer!=t && peer->tgid==t->tgid) {
+                peer->seccomp.guest_filter_count=count;
+                if (published) md_seccomp_policy_replace(&peer->seccomp.policy,published);
+            }
+    if (published) md_seccomp_policy_release(published);
     SUPERVISOR_TRACE("PROBE installed-filter pid=%d instructions=%u\n",t->pid,length);
     if (filter_entry_map(t,regs,filter_install_resume)) return 1;
     filter_install_discard(t);

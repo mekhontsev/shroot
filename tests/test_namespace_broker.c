@@ -936,7 +936,18 @@ static void registration_retirement(const char *store,int control) {
     assert(descriptors()==before);
     puts("PASS delegated retirement: published next request wakes after parked worker without another guest syscall");
 }
+static unsigned notification_attempts;
+static long interrupted_notification(unsigned command) {
+    assert(command==MD_ENTRY_WAKE);
+    static const long replies[]={-EINTR,-EINTR,0,-EACCES,42};
+    assert(notification_attempts<sizeof(replies)/sizeof(*replies));
+    return replies[notification_attempts++];
+}
 static void direct_wake_transport(void) {
+    notification_attempts=0;
+    assert(!md_entry_notify_listener(interrupted_notification) && notification_attempts==3);
+    assert(md_entry_notify_listener(interrupted_notification)==-EACCES && notification_attempts==4);
+    assert(md_entry_notify_listener(interrupted_notification)==-EPROTO && notification_attempts==5);
     pid_t child=fork(); assert(child>=0);
     if (!child) {
         struct md_kernel_action ignored={.handler=(uintptr_t)SIG_IGN},restored;

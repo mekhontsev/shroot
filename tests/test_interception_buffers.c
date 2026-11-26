@@ -713,16 +713,20 @@ static void memory_access_capture(void) {
     struct rlimit limit=saved; limit.rlim_cur=64; assert(!setrlimit(RLIMIT_NOFILE,&limit));
     int fds[64], n=0, fd;
     while ((fd=fcntl(STDERR_FILENO,F_DUPFD_CLOEXEC,0))>=0) { assert(n<64); fds[n++]=fd; }
-    assert(errno==EMFILE && n>=3);
+    assert(errno==EMFILE && n>=4);
     for (unsigned available=0;available<4;++available) {
-        assert(md_memory_private_access_capture(m,getpid())==-EMFILE && !md_memory_private_access(m));
-        if (available<3) assert(!close(fds[--n]));
+        int error=md_memory_private_access_capture(m,getpid());
+        if (error!=-EMFILE) fprintf(stderr,"capture with %u free descriptors: %d\n",available,error);
+        assert(error==-EMFILE && !md_memory_private_access(m));
+        assert(!close(fds[--n]));
     }
-    for (int i=0;i<n;++i) assert(!close(fds[i]));
-    assert(!setrlimit(RLIMIT_NOFILE,&saved));
+    /* The directory plus its three children fit exactly. Neither a failed
+     * attempt nor the runtime's own mapping should consume a caller slot. */
     fail_allocation=1;
     assert(!md_memory_private_access_capture(m,getpid()));
     fail_allocation=0;
+    for (int i=0;i<n;++i) assert(!close(fds[i]));
+    assert(!setrlimit(RLIMIT_NOFILE,&saved));
     assert(md_memory_private_access_capture(m,getpid())==-EALREADY);
     unsigned char *memory=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
     assert(memory!=MAP_FAILED); *memory=19;

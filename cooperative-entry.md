@@ -478,6 +478,9 @@ an enrollment hint: the broker validates the live task, channel, sequence and
 stop state before execution. Unsupported endpoints, restricted service gates
 and send failures (including queue exhaustion) retain the notification wake.
 File requests still wake their worker directly; hot exchanges need no wake syscall.
+If a caller skipped the wake because the owner was active and the request is
+still unclaimed when the caller would sleep, it confirms enrollment once through
+the listener. An interrupted notification is retried without resubmitting the operation.
 Each owner watches only channels enrolled by an exact wake or retained pending
 request. Registration does not enroll an idle channel. The existing atomic
 park/request handshake removes inactive channels; retirement and resume enroll

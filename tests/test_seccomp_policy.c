@@ -216,6 +216,18 @@ static void capture(void) {
     assert(md_seccomp_policy_internal_gates(committed,&gate,1));
     assert(!md_seccomp_policy_entry_image(committed) && !md_seccomp_policy_entry_compatible(committed,17));
     md_seccomp_policy_release(committed); committed=NULL;
+    /* Filters survive exec; a later image can use an old pool address for a
+     * public syscall. A PC-independent filter must still decide that call. */
+    struct md_seccomp_gate gates[]={gate,{0x3000,0x4000,-1,SECCOMP_RET_TRACE|201}};
+    route=(struct md_seccomp_route){.gates=gates,.gate_count=2,.internal_gate_count=1,
+        .entry_first=1,.entry_image=17};
+    assert(!md_seccomp_capture_prepare(&c,pool,base,NULL,&source,NULL,0,201,&route));
+    image=(const void *)c.program;
+    call.instruction_pointer=0x3100;
+    assert(!md_seccomp_program_eval(&image->program,&call,&decision) && decision==(SECCOMP_RET_ERRNO|EPERM));
+    call.instruction_pointer=0x1100;
+    assert(!md_seccomp_program_eval(&image->program,&call,&decision) && decision==SECCOMP_RET_ALLOW);
+    md_seccomp_capture_discard(&c);
     const struct { unsigned flags; long result; int published; } results[] = {
         {0, -EINVAL, 0}, {SECCOMP_FILTER_FLAG_TSYNC, 123, 0},
         {SECCOMP_FILTER_FLAG_NEW_LISTENER, 0, 1}, {SECCOMP_FILTER_FLAG_NEW_LISTENER, 5, 1},

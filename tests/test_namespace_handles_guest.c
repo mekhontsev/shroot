@@ -794,7 +794,7 @@ int test_namespace_handles_guest(void) {
         n=readlinkat(linkfd,"",label,sizeof(label)-1); assert(n>0); label[n]=0;
         assert(!strcmp(label,expected));
         assert(readlinkat(linkfd,"",label,1)==1 && label[0]==expected[0]);
-        assert(readlinkat(linkfd,"",label,0)<0 && errno==EINVAL);
+        assert(syscall(SYS_readlinkat,linkfd,"",label,0)<0 && errno==EINVAL);
         int linkcopy=dup(linkfd); assert(linkcopy>=0); close(linkfd);
         n=readlinkat(linkcopy,"",label,sizeof(label)-1); assert(n>0); label[n]=0;
         assert(!strcmp(label,expected)); close(linkcopy);

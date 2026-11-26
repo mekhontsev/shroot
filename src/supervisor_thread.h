@@ -282,15 +282,14 @@ struct supervisor_execution_state {
 
 struct supervisor_seccomp_state {
     int length;
-    int application_filter;
-    /* Compare this confirmed prefix with a fresh task snapshot before
-     * reporting no guest filter. Zero means no provenance, not no filters. */
+    int guest_filter_count;
+    /* Evidence about backing selectors, independent of the guest ABI. */
     unsigned runtime_filters;
     struct md_seccomp_policy *policy;
     struct md_seccomp_policy *admission_policy;
     int admission_policy_valid;
     int admission_policy_pending;
-    int admission_application_filter;
+    int admission_guest_filter_count;
     struct filter_install *install;
     struct guest_notification *notification;
     int notification_continued;

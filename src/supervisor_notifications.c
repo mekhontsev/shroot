@@ -293,7 +293,7 @@ void handle_notification(const struct seccomp_notif *request) {
             if (purpose==MD_ENTRY_BIND) {
                 long address=cooperative_bind(t);
                 SUPERVISOR_TRACE("PROBE entry-bind pid=%d result=%ld phase=%d blocked=%d filter=%d\n",
-                    t->pid,address,t->phase,t->entry.blocked,t->seccomp.application_filter);
+                    t->pid,address,t->phase,t->entry.blocked,t->seccomp.guest_filter_count);
                 struct seccomp_notif_resp reply={.id=q.id,
                     .val=address<0 ? 0 : address,.error=address<0 ? (int)address : 0};
                 CHECK(!ioctl(listener,SECCOMP_IOCTL_NOTIF_SEND,&reply) || errno==ENOENT);

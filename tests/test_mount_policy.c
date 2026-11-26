@@ -230,6 +230,9 @@ static void descriptor_checks(struct md_filesystem *fs, struct md_fs_anchor *ori
     q=(struct md_fs_request){.operation=MD_FS_ACCESS,.directory={md_fs_anchor_fd(origin),-1},
         .origin={origin,NULL},.mode=W_OK};
     md_fs_execute(fs,&q,&r,NULL); assert(r.error==(readonly ? -EROFS : 0));
+    q.flags=AT_SYMLINK_NOFOLLOW;
+    md_fs_execute(fs,&q,&r,NULL); assert(r.error==(readonly ? -EROFS : 0));
+    q.flags=0;
     q.operation=MD_FS_XATTR_OBJECT; q.mode=MD_FS_XATTR_SET; q.path[1]="user.policy";
     md_fs_execute(fs,&q,&r,NULL); assert(r.error==(readonly ? -EROFS : -EXDEV));
 }

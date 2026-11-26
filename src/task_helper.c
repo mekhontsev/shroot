@@ -10,6 +10,7 @@
 #include "proc_paths.h"
 #include "signal_protocol.h"
 #include "task_checkpoint.h"
+#include "task_descriptor.h"
 #include "task_registers.h"
 #include "task_wait.h"
 #include "task_pending.h"
@@ -313,6 +314,16 @@ static int pending_pipe(void *context,const siginfo_t *info) {
     if (info->si_signo!=SIGPIPE) return 0;
     *(siginfo_t *)context=*info; return 1;
 }
+static int map_backing(struct helper *m) {
+    if (m->request.address) {
+        m->before=md_mapping_observe(m->maps,&m->source,m->request.address,
+            m->request.size,m->request.offset,!!(m->request.flags&MAP_SHARED));
+        if (m->before<0) { m->result=m->before; return abort_child(m); }
+    }
+    m->operation=BACKING;
+    unsigned long args[6]={MD_GUEST_TASK_HELPER,1};
+    return call(m,m->child,SYS_gettid,args);
+}
 static int advance(struct helper *m, long value) {
     if (m->operation==SEND && value==-EPIPE) {
         /* Preserve the actual kernel signal, not an invented signal for an
@@ -455,6 +466,17 @@ static int advance(struct helper *m, long value) {
         case OPEN: {
             if (value>INT32_MAX) return protocol_error(m,__LINE__);
             m->captured_fd=(int)value;
+            if (m->kind==MD_TASK_HELPER_MAP) {
+                /* The stopped helper already opened its own maps. Copy the
+                 * exact OFD when permitted; no in-flight rights are needed. */
+                int process=-1;
+                m->maps=md_task_descriptor_copy(m->child,m->captured_fd,&process);
+                md_task_descriptor_release(&process);
+                if (m->maps>=0) return map_backing(m);
+                if (!md_task_descriptor_needs_export(m->maps)) {
+                    m->result=m->maps; return abort_child(m);
+                }
+            }
             if (m->capture_metadata) {
                 m->operation=METADATA; nr=SYS_fstat;
                 args[0]=value; args[1]=m->parcel+offsetof(struct parcel,metadata);
@@ -535,13 +557,7 @@ export_open:
                 m->result=0;
                 return abort_child(m);
             }
-            if (m->request.address) {
-                m->before=md_mapping_observe(m->maps,&m->source,m->request.address,
-                    m->request.size,m->request.offset,!!(m->request.flags&MAP_SHARED));
-                if (m->before<0) { m->result=m->before; return abort_child(m); }
-            }
-            m->operation=BACKING; args[0]=MD_GUEST_TASK_HELPER; args[1]=1;
-            break;
+            return map_backing(m);
         }
         case BACKING:
             if (value) return protocol_error(m,__LINE__);

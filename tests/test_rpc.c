@@ -302,7 +302,13 @@ static void contention(void) {
 static void concurrent(void) {
     struct service s; start(&s, NORMAL, NULL, 5000);
     pthread_t threads[8];
-    for (unsigned i = 0; i < 8; ++i) CHECK(pthread_create(&threads[i], NULL, worker, s.endpoint) == 0);
+    /* A filesystem client must also fit a musl-sized worker stack on hosts
+     * whose libc normally grants each thread several MiB. */
+    pthread_attr_t attr;
+    CHECK(!pthread_attr_init(&attr));
+    CHECK(!pthread_attr_setstacksize(&attr,128*1024));
+    for (unsigned i = 0; i < 8; ++i) CHECK(pthread_create(&threads[i], &attr, worker, s.endpoint) == 0);
+    CHECK(!pthread_attr_destroy(&attr));
     /* EVENT_WAIT: worker completion; outer timeout cancels the fixture on a stuck RPC. */
     for (unsigned i = 0; i < 8; ++i) CHECK(pthread_join(threads[i], NULL) == 0);
     stop(&s, 0);
@@ -747,13 +753,14 @@ static void reply_framing(void) {
     /* Only the continuation is missing: no fork, connect or descriptor
      * admission can spend this 100 ms before the first packet is readable. */
     int64_t deadline=md_event_now()+100000000LL;
-    CHECK(md_fs_receive_reply(pair[0],&deadline,100,&q,&out,&reply,0,NULL,NULL)==-ETIMEDOUT);
+    union { struct md_fs_reply_view view; char bytes[sizeof(struct md_fs_reply)]; } received;
+    CHECK(md_fs_receive_reply(pair[0],&deadline,100,&q,&out,&received.view,0,NULL,NULL)==-ETIMEDOUT);
     CHECK(out.delivery==MD_FS_UNCONFIRMED && out.result.fd==-1);
     CHECK(md_fs_receive(pair[0],&reply,sizeof(reply),&none)==-EAGAIN);
     q.operation=MD_FS_STAT;
     CHECK(md_fs_send(pair[1],&reply,first,&none)==(long)first);
     deadline=md_event_now()+100000000LL;
-    CHECK(md_fs_receive_reply(pair[0],&deadline,100,&q,&out,&reply,0,NULL,NULL)==-EPROTO);
+    CHECK(md_fs_receive_reply(pair[0],&deadline,100,&q,&out,&received.view,0,NULL,NULL)==-EPROTO);
     CHECK(out.delivery==MD_FS_UNCONFIRMED && out.result.fd==-1);
     CHECK(!close(pair[0]) && !close(pair[1]) && fd_count(getpid())==before);
     puts("PASS RPC framing: a missing continuation times out; an oversized metadata frame is rejected immediately");

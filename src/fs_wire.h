@@ -12,31 +12,39 @@ enum { MD_FS_REPLY_CHUNK=65536 };
 /* One admission record only for a parked operation. It is not a result and
  * never authorizes replay; daemon completion or socket closure ends the wait. */
 struct md_fs_deferred { uint32_t magic,version; int32_t error; };
-struct md_fs_packet {
-    /* Base-slot masks: cwd slots use the authenticated exchange's captured
-     * directory. Other descriptor slots travel as SCM_RIGHTS, in slot order. */
-    uint32_t magic, version, operation, flags, mode, descriptors, length[2];
-    uint32_t capacity, cwd;
-    int32_t actor;
-    uint32_t value_size;
-    int64_t offset;
-    uint64_t resolve;
-    uint64_t exchange;
-    struct md_fs_attributes attributes;
-    char object[2][33];
-    char data[2 * PATH_MAX + MD_FS_VALUE_MAX];
-};
-struct md_fs_reply {
-    /* size is the complete output. The first packet includes at most one chunk;
-     * descriptor-free continuation packets carry the remaining bounded bytes. */
-    uint32_t magic, version;
-    int32_t error;
-    uint32_t descriptors, size, host_path, open_completion, receipt; /* descriptor count, not request slot mask */
-    int64_t position;
-    uint64_t proc_namespace;
-    struct md_fs_info info;
-    char data[MD_FS_OUTPUT_MAX];
-};
+/* Base-slot masks: cwd slots use the authenticated exchange's captured
+ * directory. Other descriptor slots travel as SCM_RIGHTS, in slot order. */
+#define MD_FS_PACKET_LAYOUT(name,payload_bound) struct name { \
+    uint32_t magic, version, operation, flags, mode, descriptors, length[2]; \
+    uint32_t capacity, cwd; \
+    int32_t actor; \
+    uint32_t value_size; \
+    int64_t offset; \
+    uint64_t resolve; \
+    uint64_t exchange; \
+    struct md_fs_attributes attributes; \
+    char object[2][33]; \
+    char data[payload_bound]; \
+}
+MD_FS_PACKET_LAYOUT(md_fs_packet, 2 * PATH_MAX + MD_FS_VALUE_MAX);
+MD_FS_PACKET_LAYOUT(md_fs_packet_view, );
+#undef MD_FS_PACKET_LAYOUT
+_Static_assert(offsetof(struct md_fs_packet,data)==offsetof(struct md_fs_packet_view,data), "wire layout");
+/* size is the complete output. The first packet includes at most one chunk;
+ * descriptor-free continuation packets carry the remaining bounded bytes. */
+#define MD_FS_REPLY_LAYOUT(name,capacity) struct name { \
+    uint32_t magic, version; \
+    int32_t error; \
+    uint32_t descriptors, size, host_path, open_completion, receipt; /* descriptor count, not request slot mask */ \
+    int64_t position; \
+    uint64_t proc_namespace; \
+    struct md_fs_info info; \
+    char data[capacity]; \
+}
+MD_FS_REPLY_LAYOUT(md_fs_reply, MD_FS_OUTPUT_MAX);
+MD_FS_REPLY_LAYOUT(md_fs_reply_view, );
+#undef MD_FS_REPLY_LAYOUT
+_Static_assert(offsetof(struct md_fs_reply,data)==offsetof(struct md_fs_reply_view,data), "wire layout");
 struct md_fs_rights { unsigned count; int fd[MD_FS_MAX_FDS]; };
 static inline size_t md_fs_reply_capacity(unsigned operation) {
     return md_fs_operation_value(operation) ? MD_FS_OUTPUT_MAX
@@ -50,7 +58,7 @@ long md_fs_receive(int socket, void *, size_t, struct md_fs_rights *);
 /* Connected native client after request submission. Pending admission can
  * replace the delivery deadline; the caller retains socket and exchange. */
 long md_fs_receive_reply(int socket, int64_t *deadline, unsigned timeout_ms,
-        const struct md_fs_request *, struct md_fs_response *, struct md_fs_reply *,
+        const struct md_fs_request *, struct md_fs_response *, struct md_fs_reply_view *,
         uint64_t exchange, int (*deliver)(void *, const void *, size_t), void *context);
 /* Bounded private seqpacket vectors. Receive closes every installed right on
  * truncation/malformed control and publishes count only on success. */

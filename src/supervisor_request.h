@@ -15,6 +15,13 @@ static inline struct seccomp_data syscall_description(const struct user_pt_regs 
     return call;
 }
 
+/* A fresh SVC latches its number from x8. Issue the retained operation,
+ * not the debugger-visible register frame that we restore on completion. */
+static inline void syscall_issue_operands(struct user_pt_regs *regs,const struct seccomp_data *call) {
+    regs->regs[8]=call->nr;
+    for (unsigned i=0;i<6;++i) regs->regs[i]=call->args[i];
+}
+
 /* A seccomp stop already supplies every syscall operand, without a GPR read. */
 static inline struct seccomp_data syscall_observation(const struct ptrace_syscall_info *info) {
     struct seccomp_data call={.nr=info->seccomp.nr,.arch=info->arch,

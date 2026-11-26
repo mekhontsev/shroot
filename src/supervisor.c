@@ -136,8 +136,10 @@ int socket_events=-1;
 struct md_namespace_broker *broker;
 struct md_task_registry *tasks;
 struct md_identity launch_identity;
-int opaque_launch_filter;
+int launch_kernel_filtered;
+int launch_original_entry;
 int launch_seccomp_clear;
+int machine_entry_requested;
 uid_t native_uid;
 int virtual_identity;
 struct md_admission admission = {.source = -1};
@@ -832,19 +834,34 @@ int main(int argc, char **argv) {
     int inherited_no_new_privs = prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
     CHECK(inherited_no_new_privs >= 0);
     launch_identity.no_new_privs = (unsigned)inherited_no_new_privs;
-    /* no_new_privs is a credential property, not evidence of an installed
-     * filter. An unavailable mode query must retain restricted admission. */
-    int mode = inherited_no_new_privs ? prctl(PR_GET_SECCOMP, 0, 0, 0, 0) : 0;
-    int query_errno = mode<0 ? errno : 0;
-    long visible=-1;
-    launch_seccomp_clear = mode==0 && md_task_backing_seccomp_filters(gettid(),&visible)==0;
-    if (inherited_no_new_privs) {
-        opaque_launch_filter = mode != 0 || visible != 0;
-        if (opaque_launch_filter && (statistics || diagnostics))
-            fprintf(stderr, "SHROOT_ENTRY_ADMISSION {\"reason\":\"opaque-inherited-policy\","
-                "\"noNewPrivs\":%d,\"seccompMode\":%d,\"queryErrno\":%d}\n",
-                inherited_no_new_privs, mode, query_errno);
+    const char *entry_option=getenv("SHROOT_MACHINE_ENTRY");
+    if (entry_option && strcmp(entry_option,"1") && strcmp(entry_option,"0")) {
+        fputs("SHROOT_MACHINE_ENTRY must be 0 or 1\n",stderr);
+        return 125;
     }
+    machine_entry_requested=!entry_option || !strcmp(entry_option,"1");
+    /* A launcher requesting machine entry supplies a compatible host
+     * environment. This does not grant native effects or capture its filter. */
+    int mode = prctl(PR_GET_SECCOMP, 0, 0, 0, 0);
+    int query_errno = mode<0 ? errno : 0;
+    struct md_seccomp_status view={.visible=-1};
+    long backing=-1;
+    if (mode==0 || statistics || diagnostics)
+        backing=md_task_backing_seccomp_filters(gettid(),&view);
+    launch_seccomp_clear = mode==0 && backing==0 && view.visible==0;
+    int observed=mode==SECCOMP_MODE_FILTER || (mode==0 && backing>=0 && view.visible==0);
+    launch_kernel_filtered=!observed || mode==SECCOMP_MODE_FILTER || view.host_filtered;
+    launch_original_entry=!observed || (!machine_entry_requested && launch_kernel_filtered);
+    if (statistics || diagnostics)
+        fprintf(stderr, "SHROOT_ENTRY_ADMISSION {\"requestedMode\":\"%s\",\"admittedMode\":\"%s\","
+            "\"reason\":\"%s\",\"noNewPrivs\":%d,"
+            "\"seccompMode\":%d,\"queryErrno\":%d,\"visibleFilters\":%ld,\"backingFilters\":%ld,\"hostFiltered\":%s}\n",
+            !entry_option ? "default" : machine_entry_requested ? "lazy" : "base",
+            machine_entry_admitted() ? "lazy" : "base",
+            !machine_entry_requested ? "base-requested" :
+                launch_original_entry ? "unobserved-launch-policy" : "launch-admitted",
+            inherited_no_new_privs,mode,query_errno,view.visible,backing,
+            backing<0 ? "null" : view.host_filtered ? "true" : "false");
     CHECK(argument < argc);
     CHECK(!image_layout_prepare(argv[argument]));
     struct md_process_signals inherited;

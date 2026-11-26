@@ -41,7 +41,9 @@ Application filters fence entry and publish immutable original-policy views
 before eligible calls resume acceleration. Debugger ownership and unavailable
 policy views retain the common fallback. Unavailable capabilities and
 unsupported sites retain Base interception; `--env SHROOT_MACHINE_ENTRY=0`
-selects Base explicitly. See
+selects Base explicitly for the launched tree. The supervisor owns this choice;
+replacing the environment at guest exec does not change it. A nested Shroot
+launch has its own supervisor and choice. See
 [integration evidence](tests/svc-rewriting.md#product-boundary).
 
 One supervisor owns each process tree. Selective seccomp TRACE/USER_NOTIF directs
@@ -449,6 +451,19 @@ Minimum supported Linux is **5.15**. Record every dependency newer than 5.15 in
 An available header or kernel version does not establish firmware permission.
 Runtime probes belong to guest startup, not the embedding application's other
 services.
+
+The host kernel enforces external seccomp filters on Shroot's actual syscalls.
+Each fresh Shroot guest starts with an empty seccomp chain: `PR_GET_SECCOMP`,
+`Seccomp` and `Seccomp_filters` report zero, including inside another Shroot.
+These interfaces describe filters installed by the guest, not Android policy or
+Shroot's own syscall selectors. Within a guest, fork inherits the caller's
+chain, exec preserves it, and successful TSYNC copies the caller's new chain
+to its peers. Shroot enforces those filters on guest syscalls in both Base and
+Lazy. A guest-visible zero does not mean the host permits a syscall.
+On Android and Linux alike, the launcher is responsible for supplying a
+Lazy-compatible host policy, as Android's zygote does. Select Base when a
+host policy requires the original guest SVC sites. An inherited filter does
+not select Base, nor does `no_new_privs`, which restricts privilege gains at exec.
 
 The selected identity must be allowed to execute helpers and map guest code.
 On ordinary Linux, equal real/effective user and group IDs with no retained

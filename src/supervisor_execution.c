@@ -147,8 +147,8 @@ static long checkpoint_native_trace(int request, pid_t pid, void *address, void 
 
 int checkpoint_restricted(pid_t pid) {
     struct thread *t=find_thread(pid);
-    if (!t || opaque_launch_filter) return 1;
-    if (!t->seccomp.application_filter) return 0;
+    if (!t || launch_original_entry) return 1;
+    if (!t->seccomp.guest_filter_count) return 0;
     /* Do not emulate checkpoints already admitted by every kernel filter.
      * Portable entry after exec alone does not establish helper admission. */
     struct md_seccomp_gate gates[FILTER_SERVICE_GATES];
@@ -230,7 +230,7 @@ int lost_stop_event(struct thread *t,unsigned event) {
 
 int machine_discovery(struct thread *t) {
     struct md_svc_registry *registry=md_memory_svc(t->memory);
-    return registry && !registry->disabled && t->entered && filter_entry_eligible(t)
+    return machine_entry_admitted() && registry && !registry->disabled && t->entered && filter_entry_eligible(t)
         && !t->entry.blocked && !t->debug.options && !t->debug.call_active
         && t->seccomp.trace.stage==GUEST_TRACE_NONE && !md_memory_exposed(t->memory)
         && !t->seccomp.notification_continued && !t->seccomp.admission_policy_valid && t!=entry_fence_owner;
@@ -266,7 +266,7 @@ int machine_observe(struct thread *t,uintptr_t pc,long number) {
 }
 
 int machine_native_entry(struct thread *t,const struct seccomp_data *request,unsigned long *cookie) {
-    if (opaque_launch_filter) return 0;
+    if (!machine_entry_admitted()) return 0;
     if (t->entry.blocked || t->debug.options || md_memory_exposed(t->memory)) return 0;
     struct md_svc_registry *registry=md_memory_svc(t->memory);
     int entry=md_svc_machine_native_entry(registry,request->instruction_pointer,request->nr);
@@ -274,7 +274,7 @@ int machine_native_entry(struct thread *t,const struct seccomp_data *request,uns
      * before acquiring the fence, so alias retirement cannot replay and drain
      * an already-owned installation a second time. */
     if (entry && md_seccomp_filter_call(request->nr,request->args[0],request->args[1])) return 0;
-    if (!entry || !t->seccomp.application_filter) return entry;
+    if (!entry || !t->seccomp.guest_filter_count) return entry;
     /* The alias has restored the caller's stack and arguments. Prove its
      * original policy, then retain the existing completion owner instead of
      * cancelling and replaying. Guest observation actions still need replay. */
@@ -342,6 +342,7 @@ void cooperative_routes_publish(struct thread *t) {
     if (!t->entry.buffer.pool) return;
     unsigned flags=(t->process_op.filter ? MD_ROUTE_PID : 0)|(t->signals.host ? MD_ROUTE_SIGNALS : 0);
     if (!checkpoint_restricted(t->pid)) flags|=MD_ROUTE_ADMITTED_KERNEL;
+    if (launch_kernel_filtered) flags|=MD_ROUTE_HOST_FILTERED;
     if (t->signals.native_query) flags|=MD_ROUTE_NATIVE_SIGNAL_QUERY;
     uint64_t revision=md_fd_selector_revision(t->descriptors.selector);
     if (t->entry.selectors==t->descriptors.selector && t->entry.selector_revision==revision && t->entry.route_flags==flags) return;
@@ -839,6 +840,7 @@ void dispatch_complete(struct thread *t,long value) {
     }
     case EXECUTION_WATCH_WAIT:
     case EXECUTION_NATIVE:
+        syscall_issue_operands(&regs,&t->execution.request);
         regs.pc=RAW_GATE-4;
         t->watch_wait=next==EXECUTION_WATCH_WAIT ? 1 : 2;
         if (t->watch_wait==1) {
@@ -1454,9 +1456,9 @@ void execution_publish(struct thread *t,int resuming) {
     int raw=eligible && paths && !md_seccomp_policy_may_trace(t->seccomp.policy) && !md_seccomp_policy_may_notify(t->seccomp.policy);
     int direct=eligible && filter_entry_eligible(t) && !t->debug.options
         && !t->debug.call_active && !t->debug.step_call && !md_debugger_traced(debugger,t->pid);
-    int opens=direct && paths && !t->seccomp.application_filter;
+    int opens=direct && paths && !t->seccomp.guest_filter_count;
     struct md_svc_registry *registry=md_memory_svc(t->memory);
-    int discovery=direct && registry && !registry->disabled && !md_memory_exposed(t->memory);
+    int discovery=direct && machine_entry_admitted() && registry && !registry->disabled && !md_memory_exposed(t->memory);
     cooperative_memory_publish(t,discovery && !t->entry.blocked);
     CHECK(!md_broker_task(broker,t->pid,eligible ? (raw ? MD_BROKER_READ : 0)|(opens ? MD_BROKER_OPEN : 0)
         |(discovery ? MD_BROKER_DISCOVERY : 0)
@@ -1998,6 +2000,17 @@ void execution_seccomp_event(struct thread *t,pid_t pid,int status,const struct 
     if (observed && t->resources.files && fd_native_io(t,observed)) return;
     if (fd_close_compact(t,cookie,observed)) return;
     if (cookie&MD_INTERCEPT_CLOSE) cookie=MD_INTERCEPT_FD;
+    /* The kernel admitted this scalar read at the original SVC. Its seccomp
+     * observation already identifies the credential; only x0 changes. */
+    if (observed && !captured && !native_entry && cookie==MD_INTERCEPT_IDENTITY
+            && t->entered && t->phase==IDLE && !t->entry.fence_result && !entry_pending(t)
+            && observed->instruction_pointer!=RAW_GATE && observed->instruction_pointer!=abi.task_return
+            && md_identity_scalar_call(observed->seccomp.nr) && !md_debugger_traced(debugger,t->pid)) {
+        long nr=observed->seccomp.nr;
+        if (statistics) ++statistics->calls[nr].trace;
+        return_scalar(t,md_identity_scalar_result(&t->identity,nr));
+        return;
+    }
     if (observed && cookie==MD_INTERCEPT_SIGNAL && t->signals.host && t->entered
             && t->phase==IDLE && observed->instruction_pointer!=RAW_GATE
             && observed->instruction_pointer!=abi.task_return
@@ -2214,7 +2227,9 @@ void execution_syscall_event(struct thread *t,pid_t pid,int status,const struct 
         resume(pid,0); return;
     }
     if (t->phase == WATCH_CANCEL) {
-        struct user_pt_regs regs = t->execution.registers; regs.pc = abi.watch_gate;
+        struct user_pt_regs regs=t->execution.registers;
+        syscall_issue_operands(&regs,&t->execution.request);
+        regs.pc=abi.watch_gate;
         if (!set_registers(pid, &regs)) return;
         t->phase = WATCH_ENTRY; resume(pid, 0); return;
     }
@@ -2385,7 +2400,7 @@ void execution_checkpoint_event(struct thread *t,pid_t pid) {
             struct md_svc_registry *registry=md_svc_machine_admit(pid,abi.svc_runtime);
             if (registry) {
                 CHECK(!md_memory_svc_set(t->memory,registry));
-                if (t->seccomp.application_filter) {
+                if (t->seccomp.guest_filter_count) {
                     int number=md_seccomp_policy_entry_checkpoint(t->seccomp.policy);
                     CHECK(number>=0);
                     registry->checkpoint_number=(unsigned)number;
@@ -2400,7 +2415,7 @@ void execution_checkpoint_event(struct thread *t,pid_t pid) {
         t->image.process_image=regs.regs[2];
         uint64_t entry=regs.regs[0], stack=regs.regs[1];
         regs=md_task_registers_entry(entry,stack,regs.pstate);
-        if (t->seccomp.application_filter && filter_entry_map(t,&regs,image_entry_complete)) return;
+        if (t->seccomp.guest_filter_count && filter_entry_map(t,&regs,image_entry_complete)) return;
         image_entry_complete(t,&regs);
         return;
     }
@@ -2429,14 +2444,14 @@ void execution_checkpoint_event(struct thread *t,pid_t pid) {
             CHECK(listener == -1);
             listener = duplicate_fd(pid, (int)regs.regs[0]); CHECK(listener >= 0);
             if (broker) md_broker_listen(broker, listener);
-            if (launch_seccomp_clear && md_task_seccomp_filters(pid)==1)
+            if (launch_seccomp_clear && md_task_backing_seccomp_filters(pid,NULL)==1)
                 t->seccomp.runtime_filters=1;
         }
         t->ready = 1;
-        t->entry.registration_revoked=effective_filter(t) || t->entry.blocked;
+        t->entry.registration_revoked=entry_needs_policy(t) || t->entry.blocked;
         regs.regs[0]=t->entry.registration_revoked ? 0 : MD_INTERCEPTION_COOPERATIVE;
-        if (broker && !opaque_launch_filter && !t->entered && (!t->entry.registration_revoked
-                || (t->seccomp.application_filter && md_seccomp_policy_entry_checkpoint(t->seccomp.policy)>=0))
+        if (broker && machine_entry_admitted() && !t->entered && (!t->entry.registration_revoked
+                || (t->seccomp.guest_filter_count && md_seccomp_policy_entry_checkpoint(t->seccomp.policy)>=0))
                 && !t->debug.options && !md_memory_exposed(t->memory))
             regs.regs[0]|=MD_INTERCEPTION_MACHINE;
         if (statistics) regs.regs[0]|=MD_INTERCEPTION_STATISTICS;

@@ -1590,7 +1590,8 @@ static uint64_t cooperative_clock(void) {
 }
 static int cooperative_wake_reply(struct md_namespace_broker *b,const struct seccomp_notif *wake) {
     if (!wake) return 0;
-    struct seccomp_notif_resp response={.id=wake->id,.val=wake->pid};
+    /* Zero acknowledges enrollment; an ordinary gettid is not a receipt. */
+    struct seccomp_notif_resp response={.id=wake->id};
     return ioctl(b->listener,SECCOMP_IOCTL_NOTIF_SEND,&response) && errno!=ENOENT ? -errno : 0;
 }
 /* Caller holds the broker lock. Service includes declining a request: a

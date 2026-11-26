@@ -314,7 +314,7 @@ int image_enter(struct thread *t,uintptr_t image,uintptr_t address,size_t count,
         ? md_memory_image_backings(t->memory,t->pid,t->image.backings,t->image.backings[1]>=0 ? 2 : 1) : -ENODEV;
     t->image.backings_ready=!backings;
     SUPERVISOR_TRACE("PROBE entry-image pid=%d prepared=%lu backings=%d filter=%d blocked=%d exposed=%d\n",
-        t->pid,machine,backings,t->seccomp.application_filter,t->entry.blocked,md_memory_exposed(t->memory));
+        t->pid,machine,backings,t->seccomp.guest_filter_count,t->entry.blocked,md_memory_exposed(t->memory));
     if (diagnostics && !machine) {
         struct md_svc_runtime runtime={0};
         int error=md_svc_registry_read(t->pid,abi.svc_runtime,&runtime,sizeof(runtime));
@@ -1032,7 +1032,7 @@ static int publish_birth(struct thread *t,pid_t child,unsigned event) {
     inherit_trace_options(c,t);
     c->process_op.filter=t->process_op.filter;
     int prior=t->seccomp.admission_policy_valid && !(t->process_op.cloning&CLONE_THREAD);
-    c->seccomp.application_filter=prior ? t->seccomp.admission_application_filter : t->seccomp.application_filter;
+    c->seccomp.guest_filter_count=prior ? t->seccomp.admission_guest_filter_count : t->seccomp.guest_filter_count;
     c->seccomp.runtime_filters=t->seccomp.runtime_filters;
     md_seccomp_policy_replace(&c->seccomp.policy,prior ? t->seccomp.admission_policy : t->seccomp.policy);
     c->signals.host=t->signals.host; c->signals.host_blocked=t->signals.host_blocked;
@@ -1282,7 +1282,7 @@ void task_exec_event(struct thread *t,pid_t pid,unsigned event) {
             t->debug.call_active=former->debug.call_active;
             t->debug.step_call=former->debug.step_call;
             t->process_op.filter=former->process_op.filter;
-            t->seccomp.application_filter=former->seccomp.application_filter;
+            t->seccomp.guest_filter_count=former->seccomp.guest_filter_count;
             t->seccomp.runtime_filters=former->seccomp.runtime_filters;
             md_seccomp_policy_replace(&t->seccomp.policy,NULL);
             t->seccomp.policy=former->seccomp.policy; former->seccomp.policy=NULL;
@@ -1343,7 +1343,7 @@ void task_exec_event(struct thread *t,pid_t pid,unsigned event) {
     t->image.mapped = 0; t->entered = 0; t->image.backings_ready=0;
     /* Entry revocation belongs to the retired address space. Only
      * inherited application policy still needs admission in this image. */
-    t->entry.blocked=effective_filter(t);
+    t->entry.blocked=entry_needs_policy(t);
     t->entry.registration_revoked=0;
     t->process_op.preflight=t->seccomp.preflight=0;
     t->image.process_image=0;

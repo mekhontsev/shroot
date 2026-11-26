@@ -17,7 +17,8 @@ def main():
         command = command[1:]
     if not command or args.timeout <= 0:
         parser.error('a command and positive timeout are required')
-    command[0] = str(Path(command[0]).resolve(strict=True))
+    # The executor changes cwd. Retain argv[0] for multicall binaries.
+    command[0] = str(Path(command[0]).absolute())
     executor = LocalExecutor(Path.cwd(), 'component')
     try:
         command = [item.replace('@WORK@', executor.root) for item in command]

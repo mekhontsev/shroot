@@ -1,10 +1,18 @@
 #ifndef MD_COOPERATIVE_EXCHANGE_H
 #define MD_COOPERATIVE_EXCHANGE_H
 #include "cooperative_channel.h"
+#include <errno.h>
 
 /* One shared protocol, two execution owners. This layer publishes readiness;
  * its caller owns kernel wakeups, operation lifetime and effect cancellation. */
 enum md_entry_owner { MD_ENTRY_WORKER_OWNER, MD_ENTRY_SUPERVISOR_OWNER };
+/* Retry the notification, never the request it announces. A native gettid
+ * result does not acknowledge receipt by the channel owner. */
+static inline long md_entry_notify_listener(long (*notify)(unsigned)) {
+    long result;
+    do { result=notify(MD_ENTRY_WAKE); } while (result==-EINTR);
+    return result>0 ? -EPROTO : result;
+}
 /* Only these states let the caller publish another request without an owner
  * response. RUNNING belongs to an asynchronous handler, not a hot peer. */
 static inline int md_entry_peer_runnable(unsigned state) {
@@ -67,12 +75,20 @@ static inline int md_entry_publish_response(struct md_entry_channel *c,unsigned 
     atomic_store_explicit(&c->state,state,memory_order_seq_cst);
     return atomic_load_explicit(&c->sleeping,memory_order_seq_cst)!=0;
 }
-static inline int md_entry_prepare_reply_wait(struct md_entry_channel *c,int native_sent,unsigned *expected) {
+enum md_reply_park { MD_REPLY_READY, MD_REPLY_FUTEX, MD_REPLY_ENROLL };
+static inline enum md_reply_park md_entry_prepare_reply_wait(struct md_entry_channel *c,int native_sent,
+        int *unannounced,unsigned *expected) {
     atomic_store_explicit(&c->sleeping,1,memory_order_seq_cst);
     unsigned state=atomic_load_explicit(&c->state,memory_order_seq_cst);
     *expected=state;
-    return state==MD_ENTRY_REQUEST || state==MD_ENTRY_RUNNING || state==MD_ENTRY_PARKED
-        || (state==MD_ENTRY_NATIVE && native_sent);
+    /* An awake hint is not a receipt. Before parking on an unclaimed
+     * request, turn a suppressed initial wake into one confirmed enrollment. */
+    if (state==MD_ENTRY_REQUEST && *unannounced) {
+        *unannounced=0;
+        return MD_REPLY_ENROLL;
+    }
+    return (state==MD_ENTRY_REQUEST || state==MD_ENTRY_RUNNING || state==MD_ENTRY_PARKED
+        || (state==MD_ENTRY_NATIVE && native_sent)) ? MD_REPLY_FUTEX : MD_REPLY_READY;
 }
 enum { MD_ENTRY_PENDING_CALL=1, MD_ENTRY_PENDING_NATIVE=2 };
 static inline unsigned md_entry_prepare_wait(struct md_entry_channel *c,enum md_entry_owner owner) {

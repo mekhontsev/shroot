@@ -694,7 +694,8 @@ void proc_io_progress(struct thread *t) {
         }
         if (md_proc_file_kind(t->proc.io.file)==MD_PROC_FILE_STATUS) {
             struct thread *target=find_thread(node.process);
-            md_proc_file_filter_prefix(t->proc.io.file,private_filter_prefix(target));
+            md_proc_file_seccomp(t->proc.io.file,target && target->entered ? target->seccomp.guest_filter_count : -1,
+                private_filter_prefix(target));
             struct md_signal_status view={0};
             if (target && target->signals.shielded) {
                 view.blocked_known=UINT64_MAX; view.blocked=target->execution.mask;

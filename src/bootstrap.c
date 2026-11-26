@@ -210,14 +210,6 @@ void md_boot(uintptr_t *kernel_stack) {
     md_files.connections = &connections;
     memcpy(process_image.executable_object, command.object, sizeof(command.object));
     process_image.executable_path = md_executable;
-    int machine_entry=1;
-    for (size_t i=0;i<envc;++i) {
-        if (!md_prefix(env[i],"SHROOT_MACHINE_ENTRY=")) continue;
-        if (md_equal(env[i],"SHROOT_MACHINE_ENTRY=0")) machine_entry=0;
-        else if (md_equal(env[i],"SHROOT_MACHINE_ENTRY=1")) machine_entry=1;
-        else md_die("SHROOT_MACHINE_ENTRY must be 0 or 1",-EINVAL);
-    }
-    machine_entry=namespace && machine_entry && machine_admitted;
     struct md_image program;
     r = namespace && (!inherited || retained) ? 0 : md_interception_map_image((int)fd);
     if (!r) r = md_elf_load((int)fd, 0, &program);
@@ -294,7 +286,7 @@ void md_boot(uintptr_t *kernel_stack) {
         case AT_EXECFN: guest_aux[i].a_un.a_val = (uintptr_t)execfn; break;
         }
     }
-    if (machine_entry) md_svc_runtime_prepare(program.entry,image.entry,capabilities,statistics);
+    if (namespace && machine_admitted) md_svc_runtime_prepare(program.entry,image.entry,capabilities,statistics);
     md_proc_image_init(&process_image, arguments, argument_bytes, environment_bytes, guest_aux, (auxc + 1) * sizeof(*guest_aux));
     command.execfd=-1; /* AT_EXECFD transfers ownership to the interpreter. */
     md_command_close(&command);

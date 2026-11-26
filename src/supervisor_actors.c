@@ -439,7 +439,7 @@ static void task_action_call_complete(long result,int retry) {
     } else if (!owner->capture && !result && !retry) {
         /* TSYNC copies the installer's chain, not each peer's old count.
          * The thread-only retry cannot publish provenance to a sibling. */
-        if (owner->filter_prefix && md_task_seccomp_filters(actor->pid)==(long)owner->filter_prefix+1) {
+        if (owner->filter_prefix && md_task_backing_seccomp_filters(actor->pid,NULL)==(long)owner->filter_prefix+1) {
             for (struct thread *p=threads;p;p=p->next)
                 if (p->pid && p->tgid==actor->tgid && (!owner->filter.thread_only || p==actor)
                         && p->seccomp.runtime_filters && !effective_filter(p))
@@ -580,7 +580,7 @@ static void task_action_call_start(struct task_action *owner) {
     owner->filter_prefix=0;
     int error=-EAGAIN;
     if (actor->seccomp.runtime_filters && !effective_filter(actor) && md_memory_readonly_base(actor->memory)
-            && md_task_seccomp_filters(actor->pid)==(long)actor->seccomp.runtime_filters) {
+            && md_task_backing_seccomp_filters(actor->pid,NULL)==(long)actor->seccomp.runtime_filters) {
         error=md_buffers_take(md_memory_readonly_buffers(actor->memory),&owner->buffer);
         if (!error) owner->filter_prefix=actor->seccomp.runtime_filters;
     }

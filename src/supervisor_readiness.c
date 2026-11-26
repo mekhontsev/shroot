@@ -1026,7 +1026,7 @@ int readiness_native_event(struct thread *t,int status) {
             fprintf(stderr,"Shroot: readiness entry pid=%d op=%u pc=%#llx expectedPc=%#lx nr=%llu expectedNr=%ld regsPc=%#llx regsNr=%llu waking=%d filter=%d evicting=%d\n",
                 t->pid,info.op,(unsigned long long)info.instruction_pointer,(unsigned long)abi.task_return,
                 (unsigned long long)info.entry.nr,o->native_call.number,regs.pc,regs.regs[8],
-                t->io.socket_waking,t->seccomp.application_filter,o->evicting);
+                t->io.socket_waking,t->seccomp.guest_filter_count,o->evicting);
             for (unsigned i=0;i<6;++i)
                 fprintf(stderr,"Shroot: readiness argument %u observed=%#llx expected=%#lx register=%#llx\n",
                     i,(unsigned long long)info.entry.args[i],o->native_call.value[i],regs.regs[i]);

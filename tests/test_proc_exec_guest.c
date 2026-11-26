@@ -246,7 +246,7 @@ static void exercise(const char *proc,const char *directory,int native) {
         if (length!=-1 || errno!=ENOENT)
             fprintf(stderr,"empty readlink %s: result=%zd errno=%d\n",path,length,errno);
         assert(length==-1 && errno==ENOENT);
-        errno=0; assert(readlinkat(fd,"",alias,0)==-1 && errno==EINVAL);
+        errno=0; assert(syscall(SYS_readlinkat,fd,"",alias,0)==-1 && errno==EINVAL);
         errno=0; assert(syscall(SYS_readlinkat,fd,"",alias,0x80000000UL)==-1 && errno==EINVAL);
         close(fd);
     }

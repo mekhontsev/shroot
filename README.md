@@ -117,7 +117,9 @@ stays native.
 
 Unsupported sites, unavailable policy views and debugger-owned execution retain
 the Base seccomp/ptrace path. Base and lazy entry share syscall implementations
-and resource ownership. See [cooperative entry](cooperative-entry.md) for admission,
+and resource ownership. To keep guest syscall instructions in place throughout
+a launch, pass `--env SHROOT_MACHINE_ENTRY=0` to `shroot exec`.
+See [cooperative entry](cooperative-entry.md) for admission,
 signals, sandbox filters and performance controls.
 
 ## Recursive Execution

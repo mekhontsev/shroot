@@ -777,6 +777,10 @@ including imported capsule origins. Message expansion adds no kernel primitive.
 Capsule queues count against native per-UID in-flight rights; an export helper
 with a reduced RLIMIT_NOFILE can fail with ETOOMANYREFS despite free slots.
 The actual guest checks keep this explicit, without raising limits or replay.
+For internal mapping verification the supervisor copies the stopped helper's
+already opened maps descriptor with `md_task_descriptor_copy` when permitted.
+Otherwise the helper transfers that same open description over its private
+channel. Neither route changes the quota on application `SCM_RIGHTS` sends.
 `fd_table_observation` uses task-captured proc-FD directory iteration, `lseek`,
 `getdents64` and the existing `PTRACE_EVENT_EXIT` stop. It observes the table before
 `exit_files`, not after reaping. These interfaces and ordering are present in
@@ -1477,11 +1481,15 @@ aliases keep their resident return branch instead of another SETREGSET; filter
 barriers also reconcile a quiet return at the next ordinary guest boundary.
 Stock glibc/musl signal storms and real document-portal shutdown exercise
 the integrated owner. Device execution remains 6.12/4 KiB, not a 5.15 claim.
-Inherited no_new_privs is a credential restriction, not a seccomp filter. With
-that flag set, an active or unreadable seccomp mode selects restricted service
-checkpoints; mode zero requires a matching proc status snapshot. A nested
-guest need not count the parent runtime's confirmed private selectors as
-application filters. Native-only probes still consult the backing chain.
+Launch mode is independent of inherited `no_new_privs`. A reported filter is
+a supported launch environment on either platform; it is not evidence that
+a native operation is permitted. Filtered hosts retain kernel checks for
+native effects, including scalar identity reads before namespace translation.
+An unreadable mode retains restricted admission; mode zero requires a
+matching proc status snapshot. Guest mode and filter
+count describe only the current guest's chain, including after a nested
+launch. Native-only probes use the backing count, not the guest count;
+known runtime selectors do not by themselves imply an external host policy.
 `test_native_suite.py` checks both no_new_privs alone and inherited denials.
 `test_capabilities` verifies denied required syscalls
 produce admission errors instead of falling through a rejected marker.

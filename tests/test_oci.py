@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline image boundary checks. No Desktop, network or kernel adaptation."""
 import argparse
+from fixture_executor import add_external_watchdog
 import base64
 import ctypes
 from contextlib import closing, contextmanager
@@ -128,6 +129,7 @@ class Layout:
 
 class Images(unittest.TestCase):
     command_timeout = 60
+    external_watchdog = False
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='md-oci-')
@@ -766,7 +768,7 @@ sys.stdin.read()
 
     def command(self, *args, success=True):
         result = subprocess.run([BINARY, *map(str, args)], capture_output=True, text=True,
-                                timeout=self.command_timeout)
+                                timeout=None if self.external_watchdog else self.command_timeout)
         diagnostic = f'exit={result.returncode}\n{result.stdout}{result.stderr}'
         self.assertGreaterEqual(result.returncode, 0, diagnostic)
         self.assertEqual(result.returncode == 0, success, diagnostic)
@@ -1271,7 +1273,9 @@ sys.stdin.read()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    add_external_watchdog(parser)
     parser.add_argument('build', type=pathlib.Path)
     args, rest = parser.parse_known_args()
+    Images.external_watchdog = args.external_watchdog
     BINARY = str((args.build / 'libshroot_guest_image.so').resolve())
     unittest.main(argv=[__file__, *rest])

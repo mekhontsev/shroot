@@ -74,7 +74,8 @@ static void *waiter(void *arg) {
     const struct exchange *x=arg;
     if (x->reply) {
         unsigned expected;
-        int wait=md_entry_prepare_reply_wait(&channel,x->native_sent,&expected);
+        int unannounced=0;
+        int wait=md_entry_prepare_reply_wait(&channel,x->native_sent,&unannounced,&expected)==MD_REPLY_FUTEX;
         enter("compare-and-park");
         /* FUTEX_WAIT compares and enqueues indivisibly. An earlier wake
          * does not leave a credit for a later futex waiter. */
