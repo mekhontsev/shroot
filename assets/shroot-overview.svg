@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="544" viewBox="0 0 560 544"
+     role="img" aria-labelledby="title description">
+  <title id="title">Shroot: Linux environments without root or a VM</title>
+  <desc id="description">Debian runs systemd and sandboxed Chromium beside Alpine running
+    OpenRC and k3s. Both use one host kernel. Two example paths are shown: ordinary native
+    I/O reaches the kernel directly; an eligible rewritten syscall executes in its guest
+    thread and can consult that launch's supervisor for shared guest state.</desc>
+  <defs>
+    <marker id="native" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#156a70"/>
+    </marker>
+    <marker id="guest" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#784084"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="558" height="542" rx="8" fill="#fcfdfd" stroke="#c6d4d3"/>
+  <g font-family="DejaVu Sans, sans-serif" fill="#172f34">
+    <text x="24" y="43" font-size="35" font-weight="bold">Shroot</text>
+    <text x="24" y="72" font-size="21">Linux environments without root or a VM</text>
+
+    <!-- Each column is an independent example launch, not a shared supervisor. -->
+    <path d="M24 94H272V204H24Z" fill="#faebed"/>
+    <path d="M280 94H536V204H280Z" fill="#e5f1f6"/>
+    <path d="M24 94H272" stroke="#ab3b56" stroke-width="4"/>
+    <path d="M280 94H536" stroke="#276589" stroke-width="4"/>
+    <g font-size="25" font-weight="bold">
+      <text x="40" y="129" fill="#8c2942">Debian</text>
+      <text x="296" y="129" fill="#215775">Alpine</text>
+    </g>
+    <g font-size="19">
+      <text x="40" y="161">systemd (PID 1)</text>
+      <text x="40" y="186">Sandboxed Chromium</text>
+      <text x="296" y="161">OpenRC</text>
+      <text x="296" y="186">k3s and its pods</text>
+    </g>
+
+    <text x="24" y="231" font-size="18" fill="#344e53">Example syscall paths in either environment</text>
+    <g transform="translate(0 38)">
+    <path d="M24 204H536" stroke="#aabcbf"/>
+    <g fill="none" stroke-width="3.5">
+      <path d="M44 204V426" stroke="#156a70" marker-end="url(#native)"/>
+      <path d="M302 204V249" stroke="#784084" marker-end="url(#guest)"/>
+      <path d="M302 319V357" stroke="#784084" marker-end="url(#guest)"/>
+    </g>
+    <text x="59" y="281" font-size="22" font-weight="bold" fill="#155c62">Native I/O</text>
+    <text x="59" y="309" font-family="DejaVu Sans Mono, monospace" font-size="18">read, write</text>
+    <text x="317" y="233" font-size="18" fill="#62376d">Eligible calls only</text>
+
+    <rect x="219" y="251" width="317" height="68" rx="5" fill="#f3edf6" stroke="#b79ac0"/>
+    <text x="235" y="280" font-size="23" font-weight="bold" fill="#62376d">Lazy SVC</text>
+    <text x="235" y="306" font-size="18">Can finish in the guest thread</text>
+    <text x="317" y="346" font-size="18" fill="#62376d">When state is shared</text>
+
+    <path d="M219 361H536V418H219Z" fill="#f0f3f4"/>
+    <path d="M220 361V418" stroke="#62787e" stroke-width="3"/>
+    <text x="235" y="384" font-size="21" font-weight="bold">Launch supervisor</text>
+    <text x="235" y="409" font-size="18">Guest PIDs, mounts, file owners</text>
+
+    <rect x="24" y="429" width="512" height="62" rx="5" fill="#173a40"/>
+    <text x="40" y="456" font-size="23" font-weight="bold" fill="white">One host kernel</text>
+    <text x="40" y="481" font-size="18" fill="#c8e8e5">Android or ARM64 Linux</text>
+    </g>
+  </g>
+</svg>

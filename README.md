@@ -24,6 +24,11 @@ requires Java or an Android service.
 [Host tests](tests/README.md#qualified-hosts) |
 [Distribution matrix](tests/validation-matrix.md)
 
+<p align="center">
+  <img src="assets/shroot-overview.svg" width="560"
+       alt="Debian and Alpine share one host kernel. Native I/O goes directly to the kernel. An eligible rewritten call can finish in the guest thread or consult its launch supervisor.">
+</p>
+
 ## Install In Termux
 
 In **aarch64 Termux**, use the Termux `.deb` package from the
@@ -101,6 +106,9 @@ PRoot-like tools can leave ordinary syscalls to the host kernel. For calls
 that need interception, techniques include external tracing and rewriting
 syscall instructions in the guest. Shroot's [Lazy SVC](#lazy-svc) can handle
 a call in the guest thread or consult a separate supervisor for shared state.
+Applications can install their own seccomp filters. Those filters still apply
+to accelerated calls: rewriting a syscall site does not turn a denied call
+into an allowed one. Chromium runs with its sandbox enabled.
 
 For a debugger, what matters is which guest events it can observe, not how
 the runtime intercepts a syscall. In Shroot, stock GDB can attach to a running
@@ -109,15 +117,24 @@ See [guest debugging](debugging.md) for tested workflows and limits.
 
 ## What It Runs
 
-- **Linux distributions and packages:** stock glibc and musl, package managers,
-  compilers, static programs and Go binaries.
-- **Init systems and services:** systemd, OpenRC and runit as guest PID 1.
-- **Containers and Kubernetes:** Docker, Podman, runc, LXC, systemd-nspawn,
-  BuildKit and k3s, including multi-node networking and persistent volumes.
-- **Desktop applications:** X11/Wayland desktops, Chromium, Firefox, VS Code,
-  selected Flatpak/Snap applications and FUSE document portals. For graphical
-  applications in Termux, see [connecting to Termux:X11](library.md#use-termuxx11).
-- **Development tools:** GDB, LLDB, gdbserver, strace and QEMU's software emulator.
+- **Distributions and services:** stock glibc and musl programs, package managers
+  and compilers. Boot systemd, OpenRC or runit as guest PID 1. With systemd,
+  use user services, sockets and timers.
+- **Containers and image builds:** run containers with Docker, Podman, runc,
+  LXC or systemd-nspawn; manage booted machines with `machinectl`. BuildKit
+  builds multistage images with cache and secret mounts.
+- **Kubernetes and networking:** run a stock k3s server on Debian and an Alpine
+  agent on the same phone. Tested workflows include cross-node DNS over VXLAN,
+  NetworkPolicy, ingress and persistent volumes. Containers can also use
+  [IPv4/IPv6 networks and port publishing](networking.md).
+- **Desktop and sandboxed applications:** X11/Wayland desktops, Chromium with
+  its sandbox enabled, Firefox, VS Code and selected Flatpak/Snap browsers with
+  FUSE document portals. Snap uses reduced confinement, not AppArmor isolation.
+  Arch's pacman can use its Landlock filesystem sandbox. For graphical programs
+  in Termux, see [connecting to Termux:X11](library.md#use-termuxx11).
+- **Debugging and virtual machines:** use [GDB, LLDB, gdbserver or strace](debugging.md)
+  inside the guest. QEMU TCG can boot a kernel and initrd under software
+  emulation; libvirt can start, pause, resume and shut down the VM. No KVM is required.
 - **Recursive execution:** [run Shroot inside Shroot](#recursive-execution) without
   a special nesting mode.
 
@@ -140,6 +157,9 @@ syscall implementations. To select Base explicitly for a launch, pass
 `--env SHROOT_MACHINE_ENTRY=0` to `shroot exec`.
 See [cooperative entry](cooperative-entry.md) for admission,
 signals, sandbox filters and performance controls.
+
+For workload timings rather than syscall counts, see the
+[Alpine comparison with PRoot and native chroot](tests/performance.md).
 
 ## Recursive Execution
 
