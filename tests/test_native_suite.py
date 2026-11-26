@@ -95,6 +95,9 @@ def check_profile(build, root, layout, native_reserve, profile, entry, policy_on
         output = suite.command([*launch, *suite.run(store, '--bind-create', str(metadata), '/native-metadata',
             '--', '/bin/resource-guest', 'native-metadata', '/native-metadata')])
         assert 'PASS native metadata:' in output
+        for case in ('modern-mount', 'modern-mount-filtered', 'modern-mount-denied'):
+            output = suite.command([*launch, *suite.run(store, '--', '/bin/libshroot_guest_guest_policy.so', case)])
+            assert 'PASS modern mount:' in output, output
         suite.command([*launch, *suite.guest(store, '--', '/bin/client-guest', 'exit42')], expected=42)
         if profile == 'native' and native_reserve == 0:
             suite.command(suite.guest(store, '--', '/bin/client-guest', 'reserve-large-range'))
@@ -148,7 +151,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='shroot-native-suite-') as temporary:
         root = Path(temporary)
         archive = root / 'rootfs.tar.gz'
-        binaries = [] if args.launch_policy_only else [(build / 'libshroot_guest_resource_guest.so', 'bin/resource-guest')]
+        binaries = [] if args.launch_policy_only else [
+            (build / 'libshroot_guest_resource_guest.so', 'bin/resource-guest'),
+            (build / 'libshroot_guest_guest_policy.so', 'bin/libshroot_guest_guest_policy.so')]
         archive_fixture(build, archive, binaries=binaries)
         layout = root / 'layout'
         write_layout([archive], layout)

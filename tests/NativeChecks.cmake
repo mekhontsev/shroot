@@ -18,7 +18,7 @@ if(SHROOT_HERD7)
 endif()
 add_custom_target(shroot-check-fixtures DEPENDS
     shroot-cli test_client test_client_worker test_client_integration client-guest
-    bootstrap supervisor run service image resource_guest test_database test_image_registry test_host_policy
+    bootstrap supervisor run service image resource_guest guest_policy test_database test_image_registry test_host_policy
     audit_const audit_mutable audit_weak audit_tls audit_current)
 function(shroot_component name target)
     add_dependencies(shroot-check-fixtures ${target})

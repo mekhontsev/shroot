@@ -24,7 +24,8 @@ mkdir -p /run/systemd/system/default.target.wants
 date +%s > "$1/started"
 if test "$2" = diagnostic; then
     mkdir -p /run/systemd/system/systemd-journald.service.d
-    printf '[Service]\nStandardOutput=append:%s/journald.log\nStandardError=inherit\n' "$1" > /run/systemd/system/systemd-journald.service.d/diagnostics.conf
+    # journald outlives the observer's bind mount during system shutdown.
+    printf '[Service]\nStandardOutput=append:/dev/console\nStandardError=inherit\n' > /run/systemd/system/systemd-journald.service.d/diagnostics.conf
     mkdir -p /run/systemd/system.conf.d
     printf '[Manager]\nDefaultEnvironment=SNAPD_DEBUG=1 MD_NETWORKD_TRACE=1\n' > /run/systemd/system.conf.d/md-diagnostic.conf
 fi
@@ -407,7 +408,7 @@ printf ':md-boot:E::mdboot::/bin/true:P\\n' > /run/binfmt.d/md-boot.conf
         raise
     finally:
         try:
-            for name in ('boot.log', 'services.log', 'stock-services.log', 'journal.log', 'journald.log', 'state', 'result'):
+            for name in ('boot.log', 'services.log', 'stock-services.log', 'journal.log', 'state', 'result'):
                 suite.command(['/system/bin/sh', '-c', 'test ! -f "$1" || tail -200 "$1"',
                                'boot-log', suite.base + '/' + name])
             if args.trace:

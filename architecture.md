@@ -253,6 +253,9 @@ Inherited stdio can retain metadata-only O_PATH identity pins; these neither
 keep pipes open for data IO nor supply filesystem authority. Filtered result
 publication replays the original syscall admission and consumes the retained
 result once, rather than introducing a helper syscall forbidden by the guest.
+For a userspace mount context, the filesystem worker returns its sealed carrier
+over the existing descriptor channel. Delivering this object does not require
+a second `fsopen` or `fspick` in the host kernel.
 
 [FUSE](fuse.md) uses that same descriptor and mount model. A daemon request
 suspends only its owning operation; ordinary inode/native operations do not

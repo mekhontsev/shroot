@@ -66,6 +66,15 @@ When fixing a defect, audit analogous entry points, executors, lifecycle and
 failure paths across the owning mechanism. Add focused regression tests using
 the shared fixtures. Report unverified paths; a single successful reproduction
 is not proof of general correctness.
+
+For lost assertions in unit tests or distribution workloads, including new
+failures within an already failing test, compare good and bad runtimes with
+the same guest data and host. Test persistent-state changes independently.
+Identify the first bad change or report the verified bounds. Explain why the
+available coverage did not catch it. For shared SVC changes, exercise the
+affected semantics through both Base and lazy SVC; for a lazy-specific assertion
+verify that the call actually used lazy entry. Recheck the original workload.
+
 For defects exposed by nesting, reduce the failure to a single-runtime
 regression where possible. Verify the same assertions before and after the fix
 at one level, then qualify the fix at the depth that exposed it.

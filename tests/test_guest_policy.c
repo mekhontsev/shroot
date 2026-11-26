@@ -694,27 +694,32 @@ static int signal_entry(int filtered) {
     return 0;
 }
 static int modern_mount(int filtered,int denied) {
-    const char *target="/tmp/app-uid-modern-mount";
-    assert(!mkdir(target,0700) || errno==EEXIST);
     if (filtered) filter_call(SYS_fsopen,denied ? SECCOMP_RET_ERRNO|EACCES : SECCOMP_RET_ALLOW);
+    assert(syscall(SYS_fsopen,"shroot-nonexistent-fs",FSOPEN_CLOEXEC)==-1
+        && errno==(denied ? EACCES : ENODEV));
     int context=(int)syscall(SYS_fsopen,"tmpfs",FSOPEN_CLOEXEC);
     if (denied) {
         assert(context==-1 && errno==EACCES);
     } else {
-        assert(context>=0);
+        assert(context>=0 && fcntl(context,F_GETFD)==FD_CLOEXEC);
         assert(!syscall(SYS_fsconfig,context,FSCONFIG_SET_STRING,"size","1m",0));
         assert(!syscall(SYS_fsconfig,context,FSCONFIG_CMD_CREATE,NULL,NULL,0));
         int detached=(int)syscall(SYS_fsmount,context,FSMOUNT_CLOEXEC,0);
         assert(detached>=0 && !close(context));
+        char target[]="/tmp/shroot-modern-mount-XXXXXX";
+        assert(mkdtemp(target));
         assert(!syscall(SYS_move_mount,detached,"",AT_FDCWD,target,MOVE_MOUNT_F_EMPTY_PATH));
         assert(!close(detached));
-        const char *marker="/tmp/app-uid-modern-mount/marker";
+        int picked=(int)syscall(SYS_fspick,AT_FDCWD,target,0);
+        assert(picked>=0 && fcntl(picked,F_GETFD)==0 && !close(picked));
+        char marker[sizeof(target)+sizeof("/marker")];
+        snprintf(marker,sizeof(marker),"%s/marker",target);
         int fd=open(marker,O_CREAT|O_EXCL|O_WRONLY|O_CLOEXEC,0600);
         assert(fd>=0 && write(fd,"mounted",7)==7 && !close(fd));
         assert(!umount(target));
         assert(access(marker,F_OK)<0 && errno==ENOENT);
+        assert(!rmdir(target));
     }
-    assert(!rmdir(target));
     puts("PASS modern mount: notification and task calls share original-policy admission");
     return 0;
 }

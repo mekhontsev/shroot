@@ -829,6 +829,13 @@ static void prepare_open(struct md_fs_buffer_request *r,struct md_filesystem *fs
             return;
         }
         r->opened.flags=md_fs_publication_flags(&r->request);
+        if (r->request.operation==MD_FS_FSOPEN || r->request.operation==MD_FS_FSPICK) {
+            /* Both return a sealed carrier for a userspace filesystem context.
+             * Transfer that existing OFD; there is no native mount call to replay. */
+            r->output->transfer=MD_FS_BUFFER_RIGHTS;
+            reply->delivery=MD_FS_REPLIED;
+            return;
+        }
         if (r->opened.completion.kind==MD_OPEN_CALLER) {
             r->opened.flags=md_open_plan_path(r->output->source,(unsigned)getpid(),
                 (unsigned)r->opened.fd,r->opened.flags,r->opened.completion.mode);
