@@ -3,8 +3,9 @@
 **Run ARM64 Linux environments on Android and Linux, without root or a VM.**
 
 Install a distribution from an OCI image or rootfs archive, then run its
-unmodified binaries on the host kernel. The same native runtime works in
-Termux, under an Android app's own UID, and as an ordinary user on ARM64 Linux.
+unmodified binaries on the host kernel. On Android, Shroot runs under an app's
+own UID (including Termux) or Android Shell; on ARM64 Linux, it runs as your
+normal user. Both need a [Linux 5.15 or newer kernel](kernel-compatibility.md).
 Workloads include systemd, sandboxed Chromium and k3s.
 
 Shroot stands for *Supervisor-Hosted Root*. Here, *root* means the root of the
@@ -15,6 +16,7 @@ to add Linux to another application. Both manage the same stores; neither
 requires Java or an Android service.
 
 [Install in Termux](#install-in-termux) |
+[Install on Linux](#install-on-arm64-linux) |
 [Start a distribution](#get-started) |
 [Build](#build) |
 [Embed](embedding.md) |
@@ -36,91 +38,106 @@ curl -fLO "$url/$pkg" && curl -fLO "$url/$pkg.sha256" &&
 ```
 
 No root, extra APK or APT repository is needed. Environments stay in
-`$PREFIX/var/lib/shroot` across package upgrades. Next, [install a distribution](#get-started).
+`$PREFIX/var/lib/shroot` across package upgrades. Continue with [Get Started](#get-started).
 
-## What It Runs
+## Install On ARM64 Linux
 
-- **Linux distributions and packages:** stock glibc and musl, package managers,
-  compilers, static programs and Go binaries.
-- **Init systems and services:** systemd, OpenRC and runit, including guest PID 1
-  and service lifecycle.
-- **Containers and Kubernetes:** Docker, Podman, runc, LXC, systemd-nspawn,
-  BuildKit and k3s, including multi-node networking and persistent volumes.
-- **Desktop applications:** X11/Wayland desktops, Chromium, Firefox, VS Code,
-  selected Flatpak/Snap applications and FUSE document portals.
-- **Development tools:** GDB, LLDB, gdbserver, strace and QEMU's software emulator.
-- **Recursive execution:** run Shroot inside Shroot with the same runtime
-  binaries, without a special nesting mode.
+Download the `linux-aarch64.tar.gz` bundle and its matching `.sha256` file
+from the [latest release](https://github.com/mekhontsev/shroot/releases/latest).
+From a directory containing only that release's pair, run:
 
-These are supported workflows, not a claim that every package works on every
-host. The [distribution matrix](tests/validation-matrix.md) records application
-coverage by distribution, executor and entry mode, including outstanding limits.
-[Host coverage](tests/README.md#qualified-hosts) includes Android on 4 KiB pages
-and a Raspberry Pi 5 on 16 KiB pages. Those are distinct configurations.
+```sh
+sha256sum -c shroot-*-linux-aarch64.tar.gz.sha256 &&
+  mkdir -p "$HOME/.local" &&
+  tar -xzf shroot-*-linux-aarch64.tar.gz --strip-components=1 -C "$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 ## Get Started
 
-Shroot runs on **ARM64 Android and ARM64 Linux with a host kernel of 5.15 or
-newer**. On Android it runs under an ordinary app UID (including Termux) or
-Android Shell; on Linux it runs as your normal user.
-
-The host launches the native Shroot runtime. The distribution lives in Shroot's
-environment store, where Shroot's own ELF loader opens and loads guest programs.
-See [kernel compatibility](kernel-compatibility.md) for host requirements.
-
-**ARM64 Linux:** download the Linux bundle and its matching checksum from the
-[latest release](https://github.com/mekhontsev/shroot/releases/latest).
-Verify the downloaded archive with `sha256sum -c <checksum-file>`,
-then unpack it with `tar -xzf <archive> --strip-components=1 -C "$HOME/.local"`
-after creating that directory. Put `$HOME/.local/bin` on your `PATH`.
-
-Once Shroot is installed, create an ARM64 environment from an OCI registry
-and open its shell:
+Install Debian from Docker Hub and open a shell in it:
 
 ```sh
 shroot install debian:stable --name debian
 shroot login debian
 ```
 
-Or import an ARM64 rootfs archive you already have:
+Type `exit` to return to the host shell. To run a single command instead of
+opening a login shell:
 
 ```sh
-shroot install alpine-rootfs.tar.gz --rootfs --name alpine
-shroot exec alpine -- /bin/sh -c 'id; uname -a'
+shroot exec debian -- cat /etc/os-release
 ```
 
-List environments, back one up, or restore it under another name:
+With the environment stopped, back it up and restore it under a new name:
 
 ```sh
+shroot backup debian debian.tar.zst
+shroot restore debian.tar.zst --name restored
 shroot list
-shroot backup alpine alpine.tar.zst
-shroot restore alpine.tar.zst --name restored
 ```
 
-`shroot --print-library` shows where environments live. To select another
-catalog for one command, use `shroot --library DIR list`. The
-[library guide](library.md) covers defaults, registry access, DNS and cleanup.
-The same archive restores in Shroot or loads as a Linux ARM64 image with
-`docker load -i alpine.tar.zst`. Shroot preserves guest metadata, ownership
-and hardlinks; see
-[images and storage](images.md) for formats and sharing rules.
+`shroot backup` creates a compressed OCI image archive. Restore it in Shroot
+or load the same file into Docker with `docker load -i debian.tar.zst`,
+without conversion. See [images and storage](images.md#rootfs-archives-and-backup)
+for details on guest metadata and ownership.
+
+Already have an ARM64 rootfs tarball? Import it with
+`shroot install alpine-rootfs.tar.gz --rootfs --name alpine`.
+`shroot --print-library` shows where your environments live.
+See the [library guide](library.md) for other image sources, storage locations and cleanup.
+
+## How Shroot Compares To PRoot-Like Tools
+
+Like [PRoot](https://github.com/termux/proot), Shroot runs Linux programs on
+the host kernel without root privileges or a VM. Shroot implements a subset
+of Linux kernel behavior in userspace. For example, when guest root calls
+`chown`, the file's guest owner changes without changing its host owner.
+Other guest processes see the change, permission checks use it, and it survives
+a restart. Shroot also manages guest mounts, process IDs, cgroups and networking
+so that systemd can run as PID 1 and k3s can run containers inside the guest.
+
+PRoot-like tools can leave ordinary syscalls to the host kernel. For calls
+that need interception, techniques include external tracing and rewriting
+syscall instructions in the guest. Shroot's [Lazy SVC](#lazy-svc) can handle
+a call in the guest thread or consult a separate supervisor for shared state.
+
+For a debugger, what matters is which guest events it can observe, not how
+the runtime intercepts a syscall. In Shroot, stock GDB can attach to a running
+multithreaded program in the same launch, inspect its threads and detach.
+See [guest debugging](debugging.md) for tested workflows and limits.
+
+## What It Runs
+
+- **Linux distributions and packages:** stock glibc and musl, package managers,
+  compilers, static programs and Go binaries.
+- **Init systems and services:** systemd, OpenRC and runit as guest PID 1.
+- **Containers and Kubernetes:** Docker, Podman, runc, LXC, systemd-nspawn,
+  BuildKit and k3s, including multi-node networking and persistent volumes.
+- **Desktop applications:** X11/Wayland desktops, Chromium, Firefox, VS Code,
+  selected Flatpak/Snap applications and FUSE document portals. For graphical
+  applications in Termux, see [connecting to Termux:X11](library.md#use-termuxx11).
+- **Development tools:** GDB, LLDB, gdbserver, strace and QEMU's software emulator.
+- **Recursive execution:** [run Shroot inside Shroot](#recursive-execution) without
+  a special nesting mode.
+
+The [distribution matrix](tests/validation-matrix.md) shows which workloads
+were tested on each distribution and where limitations remain.
+[Host tests](tests/README.md#qualified-hosts) cover Android with 4 KiB pages
+and a Raspberry Pi 5 with 16 KiB pages.
 
 ## Lazy SVC
 
-Shroot replaces eligible AArch64 syscall instructions in process memory when
-they are first intercepted. Stock binaries need no rebuild, and files on disk
-remain unchanged.
+On the first interception of an eligible AArch64 syscall instruction (`svc`),
+Shroot rewrites it in process memory. Later calls from that site can check the
+guest's seccomp policy and complete in the calling thread, or ask the supervisor
+over shared memory, without a ptrace stop on every call. Ordinary native reads
+and writes stay native. Nothing is patched on disk.
 
-The common entry evaluates the guest's seccomp policy in its own thread, then
-selects native execution, a direct result or a request to the shared resource
-owners. Admitted calls use shared-memory channels; ptrace stops remain for
-operations that actually need kernel task context. Ordinary native data IO
-stays native.
-
-Unsupported sites, unavailable policy views and debugger-owned execution retain
-the Base seccomp/ptrace path. Base and lazy entry share syscall implementations
-and resource ownership. To keep guest syscall instructions in place throughout
-a launch, pass `--env SHROOT_MACHINE_ENTRY=0` to `shroot exec`.
+When a site cannot be rewritten, the guest policy is unavailable, or a debugger
+owns execution, Shroot uses its Base seccomp/ptrace path. Both paths use the same
+syscall implementations. To select Base explicitly for a launch, pass
+`--env SHROOT_MACHINE_ENTRY=0` to `shroot exec`.
 See [cooperative entry](cooperative-entry.md) for admission,
 signals, sandbox filters and performance controls.
 
@@ -138,8 +155,9 @@ privileges are needed. Deep test runs use longer time limits; see
 
 ## Storage And Integration
 
-Each environment has an inode-backed store. SQLite holds guest names, identity,
-permissions and layer relationships; native files hold their data. Shared image
+The host launches Shroot; Shroot's ELF loader loads guest programs from the
+environment store. SQLite holds guest names, inode identities, permissions
+and layer relationships; native files hold their data. Shared image
 layers and copy-on-write environments do not depend on host hardlink or mount
 privileges. Installed stores retain their identity across runtime updates.
 
