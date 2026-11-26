@@ -1,5 +1,8 @@
 #define _GNU_SOURCE
 #include "inode_leaf.h"
+#include "host_open.h"
+#include "image_import.h"
+#include "image_oci_archive.h"
 #include "image_backup.h"
 #include "image_publish.h"
 #include "image_layer.h"
@@ -30,15 +33,6 @@ static int config_read(struct md_inode_store *s, char **out) {
     if (!r) r = md_json_validate(s->db, *out, strlen(*out));
     return r;
 }
-static int header(struct archive *ar, const char *name, const void *data, size_t size) {
-    struct archive_entry *e = archive_entry_new();
-    if (!e) return -ENOMEM;
-    archive_entry_set_pathname(e, name); archive_entry_set_filetype(e, AE_IFREG);
-    archive_entry_set_perm(e, 0600); archive_entry_set_size(e, size);
-    int r = archive_write_header(ar, e) == ARCHIVE_OK ? 0 : -EIO;
-    if (!r && archive_write_data(ar, data, size) != (la_ssize_t)size) r = -EIO;
-    archive_entry_free(e); return r;
-}
 static int security(struct md_inode_store *s, const struct mdi_node *node, struct archive_entry *entry) {
     sqlite3_stmt *q = NULL;
     int r = mdi_prepare(s, "SELECT type,value FROM inode_acls WHERE object=?1", &q);
@@ -49,14 +43,8 @@ static int security(struct md_inode_store *s, const struct mdi_node *node, struc
         const struct md_acl *acl = sqlite3_column_blob(q, 1);
         size_t size = sqlite3_column_bytes(q, 1);
         if (!md_acl_valid(acl, size)) { r = -EIO; break; }
-        int type = sqlite3_column_int(q, 0) == MD_ACL_ACCESS ? ARCHIVE_ENTRY_ACL_TYPE_ACCESS : ARCHIVE_ENTRY_ACL_TYPE_DEFAULT;
-        for (unsigned i = 0; !r && i < (size-4)/8; ++i) {
-            const struct md_acl_entry *a = &acl->entries[i];
-            int tag = a->tag == MD_ACL_USER_OBJ ? ARCHIVE_ENTRY_ACL_USER_OBJ : a->tag == MD_ACL_USER ? ARCHIVE_ENTRY_ACL_USER
-                : a->tag == MD_ACL_GROUP_OBJ ? ARCHIVE_ENTRY_ACL_GROUP_OBJ : a->tag == MD_ACL_GROUP ? ARCHIVE_ENTRY_ACL_GROUP
-                : a->tag == MD_ACL_MASK ? ARCHIVE_ENTRY_ACL_MASK : ARCHIVE_ENTRY_ACL_OTHER;
-            if (archive_entry_acl_add_entry(entry, type, a->permissions, tag, a->id, NULL) != ARCHIVE_OK) r = -EIO;
-        }
+        const char *name = sqlite3_column_int(q,0) == MD_ACL_ACCESS ? MD_ACL_ACCESS_NAME : MD_ACL_DEFAULT_NAME;
+        archive_entry_xattr_add_entry(entry,name,acl,size);
     }
     sqlite3_finalize(q); q = NULL;
     if (!r) r = mdi_prepare(s, "SELECT value FROM file_capabilities WHERE object=?1", &q);
@@ -103,7 +91,7 @@ static int write_tree(struct md_inode_store *s, struct archive *ar) {
         int rc = mdi_step(s, q); if (rc == SQLITE_DONE) break;
         if (rc != SQLITE_ROW) { r = mdi_sql_failure(rc); break; }
         const char *path = (const char *)sqlite3_column_text(q, 1);
-        if (!path || strlen(path) >= PATH_MAX-8 || ++entries > MD_IMAGE_MAX_ENTRIES) { r = -EFBIG; break; }
+        if (!path || strlen(path) >= PATH_MAX || ++entries > MD_IMAGE_MAX_ENTRIES) { r = -EFBIG; break; }
         struct mdi_node node; struct stat st;
         r = mdi_node(s, (const char *)sqlite3_column_text(q, 0), &node);
         if (!r) r = mdi_stat(s, &node, &st);
@@ -111,7 +99,7 @@ static int write_tree(struct md_inode_store *s, struct archive *ar) {
         if (node.kind == S_IFSOCK) { fprintf(stderr, "Guest backup: omitted socket %s\n", path); continue; }
         struct archive_entry *e = archive_entry_new();
         if (!e) { r = -ENOMEM; break; }
-        char name[PATH_MAX]; snprintf(name, sizeof(name), "rootfs/%s", *path ? path+1 : ".");
+        const char *name = *path ? path+1 : ".";
         archive_entry_set_pathname(e, name); archive_entry_set_mode(e, st.st_mode);
         archive_entry_set_uid(e, st.st_uid); archive_entry_set_gid(e, st.st_gid);
         archive_entry_set_rdev(e,st.st_rdev);
@@ -148,10 +136,6 @@ static int write_tree(struct md_inode_store *s, struct archive *ar) {
         }
         if (!r && !linked) r = security(s, &node, e);
         if (!r && !linked) r = attributes(s, &node, e);
-        /* Libarchive represents ACL GROUP_OBJ in its mode field, whereas Linux
-         * stat uses the ACL mask. Preserve the independent guest mode explicitly. */
-        unsigned char mode[2] = {st.st_mode & 255, (st.st_mode & 07777) >> 8};
-        if (!linked) archive_entry_xattr_add_entry(e, SHROOT_BACKUP_MODE, mode, sizeof(mode));
         if (!r && archive_write_header(ar, e) != ARCHIVE_OK) r = -EIO;
         char buffer[65536];
         for (off_t offset = 0; !r && fd >= 0 && offset < st.st_size;) {
@@ -176,7 +160,7 @@ int md_image_backup(const char *store, const char *destination) {
         if (!r) r=mdi_finish(s,mdi_leaf_materialize(s));
         if (r) { md_inode_store_close(s); return r; }
     }
-    char *config = NULL, *metadata = NULL;
+    char *config = NULL;
     r = config_read(s, &config);
     sqlite3_stmt *q = NULL;
     int guest_users = 0;
@@ -187,75 +171,42 @@ int md_image_backup(const char *store, const char *destination) {
         else if (rc != SQLITE_DONE) r = mdi_sql_failure(rc);
     }
     sqlite3_finalize(q);
-    if (!r && asprintf(&metadata, "{\"format\":1,\"guestUsers\":%d,\"imageConfig\":%s}", guest_users, config) < 0) r = -ENOMEM;
     struct md_image_publish publication = {.parent=-1, .stage=-1};
     if (!r) r = md_image_publish_begin(destination, &publication);
     int fd = -1;
     if (!r && (fd = openat(publication.stage, "store", O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600)) < 0) r = -errno;
+    int layer = -1;
+    if (!r && (layer=(int)md_host_temporary(publication.stage,".",0600))<0) r=layer;
     struct archive *ar = archive_write_new();
     if (!ar && !r) r = -ENOMEM;
-    if (!r && (archive_write_set_format_pax(ar) != ARCHIVE_OK || archive_write_add_filter_zstd(ar) != ARCHIVE_OK
-            || archive_write_open_fd(ar, fd) != ARCHIVE_OK)) r = -EIO;
-    if (!r) r = header(ar, SHROOT_BACKUP_MANIFEST, metadata, strlen(metadata));
+    if (!r && (archive_write_set_format_pax(ar) != ARCHIVE_OK ||
+            archive_write_set_options(ar,"xattrheader=SCHILY") != ARCHIVE_OK ||
+            archive_write_open_fd(ar, layer) != ARCHIVE_OK)) r = -EIO;
     if (!r) r = write_tree(s, ar);
     if (ar) { if (archive_write_close(ar) != ARCHIVE_OK && !r) r = -EIO; archive_write_free(ar); }
+    if (!r) r=md_oci_archive_write(fd,layer,s->db,config,guest_users);
+    if (layer>=0) close(layer);
     if (!r && fsync(fd)) r = -errno;
     if (!r) r = md_image_publish_commit(&publication);
     if (fd >= 0) close(fd);
     md_image_publish_close(&publication);
-    free(config); free(metadata); md_inode_store_close(s); return r;
-}
-static int backup_config(int fd, sqlite3 *db, char **out, int *guest_users) {
-    struct archive *ar = archive_read_new();
-    if (!ar) return -ENOMEM;
-    archive_read_support_format_tar(ar); archive_read_support_filter_zstd(ar);
-    struct archive_entry *entry = NULL;
-    int r = archive_read_open_fd(ar, fd, 65536) == ARCHIVE_OK ? 0 : -EBADMSG;
-    if (!r && (archive_read_next_header(ar, &entry) != ARCHIVE_OK
-            || !md_backup_manifest(archive_entry_pathname(entry))
-            || archive_entry_filetype(entry) != S_IFREG || archive_entry_hardlink(entry)
-            || archive_entry_size(entry) <= 0 || archive_entry_size(entry) > 8*1024*1024)) r = -EBADMSG;
-    char *data = NULL;
-    if (!r) {
-        size_t size = archive_entry_size(entry); data = malloc(size+1);
-        if (!data) r = -ENOMEM;
-        else {
-            for (size_t at = 0; !r && at < size;) {
-                la_ssize_t n = archive_read_data(ar, data+at, size-at);
-                if (n <= 0) r = -EBADMSG; else at += (size_t)n;
-            }
-            if (!r) { data[size] = 0; r = md_json_validate(db, data, size); }
-        }
-    }
-    sqlite3_stmt *q = NULL;
-    if (!r) r = md_json_query(db, data, "SELECT json_extract(?1,'$.imageConfig'),json_extract(?1,'$.guestUsers') "
-        "WHERE json_extract(?1,'$.format')=1 AND json_type(?1,'$.imageConfig')='object' "
-        "AND json_type(?1,'$.guestUsers')='integer' AND json_extract(?1,'$.guestUsers') IN (0,1)", &q);
-    if (!r) {
-        if (sqlite3_step(q) != SQLITE_ROW) r = -EPROTONOSUPPORT;
-        else {
-            *guest_users = sqlite3_column_int(q, 1);
-            if (!(*out = strdup((const char *)sqlite3_column_text(q, 0)))) r = -ENOMEM;
-        }
-    }
-    sqlite3_finalize(q); free(data); archive_read_free(ar); return r;
+    free(config); md_inode_store_close(s); return r;
 }
 static int archive_install(int snapshot, struct md_image_publish *p, int backup) {
+    if (backup) return md_image_import_archive(snapshot,p,NULL,1,NULL,1);
     struct md_inode_store *s = NULL;
     int r = md_inode_store_open(p->path, 1, &s);
     char *config = NULL;
-    int guest_users = 1;
-    if (!r) r = backup ? backup_config(snapshot, s->db, &config, &guest_users) : ((config = strdup(default_config)) ? 0 : -ENOMEM);
+    if (!r && !(config = strdup(default_config))) r=-ENOMEM;
     uint64_t bytes = 0, entries = 0;
-    if (!r) r = backup ? md_image_backup_tree(s, snapshot, &bytes, &entries) : md_image_rootfs(s, snapshot, &bytes, &entries);
+    if (!r) r = md_image_rootfs(s, snapshot, &bytes, &entries);
     if (!r) r = md_image_layers_finish(s, 1);
-    if (!r && !guest_users) r = mdi_sql(s, "UPDATE properties SET value=0 WHERE key='image-users'");
     int out = -1;
     if (!r && (out = openat(s->lifetime->root, "image-config.json", O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) < 0) r = -errno;
     if (!r) r = md_image_write(out, config, strlen(config));
     if (!r && fsync(out)) r = -errno;
     if (out >= 0) close(out);
-    if (!r && !backup) r = md_inode_store_seal(s);
+    if (!r) r = md_inode_store_seal(s);
     if (!r && fsync(s->lifetime->root)) r = -errno;
     md_inode_store_close(s);
     if (!r) r = md_image_publish_commit(p);

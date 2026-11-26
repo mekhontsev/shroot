@@ -106,9 +106,11 @@ int md_image_blob(int blobs, int scratch, const char *digest, uint64_t size, int
     int snapshot = -1;
     struct stat st;
     int r = fstat(fd, &st) ? -errno : 0;
-    if (!r && (st.st_size < 0 || (uint64_t)st.st_size != size)) r = -EBADMSG;
-    if (!r) r = md_image_snapshot(fd, scratch, size, &snapshot);
-    close(fd);
+    if (!r && (!S_ISREG(st.st_mode) || st.st_size < 0 || (uint64_t)st.st_size != size)) r = -EBADMSG;
+    /* A blob unpacked into our private archive stage is already a snapshot. */
+    if (!r && scratch<0) { snapshot=fd; fd=-1; }
+    else if (!r) r = md_image_snapshot(fd, scratch, size, &snapshot);
+    if (fd>=0) close(fd);
     char hash[65];
     if (!r) r = md_image_hash(snapshot, size, hash);
     if (!r && strcmp(hash, digest + 7)) r = -EBADMSG;

@@ -100,7 +100,9 @@ shroot restore alpine.tar.zst --name restored
 `shroot --print-library` shows where environments live. To select another
 catalog for one command, use `shroot --library DIR list`. The
 [library guide](library.md) covers defaults, registry access, DNS and cleanup.
-Backups preserve guest metadata, ownership and hardlinks; see
+The same archive restores in Shroot or loads as a Linux ARM64 image with
+`docker load -i alpine.tar.zst`. Shroot preserves guest metadata, ownership
+and hardlinks; see
 [images and storage](images.md) for formats and sharing rules.
 
 ## Lazy SVC

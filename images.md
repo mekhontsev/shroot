@@ -282,23 +282,26 @@ sealed image whose default command is `/bin/sh`. It runs no installation scripts
 Other codecs are not enabled. Archive input is copied into a private bounded
 snapshot before parsing; observed source mutation rejects publication.
 
-`backup` requires exclusive store ownership. It emits a self-contained zstd PAX
-archive, including lower file bodies, image configuration and guest-user launch
-policy. `restore` publishes a new writable store with no lower dependencies.
-Names, hardlink relationships, symlinks, FIFO and device metadata, guest UID/GID/mode,
-access/default ACLs, file capabilities, user/guest-trusted xattrs, overlay controls
-and file atime/mtime are
-retained. The format carries guest mode independently of libarchive's ACL mode
-representation. Native Android SELinux labels are not exported; unsupported
-native xattrs fail rather than being silently lost.
-The portable archive has its own version-1 manifest (`shroot-backup.json`) and
-`shroot.backup.mode` metadata,
-independent of native family/revision and catalog-record versions. Tests read a
-fixed v1 archive input without invoking the current exporter, and separately
-export/restore frozen native revisions with their sparse metadata.
-Restore also accepts `magicdesk-backup.json` and `magicdesk.backup.mode` in
-existing archives. These aliases are read-only compatibility: every new backup
-uses the Shroot names, including backups of restored archives.
+`backup` requires exclusive store ownership. It writes a zstd-compressed OCI image archive with a
+single flattened PAX tar layer. The archive includes lower file bodies and the
+image launch configuration; it carries no references to host stores. Load it
+with `docker load -i FILE.tar.zst` (untagged; Docker prints its image ID).
+The Docker path index and OCI index reference the same config and layer bytes.
+
+`restore` creates a writable store with no lower dependencies. On a Shroot
+snapshot, manifest annotations `io.github.mekhontsev.shroot.snapshot="1"` and
+`io.github.mekhontsev.shroot.guest-users="0"|"1"` select literal filenames and
+restore the saved launch policy. Unmarked OCI images use ordinary layer and
+whiteout semantics. Shroot restores a user's literal `.wh.*` files; OCI
+consumers reserve those names for deletions and cannot reproduce them as files.
+Moving a snapshot between executors does not remap its guest UID/GID numbers.
+
+The layer preserves guest names, hardlinks, symlinks, FIFOs, device numbers,
+mode, UID/GID, POSIX ACLs, file capabilities, supported guest xattrs and
+atime/mtime. ACLs are carried as Linux xattrs independently of tar mode.
+Native Android SELinux labels are not exported; unsupported native xattrs
+fail rather than being silently lost. Allow scratch space for the uncompressed
+layer during backup and restore.
 
 Backup is filesystem data, not a process checkpoint. Sockets are omitted with
 their paths reported; running processes, FIFO streams, open descriptors and

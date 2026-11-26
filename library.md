@@ -37,8 +37,10 @@ shroot remove restored
 shroot prune
 ```
 
-`install LAYOUT --oci --name NAME` imports a local OCI layout, selecting Linux ARM64 and
-preserving guest ownership. `install REFERENCE --name NAME` pulls a public OCI
+The backup is also a Linux ARM64 container image: `docker load -i alpine.tar.zst`.
+`restore` creates an independent writable environment from a Shroot snapshot
+or an ordinary OCI archive. `install SOURCE --oci --name NAME` accepts a local
+OCI layout directory or archive and creates an instance backed by a sealed image. `install REFERENCE --name NAME` pulls a public OCI
 image over HTTPS, including registries requiring anonymous Bearer authorization.
 `--resolver CONTENTS` on installation seeds an absent or empty
 resolver file; `resolver NAME CONTENTS --replace` explicitly replaces it while

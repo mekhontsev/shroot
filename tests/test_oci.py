@@ -74,16 +74,9 @@ def tar(entries):
     return stream.getvalue()
 
 
-def frozen_backup_v1():
-    # Fixed wire-format input, independent of the current exporter.
-    header = b'{"format":1,"guestUsers":1,"imageConfig":{"config":{"Cmd":["/bin/sh"]}}}'
-    return tar([
-        ('magicdesk-backup.json', 'file', header),
-        ('rootfs/.', 'dir', '', 0o755, 0, 0, {'magicdesk.backup.mode': b'\xed\x01'}),
-        ('rootfs/file', 'file', b'contents', 0o640, 0, 0, {'magicdesk.backup.mode': b'\xa0\x01'}),
-        ('rootfs/alias', 'hard', 'rootfs/file'),
-        ('rootfs/native', 'file', b'native', 0o6750, 42, 43,
-         {'magicdesk.backup.mode': b'\xe8\x0d'})])
+def snapshot_annotations(guest_users=1):
+    return {'io.github.mekhontsev.shroot.snapshot': '1',
+            'io.github.mekhontsev.shroot.guest-users': str(guest_users)}
 
 
 class Layout:
@@ -122,6 +115,13 @@ class Layout:
         self.descriptor['annotations'] = {'org.opencontainers.image.ref.name': 'fixture'}
         (self.path / 'oci-layout').write_bytes(encoded({'imageLayoutVersion': '1.0.0'}))
         self.index([self.descriptor])
+
+    def archive(self, annotations=None):
+        if annotations is not None:
+            self.manifest['annotations'] = annotations
+            self.index([self.blob(encoded(self.manifest), OCI + 'manifest.v1+json')])
+        return tar([(p.relative_to(self.path).as_posix(), 'file', p.read_bytes())
+                    for p in self.path.rglob('*') if p.is_file()])
 
     def index(self, descriptors):
         (self.path / 'index.json').write_bytes(encoded({'schemaVersion': 2, 'manifests': descriptors}))
@@ -948,16 +948,27 @@ sys.stdin.read()
         self.assertEqual(body.read_bytes(), b'changed-size')
 
     def test_restore_rejects_invalid_metadata_and_duplicate_header(self):
-        header = encoded({'format': 1, 'guestUsers': 1, 'imageConfig': {}})
-        for i, entries in enumerate((
-                [('shroot-backup.json', 'file', header), ('shroot-backup.json', 'file', header)],
-                [('magicdesk-backup.json', 'file', header), ('shroot-backup.json', 'file', header)],
-                [('shroot-backup.json', 'file', b'{"format":1}')],
-                [('shroot-backup.json', 'file', header), ('rootfs/../../escaped', 'file', b'bad')])):
-            archive = self.root / ('invalid'+str(i)+'.tar')
-            archive.write_bytes(tar(entries))
+        layout = self.layout()
+        archive = self.root / 'invalid.tar'
+        for annotations in ({'io.github.mekhontsev.shroot.snapshot': '1'}, snapshot_annotations('x'),
+                            {**snapshot_annotations(), 'io.github.mekhontsev.shroot.snapshot': '2'}):
+            archive.write_bytes(layout.archive(annotations))
             self.command('restore', archive, self.destination, success=False)
             self.assertFalse(self.destination.exists())
+        layout.archive(snapshot_annotations())
+        layer_name = layout.layers[0]['digest'].replace('sha256:', 'blobs/sha256/')
+        for name in ('index.json', 'oci-layout', layer_name):
+            entries = [(p.relative_to(layout.path).as_posix(), 'file', p.read_bytes())
+                       for p in layout.path.rglob('*') if p.is_file()]
+            archive.write_bytes(tar(entries + [(name, 'file', b'')]))
+            self.command('restore', archive, self.destination, success=False)
+            self.assertFalse(self.destination.exists())
+        layer = layout.path / layer_name
+        valid = layer.read_bytes()
+        layer.write_bytes(bytes([valid[0] ^ 1]) + valid[1:])
+        archive.write_bytes(layout.archive())
+        self.command('restore', archive, self.destination, success=False)
+        self.assertFalse(self.destination.exists())
         self.assertFalse(list(self.root.glob('.md-image-*')))
 
     def test_backup_is_independent_of_layers(self):
@@ -988,39 +999,50 @@ sys.stdin.read()
             self.assertEqual(db.execute('SELECT uid,gid,mode FROM objects WHERE kind=32768').fetchone(), (123, 456, 0o4700))
         info = json.loads(self.command('inspect', self.destination).stdout)
         self.assertEqual(info['kind'], 'instance')
-        self.assertEqual(info['config'], layout.config)
+        self.assertEqual(info['config']['config'], layout.config['config'])
 
-    def test_frozen_portable_backup_v1(self):
-        archive = self.root / 'historical.tar'
-        archive.write_bytes(frozen_backup_v1())
-        self.command('restore', archive, self.destination)
-        self.assertEqual(self.body('file').read_bytes(), b'contents')
-        self.assertEqual(self.body('file'), self.body('alias'))
-        self.assertEqual(self.body('native').read_bytes(), b'native')
-        with database(self.destination / 'namespace.db') as db:
-            self.assertEqual(db.execute('SELECT count(*) FROM sources').fetchone(), (0,))
-            self.assertEqual(db.execute('SELECT uid,gid,mode FROM objects WHERE uid=42').fetchone(),
-                             (42, 43, 0o6750))
-        info = json.loads(self.command('inspect', self.destination).stdout)
-        self.assertEqual(info['guestUsers'], 1)
-        self.assertEqual(info['config'], {'config': {'Cmd': ['/bin/sh']}})
-
-        backup = self.root / 'current.tar.zst'
+    def test_snapshot_whiteouts_and_standard_archive_descriptors(self):
+        source = self.root / 'rootfs.tar'
+        source.write_bytes(tar([('.wh.example', 'file', b'literal'), ('alias', 'hard', '.wh.example')]))
+        self.command('rootfs', source, self.destination)
+        # Installed stores may carry just their launch configuration.
+        (self.destination / 'image-config.json').write_bytes(encoded({'config': {'Cmd': ['/bin/sh']}}))
+        backup = self.root / 'export.tar.zst'
         self.command('backup', self.destination, backup)
-        raw = subprocess.run(['zstd', '-q', '-d', '-c', str(backup)],
-                             check=True, capture_output=True).stdout
-        with tarfile.open(fileobj=io.BytesIO(raw)) as exported:
-            self.assertIn('shroot-backup.json', exported.getnames())
-            self.assertNotIn('magicdesk-backup.json', exported.getnames())
-            keys = {key for entry in exported for key in entry.pax_headers}
-            self.assertTrue(any(key.endswith('shroot.backup.mode') for key in keys), keys)
-            self.assertFalse(any(key.endswith('magicdesk.backup.mode') for key in keys), keys)
-        restored = self.root / 'current'
-        self.command('restore', backup, restored)
-        self.assertEqual(self.body('file', restored), self.body('alias', restored))
-        with database(restored / 'namespace.db') as db:
-            self.assertEqual(db.execute('SELECT uid,gid,mode FROM objects WHERE uid=42').fetchone(),
-                             (42, 43, 0o6750))
+        raw = subprocess.run(['zstd', '-qdc', str(backup)], check=True, capture_output=True).stdout
+        with tarfile.open(fileobj=io.BytesIO(raw)) as ar:
+            def blob(d):
+                b = ar.extractfile('blobs/sha256/' + d['digest'][7:]).read()
+                self.assertEqual(d['digest'], 'sha256:' + hashlib.sha256(b).hexdigest())
+                self.assertEqual(d['size'], len(b))
+                return b
+            index = json.load(ar.extractfile('index.json'))
+            m = json.loads(blob(index['manifests'][0]))
+            self.assertEqual(m['annotations'], snapshot_annotations())
+            docker, = json.load(ar.extractfile('manifest.json'))
+            self.assertEqual(docker['Config'], 'blobs/sha256/' + m['config']['digest'][7:])
+            self.assertEqual(docker['Layers'], ['blobs/sha256/' + m['layers'][0]['digest'][7:]])
+            config = json.loads(blob(m['config']))
+            self.assertEqual((config['os'], config['architecture']), ('linux', 'arm64'))
+            self.assertEqual(config['rootfs']['diff_ids'], [m['layers'][0]['digest']])
+            with tarfile.open(fileobj=io.BytesIO(blob(m['layers'][0]))) as layer:
+                self.assertEqual(layer.extractfile('.wh.example').read(), b'literal')
+        for op, args in [('restore', []), ('import', ['--preserve-ownership'])]:
+            restored = self.root / op
+            self.command(op, backup, restored, *args)
+            self.assertEqual(self.body('.wh.example', restored).read_bytes(), b'literal')
+            self.assertEqual(self.body('alias', restored), self.body('.wh.example', restored))
+
+    def test_restore_plain_oci_archive_applies_whiteouts(self):
+        layout = self.layout([[('old', 'file', b'lower')], [('.wh.old', 'file', b''), ('new', 'file', b'upper')]])
+        archive = self.root / 'foreign.tar'
+        archive.write_bytes(layout.archive())
+        self.command('restore', archive, self.destination)
+        self.assertIsNone(self.object('old'))
+        self.assertIsNone(self.object('.wh.old'))
+        self.assertEqual(self.object('new').read_bytes(), b'upper')
+        archive.write_bytes(layout.archive(snapshot_annotations()))
+        self.command('restore', archive, self.root / 'invalid', success=False)
 
     def test_backup_rejects_live_store_and_existing_output(self):
         self.run_import(self.layout())
@@ -1210,13 +1232,9 @@ sys.stdin.read()
             self.assertEqual(original.execute(query).fetchall(), copy.execute(query).fetchall())
 
     def test_restore_separates_guest_and_private_native_metadata(self):
-        header = encoded({'format': 1, 'guestUsers': 1, 'imageConfig': {}})
+        layout = self.layout([[('file', 'file', b'body', 0o644, 0, 0, {'user.shroot.metadata': b'forged'})]])
         archive = self.root / 'private.tar'
-        archive.write_bytes(tar([
-            ('shroot-backup.json', 'file', header),
-            ('rootfs/file', 'file', b'body', 0o644, 0, 0,
-             {'shroot.backup.mode': (0o644).to_bytes(2, 'little'), 'user.shroot.metadata': b'forged'}),
-        ]))
+        archive.write_bytes(layout.archive(snapshot_annotations()))
         self.command('restore', archive, self.destination)
         body = self.body('file')
         self.assertEqual(body.read_bytes(), b'body')

@@ -17,5 +17,5 @@ int md_image_config_validate(sqlite3 *, const char *);
 void md_image_descriptor_free(struct md_image_descriptor *);
 void md_image_oci_free(struct md_image_oci *);
 /* Returns a verified, uncompressed anonymous tar descriptor. */
-int md_image_unpack(int blobs, int scratch, const struct md_image_descriptor *, const char *diff_id, int *);
+int md_image_unpack(int blobs, int scratch, int private_blobs, const struct md_image_descriptor *, const char *diff_id, int *);
 #endif

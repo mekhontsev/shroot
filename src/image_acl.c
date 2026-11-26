@@ -11,8 +11,30 @@ static int order(const void *a,const void *b) {
     if(x->tag!=y->tag) return x->tag<y->tag ? -1 : 1;
     return x->id==y->id ? 0 : x->id<y->id ? -1 : 1;
 }
+static int record(struct md_inode_store *s,const char *path,int kind,const void *acl,size_t size) {
+    if (size > MD_ACL_MAX || !md_acl_valid(acl,size)) return -EINVAL;
+    sqlite3_stmt *q=NULL;
+    int r=mdi_prepare(s,"INSERT INTO temp.layer_acls VALUES(?1,?2,?3) ON CONFLICT(path,type) "
+        "DO UPDATE SET value=excluded.value WHERE value=excluded.value",&q);
+    if(!r) r=mdi_sql_error(sqlite3_bind_text(q,1,path,-1,SQLITE_STATIC));
+    if(!r) r=mdi_sql_error(sqlite3_bind_int(q,2,kind));
+    if(!r) r=mdi_sql_error(sqlite3_bind_blob(q,3,acl,size,SQLITE_STATIC));
+    if(!r) r=mdi_sql_error(mdi_step(s,q));
+    if(!r && !sqlite3_changes(s->db)) r=-EINVAL;
+    sqlite3_finalize(q); return r;
+}
 int md_image_acl_record(struct md_inode_store *s,struct archive_entry *entry,const char *path) {
     if(archive_entry_acl_count(entry,ARCHIVE_ENTRY_ACL_TYPE_NFS4)) return -ENOTSUP;
+    const char *name; const void *value; size_t length;
+    archive_entry_xattr_reset(entry);
+    while(!archive_entry_xattr_next(entry,&name,&value,&length)) {
+        int kind=md_image_acl_kind(name);
+        if(kind) {
+            if (archive_entry_hardlink(entry)) return -EINVAL;
+            int r=record(s,path,kind,value,length);
+            if(r) return r;
+        }
+    }
     for(unsigned kind=MD_ACL_ACCESS;kind<=MD_ACL_DEFAULT;kind++) {
         int wanted=kind==MD_ACL_ACCESS ? ARCHIVE_ENTRY_ACL_TYPE_ACCESS : ARCHIVE_ENTRY_ACL_TYPE_DEFAULT;
         int count=archive_entry_acl_reset(entry,wanted);
@@ -37,13 +59,8 @@ int md_image_acl_record(struct md_inode_store *s,struct archive_entry *entry,con
             else acl->entries[i]=(struct md_acl_entry){translated,perm,named ? (uint32_t)id : UINT32_MAX};
         }
         if(!r) { qsort(acl->entries,count,8,order); if(!md_acl_valid(acl,size)) r=-EINVAL; }
-        sqlite3_stmt *q=NULL;
-        if(!r) r=mdi_prepare(s,"INSERT INTO temp.layer_acls VALUES(?1,?2,?3)",&q);
-        if(!r) r=mdi_sql_error(sqlite3_bind_text(q,1,path,-1,SQLITE_STATIC));
-        if(!r) r=mdi_sql_error(sqlite3_bind_int(q,2,kind));
-        if(!r) r=mdi_sql_error(sqlite3_bind_blob(q,3,acl,size,SQLITE_STATIC));
-        if(!r) r=mdi_sql_error(mdi_step(s,q));
-        sqlite3_finalize(q); free(acl);
+        if(!r) r=record(s,path,kind,acl,size);
+        free(acl);
         if(r) return r;
     }
     return 0;

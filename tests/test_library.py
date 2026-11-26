@@ -137,6 +137,8 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(restored["image"], "")
         self.assertNotEqual(first["id"], restored["id"])
         self.call("exec", "restored", "--", "/bin/client-guest", "exit42", code=42)
+        self.call("install", backup, "--oci", "--name", "imported")
+        self.call("exec", "imported", "--", "/bin/client-guest", "exit42", code=42)
 
     def test_local_oci_reuses_shared_layers(self):
         layout = self.root / "layout"

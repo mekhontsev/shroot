@@ -667,11 +667,14 @@ def main():
             spec.loader.exec_module(fixtures)
             with tempfile.TemporaryDirectory(prefix="md-backup-fixture-") as staging:
                 archive = Path(staging) / "frozen.tar"
-                archive.write_bytes(fixtures.frozen_backup_v1())
+                layout=fixtures.Layout(Path(staging)/"layout", [[
+                    ('file', 'file', b'contents', 0o640, 0, 0), ('alias', 'hard', 'file'),
+                    ('native', 'file', b'native', 0o6750, 42, 43)]])
+                archive.write_bytes(layout.archive(fixtures.snapshot_annotations()))
                 executor.upload(archive, root + "/frozen.tar")
-            check("frozen backup v1 restore", executable("image") + " restore "
+            check("independent OCI snapshot restore", executable("image") + " restore "
                   + root + "/frozen.tar " + root + "/frozen-restored")
-            check("frozen backup v1 contents", executable("test_schema") + " --check-history-backup "
+            check("independent OCI snapshot contents", executable("test_schema") + " --check-history-backup "
                   + root + "/frozen-restored", "PASS historical metadata survives portable backup")
             check("historical storage backup", executable("image") + " backup "
                   + root + "/schema-unit/revision-2 " + root + "/historical.tar.zst")
@@ -684,7 +687,7 @@ def main():
                   "PASS promoted body enters existing shared-source snapshots and COW")
             check("native leaf ownership", "timeout -k 5 90 " + executable("test_native_leaf")
                   + " " + root + "/native-leaf-unit",
-                  "PASS promotion captures native metadata")
+                  "PASS promotion and COW retain private host metadata")
             check("native metadata backup", executable("image") + " backup "
                   + root + "/native-leaf-unit/store " + root + "/native-leaf.tar.zst")
             check("native metadata restore", executable("image") + " restore "

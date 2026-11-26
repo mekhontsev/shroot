@@ -27,7 +27,7 @@ int md_image_descriptor_read(sqlite3 *db, const char *json, struct md_image_desc
     if (!r) r = md_json_query(db, json, "SELECT json_extract(?1,'$.size')", &q);
     if (!r) {
         if (sqlite3_step(q) != SQLITE_ROW || sqlite3_column_type(q, 0) != SQLITE_INTEGER
-                || sqlite3_column_int64(q, 0) < 0 || sqlite3_column_int64(q, 0) > 8LL*1024*1024*1024) r = -EINVAL;
+                || sqlite3_column_int64(q, 0) < 0 || (uint64_t)sqlite3_column_int64(q, 0) > MD_IMAGE_MAX_BYTES) r = -EINVAL;
         else d->size = (uint64_t)sqlite3_column_int64(q, 0);
     }
     sqlite3_finalize(q);
@@ -151,7 +151,7 @@ int md_image_config_validate(sqlite3 *db,const char *config) {
     if (!r) r=expect(db, config, "$.rootfs.type", "layers");
     return r;
 }
-int md_image_unpack(int blobs, int scratch, const struct md_image_descriptor *d, const char *diff, int *out) {
+int md_image_unpack(int blobs, int scratch, int private_blobs, const struct md_image_descriptor *d, const char *diff, int *out) {
     *out = -1;
     if (!md_image_digest_valid(diff)) return -EINVAL;
     int filter;
@@ -161,10 +161,13 @@ int md_image_unpack(int blobs, int scratch, const struct md_image_descriptor *d,
     else if (!strcmp(d->media, "application/vnd.oci.image.layer.v1.tar+zstd")) filter = ARCHIVE_FILTER_ZSTD;
     else return -ENOTSUP;
     int fd = -1, result = -1;
-    int r = md_image_blob(blobs, scratch, d->digest, d->size, &fd);
-    if (!r && filter == ARCHIVE_FILTER_NONE) { result = fd; fd = -1; }
+    int r = md_image_blob(blobs, private_blobs ? -1 : scratch, d->digest, d->size, &fd);
+    if (!r && filter == ARCHIVE_FILTER_NONE) {
+        if (strcmp(d->digest,diff)) r=-EBADMSG;
+        else { *out=fd; return 0; }
+    }
     struct archive *ar = NULL;
-    uint64_t size = filter == ARCHIVE_FILTER_NONE ? d->size : 0;
+    uint64_t size = 0;
     if (!r && filter != ARCHIVE_FILTER_NONE) {
         ar = archive_read_new();
         if (!ar) r = -ENOMEM;

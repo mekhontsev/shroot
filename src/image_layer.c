@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include "image_layer.h"
-#include "image_backup.h"
 #include "image_acl.h"
 #include "image_pool.h"
 #include "inode_internal.h"
@@ -118,17 +117,9 @@ static int entry_file(struct md_inode_store *s, struct archive *ar, struct archi
     const void *capability = NULL; size_t capability_size = 0;
     const char *name = NULL; const void *value = NULL; size_t length = 0;
     mode_t mode = archive_entry_perm(entry);
-    int mode_seen = 0;
     archive_entry_xattr_reset(entry);
     while (!archive_entry_xattr_next(entry,&name,&value,&length)) {
-        if (backup && md_backup_mode(name)) {
-            if (length != 2) return -EINVAL;
-            const unsigned char *b = value;
-            unsigned parsed = b[0] | (unsigned)b[1]<<8;
-            if (parsed > 07777 || (mode_seen && parsed != mode)) return -EINVAL;
-            mode = parsed; mode_seen = 1;
-            continue;
-        }
+        if (md_image_acl_kind(name)) continue;
         if ((backup && !strncmp(name, "user.", 5)) || mdi_xattr_virtual(name)) {
             if (length > 65536 || strlen(name) > 255 || link) return -EINVAL;
             continue;
@@ -142,7 +133,6 @@ static int entry_file(struct md_inode_store *s, struct archive *ar, struct archi
         if (capability && (capability_size != length || memcmp(capability,value,length))) return -EINVAL;
         capability=value; capability_size=length;
     }
-    if (backup && !link && !mode_seen) return -EINVAL;
     if (archive_entry_is_encrypted(entry)) return -ENOTSUP;
     int device=kind==S_IFCHR || kind==S_IFBLK;
     if (device && !link) {
@@ -381,22 +371,6 @@ static int read_tree(struct md_inode_store *s, int fd, uint64_t *bytes, uint64_t
             if (!pass && ++*entries > MD_IMAGE_MAX_ENTRIES) { r = -EFBIG; break; }
             char path[PATH_MAX];
             const char *name_in = archive_entry_pathname(entry);
-            if (backup) {
-                if (md_backup_manifest(name_in)) {
-                    if (index != 1) { r = -EINVAL; break; }
-                    continue;
-                }
-                if (!name_in || strncmp(name_in, "rootfs/", 7)) { r = -EINVAL; break; }
-                name_in += 7;
-                const char *link = archive_entry_hardlink(entry);
-                if (link) {
-                    if (strncmp(link, "rootfs/", 7)) { r = -EINVAL; break; }
-                    char *target = strdup(link + 7);
-                    if (!target) { r = -ENOMEM; break; }
-                    archive_entry_set_hardlink(entry, target);
-                    free(target);
-                }
-            }
             r = path_name(name_in, path);
             if (!r && !pass) r = unique_path(s, path);
             if (r) break;

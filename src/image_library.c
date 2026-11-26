@@ -261,7 +261,7 @@ static int install(struct md_library *lib, const char *kind, const char *source,
         if (!r) snprintf(item.image,sizeof(item.image),"import-v%d-local-%s",MD_IMAGE_IMPORT_VERSION,id);
         struct stat st;
         if (!r && lstat(source,&st)) r=-errno;
-        if (!r && !S_ISDIR(st.st_mode)) r=-ENOTDIR;
+        if (!r && !S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode)) r=-EINVAL;
         if (!r && !realpath(source,input)) r=-errno;
     } else if (!r && !strcmp(kind,"registry")) {
         r=md_library_path(lib,"work","registry",input);

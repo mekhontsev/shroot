@@ -59,7 +59,7 @@ Frozen revision-1/revision-2 SQL and sparse-metadata literals are independent of
 current creation code. Tests compare upgraded/fresh schemas, preserve identities
 and hardlinks, inject ENOSPC and death around revision commits, and reject full
 audits or schema admission on file-operation paths. The shell runner also checks
-fixed portable backup-v1 input, native-revision export/restore and distinct source
+an independently generated OCI snapshot, native-revision export/restore and distinct source
 dependencies across persistent scopes. Reopened COW generations must address
 their original source bodies directly and keep independent writes.
 
